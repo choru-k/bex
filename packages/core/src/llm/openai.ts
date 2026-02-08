@@ -1,0 +1,99 @@
+import { GrammarResult, Preferences } from "./types";
+import { parseGrammarResponse } from "../lib/parse-json";
+
+export async function generateWithOpenAI(
+  text: string,
+  prefs: Preferences,
+  systemPrompt: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const apiKey = prefs.openaiApiKey;
+  if (!apiKey)
+    throw new Error(
+      "OpenAI API key not configured. Set it in extension preferences.",
+    );
+
+  const model = prefs.model || "gpt-4.1-mini";
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: text },
+      ],
+      temperature: 0.7,
+    }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const errorText = await resp.text();
+    if (resp.status === 401)
+      throw new Error("Invalid OpenAI API key. Check extension preferences.");
+    if (resp.status === 429)
+      throw new Error("OpenAI rate limit. Wait a moment and try again.");
+    throw new Error(`OpenAI error (${resp.status}): ${errorText}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json: any = await resp.json();
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Empty response from OpenAI.");
+
+  return content;
+}
+
+export async function checkWithOpenAI(
+  text: string,
+  prefs: Preferences,
+  systemPrompt: string,
+  signal?: AbortSignal,
+): Promise<GrammarResult> {
+  const apiKey = prefs.openaiApiKey;
+  if (!apiKey)
+    throw new Error(
+      "OpenAI API key not configured. Set it in extension preferences.",
+    );
+
+  const model = prefs.model || "gpt-4.1-mini";
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: text },
+      ],
+      temperature: 0.3,
+    }),
+    signal,
+  });
+
+  if (!resp.ok) {
+    const errorText = await resp.text();
+    if (resp.status === 401)
+      throw new Error("Invalid OpenAI API key. Check extension preferences.");
+    if (resp.status === 429)
+      throw new Error("OpenAI rate limit. Wait a moment and try again.");
+    throw new Error(`OpenAI error (${resp.status}): ${errorText}`);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json: any = await resp.json();
+  const content = json.choices?.[0]?.message?.content;
+  if (!content) throw new Error("Empty response from OpenAI.");
+
+  return parseGrammarResponse(content);
+}
