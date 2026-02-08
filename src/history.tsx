@@ -48,7 +48,7 @@ ${diffMd}
 ${entry.explanation}
 
 ---
-*${entry.provider} · ${entry.model} · ${new Date(entry.timestamp).toLocaleString()}*`;
+*${entry.provider} · ${entry.model}${entry.profileName ? ` · ${entry.profileName}` : ""} · ${new Date(entry.timestamp).toLocaleString()}*`;
 
   return (
     <Detail
@@ -114,6 +114,9 @@ export default function History() {
           title={truncate(entry.original, 60)}
           subtitle={truncate(entry.corrected, 40)}
           accessories={[
+            ...(entry.profileName
+              ? [{ tag: entry.profileName }]
+              : []),
             { text: entry.provider },
             { text: timeAgo(entry.timestamp) },
           ]}

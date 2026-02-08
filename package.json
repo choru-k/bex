@@ -18,6 +18,12 @@
       "title": "Grammar History",
       "description": "Review past grammar corrections for study",
       "mode": "view"
+    },
+    {
+      "name": "manage-profiles",
+      "title": "Manage Profiles",
+      "description": "Create and manage profiles for personalized grammar corrections",
+      "mode": "view"
     }
   ],
   "preferences": [
@@ -63,14 +69,6 @@
       "type": "textfield",
       "required": false,
       "default": "http://localhost:11434"
-    },
-    {
-      "name": "model",
-      "title": "Model Name",
-      "description": "Model to use (leave empty for default)",
-      "type": "textfield",
-      "required": false,
-      "placeholder": "gpt-4o-mini / claude-sonnet-4-20250514 / gemini-3-flash-preview / llama3.2"
     }
   ],
   "dependencies": {

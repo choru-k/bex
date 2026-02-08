@@ -17,9 +17,7 @@ type ExtensionPreferences = {
   /** Gemini API Key - Your Google Gemini API key */
   "geminiApiKey"?: string,
   /** Ollama URL - Local Ollama server URL */
-  "ollamaUrl": string,
-  /** Model Name - Model to use (leave empty for default) */
-  "model"?: string
+  "ollamaUrl": string
 }
 
 /** Preferences accessible in all the extension's commands */
@@ -30,6 +28,8 @@ declare namespace Preferences {
   export type CheckGrammar = ExtensionPreferences & {}
   /** Preferences accessible in the `history` command */
   export type History = ExtensionPreferences & {}
+  /** Preferences accessible in the `manage-profiles` command */
+  export type ManageProfiles = ExtensionPreferences & {}
 }
 
 declare namespace Arguments {
@@ -37,5 +37,7 @@ declare namespace Arguments {
   export type CheckGrammar = {}
   /** Arguments passed to the `history` command */
   export type History = {}
+  /** Arguments passed to the `manage-profiles` command */
+  export type ManageProfiles = {}
 }
 

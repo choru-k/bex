@@ -12,10 +12,18 @@ import {
   openExtensionPreferences,
   Icon,
 } from "@raycast/api";
-import { useState } from "react";
-import { GrammarResult, Preferences, HistoryEntry } from "./llm/types";
-import { checkGrammar } from "./llm/provider";
+import { useState, useEffect } from "react";
+import { randomUUID } from "crypto";
+import { GrammarResult, Preferences, HistoryEntry, Profile } from "./llm/types";
+import { checkGrammar, buildSystemPrompt } from "./llm/provider";
+import { fetchModels, ModelOption, DEFAULT_MODELS } from "./llm/models";
 import { computeWordDiff, diffToMarkdown } from "./lib/diff";
+import {
+  loadProfiles,
+  getActiveProfileId,
+  setActiveProfileId,
+  getDefaultProfile,
+} from "./lib/profiles";
 
 function validatePreferences(prefs: Preferences): string | null {
   switch (prefs.provider) {
@@ -37,7 +45,9 @@ function getTimeoutMs(provider: string): number {
 async function saveToHistory(
   original: string,
   result: GrammarResult,
-  prefs: Preferences,
+  provider: string,
+  model: string,
+  profileName?: string,
 ) {
   const raw = await LocalStorage.getItem<string>("history");
   let entries: HistoryEntry[];
@@ -47,13 +57,14 @@ async function saveToHistory(
     entries = [];
   }
   entries.unshift({
-    id: crypto.randomUUID(),
+    id: randomUUID(),
     original,
     corrected: result.corrected,
     explanation: result.explanation,
-    provider: prefs.provider,
-    model: prefs.model || "default",
+    provider,
+    model,
     timestamp: new Date().toISOString(),
+    profileName,
   });
   if (entries.length > 500) entries.length = 500;
   await LocalStorage.setItem("history", JSON.stringify(entries));
@@ -63,7 +74,48 @@ export default function CheckGrammar() {
   const [result, setResult] = useState<GrammarResult | null>(null);
   const [original, setOriginal] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [models, setModels] = useState<ModelOption[]>([]);
+  const [selectedModel, setSelectedModel] = useState("");
+  const [modelsLoading, setModelsLoading] = useState(true);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState("");
   const prefs = getPreferenceValues<Preferences>();
+
+  useEffect(() => {
+    (async () => {
+      setModelsLoading(true);
+      const fetched = await fetchModels(prefs.provider, prefs);
+      setModels(fetched);
+
+      const lastModel = await LocalStorage.getItem<string>(
+        `lastModel:${prefs.provider}`,
+      );
+      const defaultModel = DEFAULT_MODELS[prefs.provider];
+
+      if (lastModel && fetched.some((m) => m.id === lastModel)) {
+        setSelectedModel(lastModel);
+      } else if (fetched.some((m) => m.id === defaultModel)) {
+        setSelectedModel(defaultModel);
+      } else if (fetched.length > 0) {
+        setSelectedModel(fetched[0].id);
+      } else {
+        setSelectedModel(defaultModel);
+      }
+
+      const loadedProfiles = await loadProfiles();
+      setProfiles(loadedProfiles);
+
+      const activeId = await getActiveProfileId();
+      if (activeId && loadedProfiles.some((p) => p.id === activeId)) {
+        setSelectedProfileId(activeId);
+      } else {
+        const defaultProfile = getDefaultProfile(loadedProfiles);
+        setSelectedProfileId(defaultProfile?.id || "");
+      }
+
+      setModelsLoading(false);
+    })();
+  }, []);
 
   async function handleSubmit(values: { text: string }) {
     const text = values.text.trim();
@@ -91,9 +143,20 @@ export default function CheckGrammar() {
     setIsLoading(true);
     setOriginal(text);
 
+    const model = selectedModel || DEFAULT_MODELS[prefs.provider];
+    await LocalStorage.setItem(`lastModel:${prefs.provider}`, model);
+
+    const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
+    if (selectedProfileId) {
+      await setActiveProfileId(selectedProfileId);
+    }
+    const systemPrompt = buildSystemPrompt(selectedProfile?.prompt);
+
+    const prefsWithModel = { ...prefs, model };
+
     const toast = await showToast({
       style: Toast.Style.Animated,
-      title: `Checking with ${prefs.provider}...`,
+      title: `Checking with ${prefs.provider} (${model})...`,
     });
 
     const controller = new AbortController();
@@ -103,12 +166,23 @@ export default function CheckGrammar() {
     );
 
     try {
-      const grammarResult = await checkGrammar(text, prefs, controller.signal);
+      const grammarResult = await checkGrammar(
+        text,
+        prefsWithModel,
+        controller.signal,
+        systemPrompt,
+      );
       clearTimeout(timeout);
       toast.style = Toast.Style.Success;
       toast.title = "Grammar checked!";
       try {
-        await saveToHistory(text, grammarResult, prefs);
+        await saveToHistory(
+          text,
+          grammarResult,
+          prefs.provider,
+          model,
+          selectedProfile?.name,
+        );
       } catch {
         /* history save failure shouldn't block main flow */
       }
@@ -133,7 +207,7 @@ export default function CheckGrammar() {
   if (!result) {
     return (
       <Form
-        isLoading={isLoading}
+        isLoading={isLoading || modelsLoading}
         actions={
           <ActionPanel>
             <Action.SubmitForm
@@ -144,6 +218,35 @@ export default function CheckGrammar() {
           </ActionPanel>
         }
       >
+        <Form.Dropdown
+          id="model"
+          title="Model"
+          value={selectedModel}
+          onChange={setSelectedModel}
+        >
+          {models.length > 0 ? (
+            models.map((m) => (
+              <Form.Dropdown.Item key={m.id} value={m.id} title={m.name} />
+            ))
+          ) : (
+            <Form.Dropdown.Item
+              key={DEFAULT_MODELS[prefs.provider]}
+              value={DEFAULT_MODELS[prefs.provider]}
+              title={DEFAULT_MODELS[prefs.provider]}
+            />
+          )}
+        </Form.Dropdown>
+        <Form.Dropdown
+          id="profile"
+          title="Profile"
+          value={selectedProfileId}
+          onChange={setSelectedProfileId}
+        >
+          <Form.Dropdown.Item key="none" value="" title="No Profile" />
+          {profiles.map((p) => (
+            <Form.Dropdown.Item key={p.id} value={p.id} title={p.name} />
+          ))}
+        </Form.Dropdown>
         <Form.TextArea
           id="text"
           title="Text to Check"

@@ -22,4 +22,12 @@ export interface HistoryEntry {
   provider: string;
   model: string;
   timestamp: string;
+  profileName?: string;
+}
+
+export interface Profile {
+  id: string;
+  name: string;
+  prompt: string;
+  isDefault?: boolean;
 }
