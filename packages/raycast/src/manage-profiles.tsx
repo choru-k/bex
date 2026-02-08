@@ -10,13 +10,18 @@ import {
   Alert,
   useNavigation,
   getPreferenceValues,
-  LocalStorage,
 } from "@raycast/api";
 import { randomUUID } from "crypto";
 import { useState, useEffect } from "react";
-import { Profile, Preferences } from "./llm/types";
-import { loadProfiles, saveProfiles } from "./lib/profiles";
-import { generateText, PROFILE_GENERATION_PROMPT } from "./llm/provider";
+import {
+  Profile,
+  Preferences,
+  loadProfiles,
+  saveProfiles,
+  generateText,
+  PROFILE_GENERATION_PROMPT,
+} from "@bex/core";
+import { storage } from "./lib/raycast-storage";
 
 function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
@@ -130,7 +135,7 @@ function AIProfileWizard({ onSave }: { onSave: (profile: Profile) => void }) {
     const userMessage = parts.join("\n");
 
     const prefs = getPreferenceValues<Preferences>();
-    const lastModel = await LocalStorage.getItem<string>(`lastModel:${prefs.provider}`);
+    const lastModel = await storage.getItem<string>(`lastModel:${prefs.provider}`);
     if (lastModel) {
       prefs.model = lastModel;
     }
@@ -234,7 +239,7 @@ export default function ManageProfiles() {
 
   useEffect(() => {
     (async () => {
-      const loaded = await loadProfiles();
+      const loaded = await loadProfiles(storage);
       setProfiles(loaded);
       setIsLoading(false);
     })();
@@ -242,7 +247,7 @@ export default function ManageProfiles() {
 
   async function persistProfiles(updated: Profile[]) {
     setProfiles(updated);
-    await saveProfiles(updated);
+    await saveProfiles(storage, updated);
   }
 
   async function handleSave(saved: Profile) {

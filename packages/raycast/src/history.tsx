@@ -3,7 +3,6 @@ import {
   ActionPanel,
   Action,
   Detail,
-  LocalStorage,
   confirmAlert,
   Alert,
   Icon,
@@ -11,8 +10,15 @@ import {
   Toast,
 } from "@raycast/api";
 import { useState, useEffect } from "react";
-import { HistoryEntry } from "./llm/types";
-import { computeWordDiff, diffToMarkdown } from "./lib/diff";
+import {
+  HistoryEntry,
+  computeWordDiff,
+  diffToMarkdown,
+  loadHistory,
+  deleteHistoryEntry,
+  clearHistory,
+} from "@bex/core";
+import { storage } from "./lib/raycast-storage";
 
 function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
@@ -77,14 +83,8 @@ export default function History() {
   useEffect(() => {
     (async () => {
       try {
-        const raw = await LocalStorage.getItem<string>("history");
-        if (raw) {
-          try {
-            setEntries(JSON.parse(raw));
-          } catch {
-            setEntries([]);
-          }
-        }
+        const loaded = await loadHistory(storage);
+        setEntries(loaded);
       } catch {
         await showToast({
           style: Toast.Style.Failure,
@@ -144,10 +144,7 @@ export default function History() {
                   const updated = entries.filter((e) => e.id !== entry.id);
                   setEntries(updated);
                   try {
-                    await LocalStorage.setItem(
-                      "history",
-                      JSON.stringify(updated),
-                    );
+                    await deleteHistoryEntry(storage, entry.id);
                   } catch {
                     await showToast({
                       style: Toast.Style.Failure,
@@ -174,7 +171,7 @@ export default function History() {
                   ) {
                     setEntries([]);
                     try {
-                      await LocalStorage.removeItem("history");
+                      await clearHistory(storage);
                     } catch {
                       await showToast({
                         style: Toast.Style.Failure,

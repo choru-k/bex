@@ -4,7 +4,6 @@ import {
   Action,
   Detail,
   Clipboard,
-  LocalStorage,
   showToast,
   Toast,
   popToRoot,
@@ -14,16 +13,25 @@ import {
 } from "@raycast/api";
 import { useState, useEffect } from "react";
 import { randomUUID } from "crypto";
-import { GrammarResult, Preferences, HistoryEntry, Profile } from "./llm/types";
-import { checkGrammar, buildSystemPrompt } from "./llm/provider";
-import { fetchModels, ModelOption, DEFAULT_MODELS } from "./llm/models";
-import { computeWordDiff, diffToMarkdown } from "./lib/diff";
 import {
+  GrammarResult,
+  Preferences,
+  HistoryEntry,
+  Profile,
+  checkGrammar,
+  buildSystemPrompt,
+  fetchModels,
+  ModelOption,
+  DEFAULT_MODELS,
+  computeWordDiff,
+  diffToMarkdown,
   loadProfiles,
   getActiveProfileId,
   setActiveProfileId,
   getDefaultProfile,
-} from "./lib/profiles";
+  saveToHistory,
+} from "@bex/core";
+import { storage } from "./lib/raycast-storage";
 
 function validatePreferences(prefs: Preferences): string | null {
   switch (prefs.provider) {
@@ -40,34 +48,6 @@ function validatePreferences(prefs: Preferences): string | null {
 
 function getTimeoutMs(provider: string): number {
   return provider === "ollama" ? 30000 : 10000;
-}
-
-async function saveToHistory(
-  original: string,
-  result: GrammarResult,
-  provider: string,
-  model: string,
-  profileName?: string,
-) {
-  const raw = await LocalStorage.getItem<string>("history");
-  let entries: HistoryEntry[];
-  try {
-    entries = raw ? JSON.parse(raw) : [];
-  } catch {
-    entries = [];
-  }
-  entries.unshift({
-    id: randomUUID(),
-    original,
-    corrected: result.corrected,
-    explanation: result.explanation,
-    provider,
-    model,
-    timestamp: new Date().toISOString(),
-    profileName,
-  });
-  if (entries.length > 500) entries.length = 500;
-  await LocalStorage.setItem("history", JSON.stringify(entries));
 }
 
 export default function CheckGrammar() {
@@ -87,7 +67,7 @@ export default function CheckGrammar() {
       const fetched = await fetchModels(prefs.provider, prefs);
       setModels(fetched);
 
-      const lastModel = await LocalStorage.getItem<string>(
+      const lastModel = await storage.getItem<string>(
         `lastModel:${prefs.provider}`,
       );
       const defaultModel = DEFAULT_MODELS[prefs.provider];
@@ -102,10 +82,10 @@ export default function CheckGrammar() {
         setSelectedModel(defaultModel);
       }
 
-      const loadedProfiles = await loadProfiles();
+      const loadedProfiles = await loadProfiles(storage);
       setProfiles(loadedProfiles);
 
-      const activeId = await getActiveProfileId();
+      const activeId = await getActiveProfileId(storage);
       if (activeId && loadedProfiles.some((p) => p.id === activeId)) {
         setSelectedProfileId(activeId);
       } else {
@@ -144,11 +124,11 @@ export default function CheckGrammar() {
     setOriginal(text);
 
     const model = selectedModel || DEFAULT_MODELS[prefs.provider];
-    await LocalStorage.setItem(`lastModel:${prefs.provider}`, model);
+    await storage.setItem(`lastModel:${prefs.provider}`, model);
 
     const selectedProfile = profiles.find((p) => p.id === selectedProfileId);
     if (selectedProfileId) {
-      await setActiveProfileId(selectedProfileId);
+      await setActiveProfileId(storage, selectedProfileId);
     }
     const systemPrompt = buildSystemPrompt(selectedProfile?.prompt);
 
@@ -176,13 +156,17 @@ export default function CheckGrammar() {
       toast.style = Toast.Style.Success;
       toast.title = "Grammar checked!";
       try {
-        await saveToHistory(
-          text,
-          grammarResult,
-          prefs.provider,
+        const entry: HistoryEntry = {
+          id: randomUUID(),
+          original: text,
+          corrected: grammarResult.corrected,
+          explanation: grammarResult.explanation,
+          provider: prefs.provider,
           model,
-          selectedProfile?.name,
-        );
+          timestamp: new Date().toISOString(),
+          profileName: selectedProfile?.name,
+        };
+        await saveToHistory(storage, entry);
       } catch {
         /* history save failure shouldn't block main flow */
       }

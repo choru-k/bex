@@ -1,92 +1,12 @@
 {
-  "$schema": "https://www.raycast.com/schemas/extension.json",
   "name": "bex",
-  "title": "Bex",
-  "description": "Better Expression — Check and improve English grammar with AI",
-  "icon": "icon.png",
-  "author": "choru",
-  "license": "MIT",
-  "commands": [
-    {
-      "name": "check-grammar",
-      "title": "Check Grammar",
-      "description": "Check and fix English grammar/expression",
-      "mode": "view"
-    },
-    {
-      "name": "history",
-      "title": "Grammar History",
-      "description": "Review past grammar corrections for study",
-      "mode": "view"
-    },
-    {
-      "name": "manage-profiles",
-      "title": "Manage Profiles",
-      "description": "Create and manage profiles for personalized grammar corrections",
-      "mode": "view"
-    }
-  ],
-  "preferences": [
-    {
-      "name": "provider",
-      "title": "LLM Provider",
-      "description": "Which AI to use for grammar checking",
-      "type": "dropdown",
-      "required": true,
-      "data": [
-        { "title": "OpenAI", "value": "openai" },
-        { "title": "Claude", "value": "claude" },
-        { "title": "Gemini", "value": "gemini" },
-        { "title": "Ollama (Local)", "value": "ollama" }
-      ],
-      "default": "openai"
-    },
-    {
-      "name": "openaiApiKey",
-      "title": "OpenAI API Key",
-      "description": "Your OpenAI API key",
-      "type": "password",
-      "required": false
-    },
-    {
-      "name": "claudeApiKey",
-      "title": "Claude API Key",
-      "description": "Your Anthropic API key",
-      "type": "password",
-      "required": false
-    },
-    {
-      "name": "geminiApiKey",
-      "title": "Gemini API Key",
-      "description": "Your Google Gemini API key",
-      "type": "password",
-      "required": false
-    },
-    {
-      "name": "ollamaUrl",
-      "title": "Ollama URL",
-      "description": "Local Ollama server URL",
-      "type": "textfield",
-      "required": false,
-      "default": "http://localhost:11434"
-    }
-  ],
-  "dependencies": {
-    "@raycast/api": "^1.83",
-    "@raycast/utils": "^1.17"
-  },
-  "devDependencies": {
-    "@raycast/eslint-config": "^1.0.11",
-    "@types/node": "20.8.10",
-    "@types/react": "18.3.3",
-    "eslint": "^8.57.0",
-    "prettier": "^3.3.3",
-    "typescript": "^5.4"
-  },
+  "version": "0.1.0",
+  "private": true,
   "scripts": {
-    "build": "ray build",
-    "dev": "ray develop",
-    "fix-lint": "ray lint --fix",
-    "lint": "ray lint"
+    "build": "pnpm -r build",
+    "build:core": "pnpm --filter @bex/core build",
+    "dev:core": "pnpm --filter @bex/core dev",
+    "dev:raycast": "pnpm --filter @bex/raycast dev",
+    "lint:raycast": "pnpm --filter @bex/raycast lint"
   }
 }
