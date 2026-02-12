@@ -19,6 +19,10 @@ export default defineConfig({
         __dirname,
         "./src/__test__/tauri-path-stub.ts",
       ),
+      "@tauri-apps/api/window": path.resolve(
+        __dirname,
+        "./src/__test__/tauri-window-stub.ts",
+      ),
     },
   },
 });

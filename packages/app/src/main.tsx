@@ -7,12 +7,14 @@ import History from "./pages/History";
 import Profiles from "./pages/Profiles";
 import Analytics from "./pages/Analytics";
 import Settings from "./pages/Settings";
+import Popup from "./pages/Popup";
 import "./index.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
+        <Route path="/popup" element={<Popup />} />
         <Route element={<App />}>
           <Route path="/check" element={<CheckGrammar />} />
           <Route path="/history" element={<History />} />

@@ -1,6 +1,6 @@
 [package]
 name = "bex-app"
-version = "0.2.1"
+version = "0.3.0"
 description = "Bex Grammar Checker"
 authors = ["you"]
 edition = "2021"
@@ -13,8 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-fs = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

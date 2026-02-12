@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicegui-org/nicegui/main/nicegui/static/tauri.conf.json",
   "productName": "Bex",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "identifier": "com.bex.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Bex",
         "width": 900,
         "height": 700,
