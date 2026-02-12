@@ -1,12 +1,16 @@
 {
   "name": "bex",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
     "build:core": "pnpm --filter @bex/core build",
     "dev:core": "pnpm --filter @bex/core dev",
     "dev:raycast": "pnpm --filter @bex/raycast dev",
-    "lint:raycast": "pnpm --filter @bex/raycast lint"
+    "lint:raycast": "pnpm --filter @bex/raycast lint",
+    "dev:app": "pnpm --filter @bex/app tauri dev",
+    "build:app": "pnpm --filter @bex/app tauri build",
+    "test": "pnpm -r test",
+    "test:core": "pnpm --filter @bex/core test"
   }
 }

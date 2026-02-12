@@ -3,3 +3,7 @@ build/
 dist/
 .DS_Store
 plan/
+
+# Tauri
+packages/app/src-tauri/target/
+packages/app/src-tauri/gen/

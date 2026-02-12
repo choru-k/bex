@@ -4,14 +4,12 @@ import { homedir, tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { StorageAdapter } from "./storage";
 
-const DEFAULT_PATH = join(homedir(), ".bex", "data.json");
-
 export class JsonFileStorage implements StorageAdapter {
   private filePath: string;
   private cache: Record<string, string> | null = null;
 
   constructor(filePath?: string) {
-    this.filePath = filePath ?? DEFAULT_PATH;
+    this.filePath = filePath ?? join(homedir(), ".bex", "data.json");
   }
 
   private async load(): Promise<Record<string, string>> {
