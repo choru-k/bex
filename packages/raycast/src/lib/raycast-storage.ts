@@ -1,5 +1,6 @@
 import { LocalStorage } from "@raycast/api";
-import { StorageAdapter, JsonFileStorage } from "@bex/core";
+import type { StorageAdapter } from "@bex/core";
+import { JsonFileStorage } from "@bex/core/node";
 
 const fileStorage = new JsonFileStorage();
 

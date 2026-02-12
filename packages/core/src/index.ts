@@ -29,7 +29,6 @@ export { parseGrammarResponse } from "./lib/parse-json";
 
 // Storage
 export type { StorageAdapter } from "./storage/storage";
-export { JsonFileStorage } from "./storage/json-file-storage";
 
 // Portable profiles
 export {

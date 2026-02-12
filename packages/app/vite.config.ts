@@ -12,16 +12,7 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
-  build: {
-    rollupOptions: {
-      external: [
-        "node:fs/promises",
-        "node:path",
-        "node:os",
-        "node:crypto",
-      ],
-    },
-  },
+  build: {},
   clearScreen: false,
   server: {
     port: 1420,
