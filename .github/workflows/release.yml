@@ -60,6 +60,9 @@ jobs:
             -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
+      - name: Build core package
+        run: pnpm --filter @bex/core build
+
       - name: Build app
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
