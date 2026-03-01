@@ -7,12 +7,16 @@ use tauri::{
 
 fn show_or_create_popup(app: &tauri::AppHandle) {
     if let Some(popup) = app.get_webview_window("popup") {
+        let _ = popup.set_title("");
+        let _ = popup.set_title_bar_style(tauri::TitleBarStyle::Overlay);
         let _ = popup.show();
         let _ = popup.unminimize();
         let _ = popup.set_focus();
     } else {
         let _ = WebviewWindowBuilder::new(app, "popup", tauri::WebviewUrl::App("/popup".into()))
-            .title("Bex — Quick Check")
+            .title("")
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
             .inner_size(500.0, 400.0)
             .resizable(true)
             .always_on_top(true)
@@ -68,6 +72,11 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             setup_tray(app.handle())?;
+
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_title("");
+                let _ = main.set_title_bar_style(tauri::TitleBarStyle::Overlay);
+            }
 
             #[cfg(desktop)]
             {

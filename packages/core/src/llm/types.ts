@@ -12,6 +12,8 @@ export interface Preferences {
   geminiApiKey?: string;
   ollamaUrl?: string;
   model?: string;
+  appTheme?: "hig-glass" | "hig-solid";
+  appColorMode?: "light" | "black" | "system";
 }
 
 export interface HistoryEntry {

@@ -8,6 +8,8 @@ import {
   Icon,
   showToast,
   Toast,
+  launchCommand,
+  LaunchType,
 } from "@raycast/api";
 import { useState, useEffect } from "react";
 import {
@@ -19,6 +21,9 @@ import {
   clearHistory,
 } from "@bex/core";
 import { storage } from "./lib/raycast-storage";
+
+const DRAFT_KEY = "draft:raycast:check";
+const ALL_PROVIDERS = "__all__";
 
 function truncate(text: string, maxLen: number): string {
   return text.length > maxLen ? text.slice(0, maxLen) + "..." : text;
@@ -35,6 +40,14 @@ function timeAgo(isoString: string): string {
   if (days === 1) return "yesterday";
   if (days < 30) return `${days}d ago`;
   return new Date(isoString).toLocaleDateString();
+}
+
+async function openAsNewInput(text: string) {
+  await storage.setItem(DRAFT_KEY, text);
+  await launchCommand({
+    name: "check-grammar",
+    type: LaunchType.UserInitiated,
+  });
 }
 
 function EntryDetail({ entry }: { entry: HistoryEntry }) {
@@ -61,6 +74,11 @@ ${entry.explanation}
       markdown={markdown}
       actions={
         <ActionPanel>
+          <Action
+            title="Use as New Input"
+            icon={Icon.ArrowRight}
+            onAction={() => void openAsNewInput(entry.corrected)}
+          />
           <Action.CopyToClipboard
             title="Copy Corrected"
             content={entry.corrected}
@@ -79,6 +97,7 @@ ${entry.explanation}
 export default function History() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [providerFilter, setProviderFilter] = useState(ALL_PROVIDERS);
 
   useEffect(() => {
     (async () => {
@@ -95,6 +114,12 @@ export default function History() {
     })();
   }, []);
 
+  const providers = Array.from(new Set(entries.map((entry) => entry.provider))).sort();
+  const filteredEntries = entries.filter((entry) => {
+    if (providerFilter === ALL_PROVIDERS) return true;
+    return entry.provider === providerFilter;
+  });
+
   if (!isLoading && entries.length === 0) {
     return (
       <List>
@@ -107,16 +132,32 @@ export default function History() {
   }
 
   return (
-    <List isLoading={isLoading}>
-      {entries.map((entry) => (
+    <List
+      isLoading={isLoading}
+      searchBarAccessory={
+        <List.Dropdown
+          tooltip="Filter by provider"
+          value={providerFilter}
+          onChange={setProviderFilter}
+        >
+          <List.Dropdown.Item title="All Providers" value={ALL_PROVIDERS} />
+          {providers.map((provider) => (
+            <List.Dropdown.Item
+              key={provider}
+              title={provider}
+              value={provider}
+            />
+          ))}
+        </List.Dropdown>
+      }
+    >
+      {filteredEntries.map((entry) => (
         <List.Item
           key={entry.id}
           title={truncate(entry.original, 60)}
           subtitle={truncate(entry.corrected, 40)}
           accessories={[
-            ...(entry.profileName
-              ? [{ tag: entry.profileName }]
-              : []),
+            ...(entry.profileName ? [{ tag: entry.profileName }] : []),
             { text: entry.provider },
             { text: timeAgo(entry.timestamp) },
           ]}
@@ -125,6 +166,11 @@ export default function History() {
               <Action.Push
                 title="View Details"
                 target={<EntryDetail entry={entry} />}
+              />
+              <Action
+                title="Use as New Input"
+                icon={Icon.ArrowRight}
+                onAction={() => void openAsNewInput(entry.corrected)}
               />
               <Action.CopyToClipboard
                 title="Copy Corrected"

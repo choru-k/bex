@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import type { Profile, Preferences } from "@bex/core";
+import type { Profile } from "@bex/core";
 import {
   loadProfiles,
   saveProfiles,
@@ -8,6 +8,7 @@ import {
   PROFILE_GENERATION_PROMPT,
 } from "@bex/core";
 import { storage } from "@/lib/tauri-storage";
+import { parsePreferences } from "@/lib/app-theme";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -177,16 +178,10 @@ export default function Profiles() {
   };
 
   const handleWizardGenerate = async () => {
-    const prefsRaw = await storage.getItem<string>(PREFS_KEY);
-    if (!prefsRaw) {
+    const prefsRaw = await storage.getItem<unknown>(PREFS_KEY);
+    const prefs = parsePreferences(prefsRaw);
+    if (!prefs) {
       toast.error("Please configure settings first");
-      return;
-    }
-    let prefs: Preferences;
-    try {
-      prefs = JSON.parse(prefsRaw);
-    } catch {
-      toast.error("Invalid settings");
       return;
     }
 

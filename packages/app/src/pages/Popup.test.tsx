@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 
 // ── Mocks ───────────────────────────────────────────────────────────
 
@@ -11,6 +12,7 @@ vi.mock("@bex/core", () => ({
   getActiveProfileId: vi.fn().mockResolvedValue(null),
   getDefaultProfile: vi.fn().mockReturnValue(null),
   saveToHistory: vi.fn().mockResolvedValue(undefined),
+  generateText: vi.fn(),
   DEFAULT_MODELS: { openai: "gpt-4o" },
 }));
 
@@ -53,6 +55,8 @@ vi.mock("lucide-react", () => ({
   SpellCheck: () => <span data-testid="spellcheck-icon" />,
   Copy: () => <span data-testid="copy-icon" />,
   Check: () => <span data-testid="check-icon" />,
+  Sparkles: () => <span data-testid="sparkles-icon" />,
+  Settings2: () => <span data-testid="settings-icon" />,
 }));
 
 import { checkGrammar, saveToHistory } from "@bex/core";
@@ -60,14 +64,31 @@ import { storage } from "@/lib/tauri-storage";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import Popup from "./Popup";
 
-const PREFS: { provider: string; model: string; apiKey: string } = {
+const PREFS = {
   provider: "openai",
   model: "gpt-4o",
-  apiKey: "sk-test",
+  openaiApiKey: "sk-test",
 };
 
 function setupPrefsLoaded() {
-  vi.mocked(storage.getItem).mockResolvedValue(JSON.stringify(PREFS));
+  vi.mocked(storage.getItem).mockImplementation(async (key: string) => {
+    if (key === "preferences") return JSON.stringify(PREFS);
+    return undefined;
+  });
+}
+
+function renderPopup() {
+  return render(
+    <MemoryRouter>
+      <Popup />
+    </MemoryRouter>,
+  );
+}
+
+async function waitForConfiguredState() {
+  await waitFor(() => {
+    expect(screen.queryByText("Setup required")).not.toBeInTheDocument();
+  });
 }
 
 beforeEach(() => {
@@ -79,25 +100,29 @@ beforeEach(() => {
 
 describe("Popup", () => {
   it("renders initial UI", () => {
-    render(<Popup />);
+    renderPopup();
 
     expect(screen.getByText("Quick Check")).toBeInTheDocument();
     expect(
       screen.getByPlaceholderText(/Type or paste text here/),
     ).toBeInTheDocument();
     expect(screen.getByText("Check")).toBeInTheDocument();
-    expect(screen.getByText("Results will appear here")).toBeInTheDocument();
+    expect(
+      screen.getByText("Finish setup to start checking grammar"),
+    ).toBeInTheDocument();
   });
 
   it("check button is disabled when input is empty", () => {
-    render(<Popup />);
+    renderPopup();
 
     const btn = screen.getByText("Check").closest("button")!;
     expect(btn).toBeDisabled();
   });
 
-  it("check button is enabled when input has text", async () => {
-    render(<Popup />);
+  it("check button is enabled when input has text and prefs are configured", async () => {
+    setupPrefsLoaded();
+    renderPopup();
+    await waitForConfiguredState();
 
     const textarea = screen.getByPlaceholderText(/Type or paste text here/);
     fireEvent.change(textarea, { target: { value: "hello world" } });
@@ -107,7 +132,7 @@ describe("Popup", () => {
   });
 
   it("Escape key calls window.close()", () => {
-    render(<Popup />);
+    renderPopup();
 
     fireEvent.keyDown(window, { key: "Escape" });
     expect(getCurrentWindow().close).toHaveBeenCalled();
@@ -120,10 +145,8 @@ describe("Popup", () => {
       explanation: "Capitalized and added punctuation.",
     });
 
-    render(<Popup />);
-    await vi.waitFor(() => {
-      // wait for prefs to load
-    });
+    renderPopup();
+    await waitForConfiguredState();
 
     const textarea = screen.getByPlaceholderText(/Type or paste text here/);
     fireEvent.change(textarea, { target: { value: "hello world" } });
@@ -149,8 +172,8 @@ describe("Popup", () => {
       explanation: "Fixed it.",
     });
 
-    render(<Popup />);
-    await vi.waitFor(() => {});
+    renderPopup();
+    await waitForConfiguredState();
 
     const textarea = screen.getByPlaceholderText(/Type or paste text here/);
     fireEvent.change(textarea, { target: { value: "broken text" } });
@@ -171,21 +194,15 @@ describe("Popup", () => {
     });
   });
 
-  it("shows error toast when no prefs configured", async () => {
+  it("shows setup guardrail when no prefs configured", async () => {
     // storage.getItem returns undefined (no prefs)
-    render(<Popup />);
+    renderPopup();
     await vi.waitFor(() => {});
 
-    const textarea = screen.getByPlaceholderText(/Type or paste text here/);
-    fireEvent.change(textarea, { target: { value: "some text" } });
-
-    fireEvent.click(screen.getByText("Check").closest("button")!);
-
-    await waitFor(() => {
-      expect(
-        screen.getByText("Configure settings in the main app first"),
-      ).toBeInTheDocument();
-    });
+    expect(screen.getByText("Setup required")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Configure your provider and API key in Settings/),
+    ).toBeInTheDocument();
   });
 
   it("copy button copies corrected text to clipboard", async () => {
@@ -200,8 +217,8 @@ describe("Popup", () => {
       clipboard: { writeText },
     });
 
-    render(<Popup />);
-    await vi.waitFor(() => {});
+    renderPopup();
+    await waitForConfiguredState();
 
     const textarea = screen.getByPlaceholderText(/Type or paste text here/);
     fireEvent.change(textarea, { target: { value: "wrong text" } });

@@ -3,6 +3,17 @@ import { toast } from "sonner";
 import type { LlmProvider, Preferences, ModelOption } from "@bex/core";
 import { fetchModels, DEFAULT_MODELS } from "@bex/core";
 import { storage } from "@/lib/tauri-storage";
+import {
+  applyAppTheme,
+  normalizeAppTheme,
+  normalizeAppColorMode,
+  parsePreferences,
+  syncAppColorMode,
+  type AppTheme,
+  type AppColorMode,
+  DEFAULT_APP_THEME,
+  DEFAULT_APP_COLOR_MODE,
+} from "@/lib/app-theme";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,7 +31,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Eye, EyeOff, Save } from "lucide-react";
+import { Loader2, Eye, EyeOff, Save, RotateCcw } from "lucide-react";
 
 const PREFS_KEY = "preferences";
 const PROVIDERS: { value: LlmProvider; label: string }[] = [
@@ -28,6 +39,41 @@ const PROVIDERS: { value: LlmProvider; label: string }[] = [
   { value: "claude", label: "Claude (Anthropic)" },
   { value: "gemini", label: "Gemini (Google)" },
   { value: "ollama", label: "Ollama (Local)" },
+];
+
+const APP_THEMES: { value: AppTheme; label: string; description: string }[] = [
+  {
+    value: "hig-glass",
+    label: "HIG Glass",
+    description: "Transparent surfaces with blur and depth.",
+  },
+  {
+    value: "hig-solid",
+    label: "HIG Solid",
+    description: "Opaque surfaces with maximum clarity.",
+  },
+];
+
+const APP_COLOR_MODES: {
+  value: AppColorMode;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "light",
+    label: "Light",
+    description: "Bright interface with neutral backgrounds.",
+  },
+  {
+    value: "black",
+    label: "Black",
+    description: "Dark interface with near-black surfaces.",
+  },
+  {
+    value: "system",
+    label: "System",
+    description: "Automatically follows your macOS appearance.",
+  },
 ];
 
 export default function Settings() {
@@ -39,6 +85,10 @@ export default function Settings() {
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [appTheme, setAppTheme] = useState<AppTheme>(DEFAULT_APP_THEME);
+  const [appColorMode, setAppColorMode] =
+    useState<AppColorMode>(DEFAULT_APP_COLOR_MODE);
   const [saving, setSaving] = useState(false);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState(false);
@@ -46,23 +96,31 @@ export default function Settings() {
   // Load preferences on mount
   useEffect(() => {
     (async () => {
-      const raw = await storage.getItem<string>(PREFS_KEY);
-      if (raw) {
-        try {
-          const prefs: Preferences = JSON.parse(raw);
-          setProvider(prefs.provider || "openai");
-          setOpenaiApiKey(prefs.openaiApiKey || "");
-          setClaudeApiKey(prefs.claudeApiKey || "");
-          setGeminiApiKey(prefs.geminiApiKey || "");
-          setOllamaUrl(prefs.ollamaUrl || "http://localhost:11434");
-          setModel(prefs.model || "");
-        } catch {
-          // ignore malformed prefs
-        }
+      const raw = await storage.getItem<unknown>(PREFS_KEY);
+      const prefs = parsePreferences(raw);
+
+      if (prefs) {
+        setProvider(prefs.provider || "openai");
+        setOpenaiApiKey(prefs.openaiApiKey || "");
+        setClaudeApiKey(prefs.claudeApiKey || "");
+        setGeminiApiKey(prefs.geminiApiKey || "");
+        setOllamaUrl(prefs.ollamaUrl || "http://localhost:11434");
+        setModel(prefs.model || "");
+        setAppTheme(normalizeAppTheme(prefs.appTheme));
+        setAppColorMode(normalizeAppColorMode(prefs.appColorMode));
       }
       setLoaded(true);
     })();
   }, []);
+
+  // Live preview theme changes for quick compare
+  useEffect(() => {
+    applyAppTheme(appTheme);
+  }, [appTheme]);
+
+  useEffect(() => {
+    return syncAppColorMode(appColorMode);
+  }, [appColorMode]);
 
   const buildPrefs = useCallback((): Preferences => {
     return {
@@ -72,24 +130,74 @@ export default function Settings() {
       geminiApiKey: geminiApiKey || undefined,
       ollamaUrl: ollamaUrl || undefined,
       model: model || undefined,
+      appTheme,
+      appColorMode,
     };
-  }, [provider, openaiApiKey, claudeApiKey, geminiApiKey, ollamaUrl, model]);
+  }, [
+    provider,
+    openaiApiKey,
+    claudeApiKey,
+    geminiApiKey,
+    ollamaUrl,
+    model,
+    appTheme,
+    appColorMode,
+  ]);
+
+  const refreshModels = useCallback(async () => {
+    if (!loaded) return;
+
+    const prefs: Preferences = {
+      provider,
+      openaiApiKey: openaiApiKey || undefined,
+      claudeApiKey: claudeApiKey || undefined,
+      geminiApiKey: geminiApiKey || undefined,
+      ollamaUrl: ollamaUrl || undefined,
+    };
+
+    setLoadingModels(true);
+    try {
+      const result = await fetchModels(provider, prefs);
+      setModels(result);
+
+      const hasCredentials =
+        provider === "ollama" ||
+        (provider === "openai" && !!openaiApiKey) ||
+        (provider === "claude" && !!claudeApiKey) ||
+        (provider === "gemini" && !!geminiApiKey);
+
+      if (result.length === 0 && hasCredentials) {
+        setModelError("Could not fetch models. Using provider default.");
+      } else {
+        setModelError(null);
+      }
+
+      if (!model || !result.some((m) => m.id === model)) {
+        setModel(DEFAULT_MODELS[provider]);
+      }
+    } catch {
+      setModels([]);
+      setModelError("Could not fetch models. Check network/API access.");
+      if (!model) {
+        setModel(DEFAULT_MODELS[provider]);
+      }
+    } finally {
+      setLoadingModels(false);
+    }
+  }, [
+    provider,
+    openaiApiKey,
+    claudeApiKey,
+    geminiApiKey,
+    ollamaUrl,
+    loaded,
+    model,
+  ]);
 
   // Fetch models when provider or keys change
   useEffect(() => {
-    if (!loaded) return;
-    const prefs = buildPrefs();
-    setLoadingModels(true);
-    fetchModels(provider, prefs)
-      .then((result) => {
-        setModels(result);
-        if (!model || !result.some((m) => m.id === model)) {
-          setModel(DEFAULT_MODELS[provider]);
-        }
-      })
-      .catch(() => setModels([]))
-      .finally(() => setLoadingModels(false));
-  }, [provider, openaiApiKey, claudeApiKey, geminiApiKey, ollamaUrl, loaded, buildPrefs, model]);
+    void refreshModels();
+  }, [refreshModels]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -114,10 +222,61 @@ export default function Settings() {
     <div className="max-w-2xl space-y-6">
       <div>
         <h2 className="text-2xl font-bold">Settings</h2>
-        <p className="text-muted-foreground">
-          Configure your LLM provider, API keys, and default model.
+        <p className="text-muted-foreground leading-relaxed">
+          Configure appearance, provider, API keys, and default model.
         </p>
       </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Appearance</CardTitle>
+          <CardDescription>
+            Choose surface style and color mode. Changes preview immediately.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Surface style</Label>
+            <Select value={appTheme} onValueChange={(v) => setAppTheme(v as AppTheme)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {APP_THEMES.map((theme) => (
+                  <SelectItem key={theme.value} value={theme.value}>
+                    {theme.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {APP_THEMES.find((theme) => theme.value === appTheme)?.description}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Color mode</Label>
+            <Select
+              value={appColorMode}
+              onValueChange={(value) => setAppColorMode(value as AppColorMode)}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {APP_COLOR_MODES.map((mode) => (
+                  <SelectItem key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              {APP_COLOR_MODES.find((mode) => mode.value === appColorMode)?.description}
+            </p>
+          </div>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -268,6 +427,20 @@ export default function Settings() {
                 )}
               </SelectContent>
             </Select>
+            {modelError && (
+              <div className="flex items-center gap-2">
+                <p className="text-xs leading-relaxed text-muted-foreground">{modelError}</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 text-xs"
+                  onClick={() => void refreshModels()}
+                >
+                  <RotateCcw className="h-3 w-3" />
+                  Retry
+                </Button>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -278,7 +451,7 @@ export default function Settings() {
         ) : (
           <Save className="h-4 w-4" />
         )}
-        Save Settings
+        Save settings
       </Button>
     </div>
   );

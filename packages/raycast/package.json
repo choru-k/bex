@@ -14,6 +14,12 @@
       "mode": "view"
     },
     {
+      "name": "quick-check-clipboard",
+      "title": "Quick Check Clipboard",
+      "description": "Check grammar using the current clipboard text",
+      "mode": "view"
+    },
+    {
       "name": "history",
       "title": "Grammar History",
       "description": "Review past grammar corrections for study",

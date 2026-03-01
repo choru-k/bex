@@ -26,6 +26,8 @@ declare type Preferences = ExtensionPreferences
 declare namespace Preferences {
   /** Preferences accessible in the `check-grammar` command */
   export type CheckGrammar = ExtensionPreferences & {}
+  /** Preferences accessible in the `quick-check-clipboard` command */
+  export type QuickCheckClipboard = ExtensionPreferences & {}
   /** Preferences accessible in the `history` command */
   export type History = ExtensionPreferences & {}
   /** Preferences accessible in the `manage-profiles` command */
@@ -35,6 +37,8 @@ declare namespace Preferences {
 declare namespace Arguments {
   /** Arguments passed to the `check-grammar` command */
   export type CheckGrammar = {}
+  /** Arguments passed to the `quick-check-clipboard` command */
+  export type QuickCheckClipboard = {}
   /** Arguments passed to the `history` command */
   export type History = {}
   /** Arguments passed to the `manage-profiles` command */

@@ -13,10 +13,12 @@
     "windows": [
       {
         "label": "main",
-        "title": "Bex",
+        "title": "",
         "width": 900,
         "height": 700,
-        "center": true
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {

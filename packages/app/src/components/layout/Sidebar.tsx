@@ -1,30 +1,21 @@
 import { NavLink } from "react-router-dom";
-import {
-  SpellCheck,
-  History,
-  UserCog,
-  BarChart3,
-  Settings,
-} from "lucide-react";
+import { SpellCheck, History, UserCog, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Separator } from "@/components/ui/separator";
 
 const navItems = [
   { to: "/check", label: "Check Grammar", icon: SpellCheck },
   { to: "/history", label: "History", icon: History },
   { to: "/profiles", label: "Profiles", icon: UserCog },
-  { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
   return (
-    <aside className="flex h-full w-56 flex-col border-r bg-sidebar-background">
-      <div className="flex h-14 items-center px-4">
-        <h1 className="text-lg font-bold text-sidebar-primary">Bex</h1>
+    <aside className="flex h-full w-56 flex-col border-r bg-sidebar-background supports-[backdrop-filter]:backdrop-blur-xl supports-[backdrop-filter]:backdrop-saturate-150">
+      <div className="px-4 pb-3 pt-10">
+        <h1 className="text-base font-semibold text-sidebar-primary">Bex</h1>
       </div>
-      <Separator />
-      <nav className="flex-1 space-y-1 p-2">
+      <nav className="flex-1 space-y-1 px-2 pb-2">
         {navItems.map((item) => (
           <NavLink
             key={item.to}

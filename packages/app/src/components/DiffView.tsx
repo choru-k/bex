@@ -4,17 +4,23 @@ import { cn } from "@/lib/utils";
 interface DiffViewProps {
   diff: DiffWord[];
   className?: string;
+  showOnlyChanges?: boolean;
 }
 
-export function DiffView({ diff, className }: DiffViewProps) {
+export function DiffView({ diff, className, showOnlyChanges = false }: DiffViewProps) {
+  const visibleDiff = showOnlyChanges
+    ? diff.filter((word) => word.type !== "unchanged")
+    : diff;
+
   return (
     <div className={cn("leading-relaxed whitespace-pre-wrap", className)}>
-      {diff.map((word, i) => {
+      {visibleDiff.map((word, i) => {
         if (word.type === "added") {
           return (
             <span
               key={i}
-              className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+              aria-label="Added text"
+              className="bg-green-200 text-green-900 underline decoration-green-700 decoration-2 dark:bg-green-800/50 dark:text-green-100 dark:decoration-green-300"
             >
               {word.text}
             </span>
@@ -24,7 +30,8 @@ export function DiffView({ diff, className }: DiffViewProps) {
           return (
             <span
               key={i}
-              className="bg-red-100 text-red-800 line-through dark:bg-red-900/30 dark:text-red-300"
+              aria-label="Removed text"
+              className="bg-red-200 text-red-900 line-through decoration-2 dark:bg-red-800/50 dark:text-red-100"
             >
               {word.text}
             </span>
@@ -32,6 +39,9 @@ export function DiffView({ diff, className }: DiffViewProps) {
         }
         return <span key={i}>{word.text}</span>;
       })}
+      {showOnlyChanges && visibleDiff.length === 0 && (
+        <span className="text-muted-foreground">No differences</span>
+      )}
     </div>
   );
 }
