@@ -1,5 +1,5 @@
 [package]
-name = "bex-app"
+name = "Bex"
 version = "0.3.0"
 description = "Bex Grammar Checker"
 authors = ["you"]
@@ -19,3 +19,4 @@ tauri-plugin-fs = "2"
 tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

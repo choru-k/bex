@@ -7,6 +7,15 @@ export interface ModelOption {
 
 const OPENAI_CHAT_PREFIXES = ["gpt-", "o1", "o3", "o4", "chatgpt-"];
 
+const OPENAI_CODEX_MODELS: ModelOption[] = [
+  { id: "gpt-5.3-codex", name: "GPT-5.3 Codex" },
+  { id: "gpt-5.2-codex", name: "GPT-5.2 Codex" },
+  { id: "gpt-5.1-codex-max", name: "GPT-5.1 Codex Max" },
+  { id: "gpt-5.1-codex-mini", name: "GPT-5.1 Codex Mini" },
+  { id: "gpt-5.1", name: "GPT-5.1" },
+  { id: "gpt-5.2", name: "GPT-5.2" },
+];
+
 async function fetchOpenAIModels(apiKey: string): Promise<ModelOption[]> {
   const resp = await fetch("https://api.openai.com/v1/models", {
     headers: { Authorization: `Bearer ${apiKey}` },
@@ -22,6 +31,10 @@ async function fetchOpenAIModels(apiKey: string): Promise<ModelOption[]> {
     )
     .map((m: { id: string }) => ({ id: m.id, name: m.id }))
     .sort((a: ModelOption, b: ModelOption) => a.name.localeCompare(b.name));
+}
+
+async function fetchOpenAICodexModels(): Promise<ModelOption[]> {
+  return [...OPENAI_CODEX_MODELS];
 }
 
 async function fetchClaudeModels(apiKey: string): Promise<ModelOption[]> {
@@ -65,7 +78,7 @@ async function fetchOllamaModels(url: string): Promise<ModelOption[]> {
     const resp = await fetch(`${url}/api/tags`);
     if (!resp.ok) return [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const json: any = await resp.json();
+    const json: any = await resp.json();
     return (json.models || [])
       .map((m: { name: string }) => ({ id: m.name, name: m.name }))
       .sort((a: ModelOption, b: ModelOption) => a.name.localeCompare(b.name));
@@ -76,6 +89,7 @@ async function fetchOllamaModels(url: string): Promise<ModelOption[]> {
 
 export const DEFAULT_MODELS: Record<LlmProvider, string> = {
   openai: "gpt-4.1-mini",
+  "openai-codex": "gpt-5.1-codex-mini",
   claude: "claude-sonnet-4-5-20250929",
   gemini: "gemini-2.5-flash",
   ollama: "llama3.2",
@@ -88,6 +102,8 @@ export async function fetchModels(
   switch (provider) {
     case "openai":
       return prefs.openaiApiKey ? fetchOpenAIModels(prefs.openaiApiKey) : [];
+    case "openai-codex":
+      return fetchOpenAICodexModels();
     case "claude":
       return prefs.claudeApiKey ? fetchClaudeModels(prefs.claudeApiKey) : [];
     case "gemini":

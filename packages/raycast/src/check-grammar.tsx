@@ -66,6 +66,8 @@ function validatePreferences(prefs: Preferences): string | null {
   switch (prefs.provider) {
     case "openai":
       return prefs.openaiApiKey ? null : "OpenAI API key not set.";
+    case "openai-codex":
+      return "OpenAI Codex is available in the desktop app only.";
     case "claude":
       return prefs.claudeApiKey ? null : "Claude API key not set.";
     case "gemini":
@@ -82,6 +84,9 @@ function getTimeoutMs(provider: string): number {
 function getProcessingDisclosure(prefs: Preferences): string {
   if (prefs.provider === "ollama") {
     return "Processing runs locally via Ollama.";
+  }
+  if (prefs.provider === "openai-codex") {
+    return "OpenAI Codex is currently desktop-only in Bex.";
   }
   return `Processing is sent to your ${prefs.provider} cloud model.`;
 }

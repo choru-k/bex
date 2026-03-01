@@ -5,6 +5,10 @@ vi.mock("./openai", () => ({
   checkWithOpenAI: vi.fn().mockResolvedValue({ corrected: "ok", explanation: "none" }),
   generateWithOpenAI: vi.fn().mockResolvedValue("generated"),
 }));
+vi.mock("./openai-codex", () => ({
+  checkWithOpenAICodex: vi.fn().mockResolvedValue({ corrected: "ok", explanation: "none" }),
+  generateWithOpenAICodex: vi.fn().mockResolvedValue("generated"),
+}));
 vi.mock("./claude", () => ({
   checkWithClaude: vi.fn().mockResolvedValue({ corrected: "ok", explanation: "none" }),
   generateWithClaude: vi.fn().mockResolvedValue("generated"),
@@ -20,12 +24,20 @@ vi.mock("./ollama", () => ({
 
 import { checkGrammar, generateText } from "./provider";
 import { checkWithOpenAI, generateWithOpenAI } from "./openai";
+import {
+  checkWithOpenAICodex,
+  generateWithOpenAICodex,
+} from "./openai-codex";
 import { checkWithClaude, generateWithClaude } from "./claude";
 import { checkWithGemini, generateWithGemini } from "./gemini";
 import { checkWithOllama, generateWithOllama } from "./ollama";
 
 const basePrefs: Omit<Preferences, "provider"> = {
   openaiApiKey: "test-key",
+  openaiCodexAccessToken: "token",
+  openaiCodexRefreshToken: "refresh",
+  openaiCodexAccountId: "account",
+  openaiCodexExpiresAt: Date.now() + 60_000,
   claudeApiKey: "test-key",
   geminiApiKey: "test-key",
   model: "test-model",
@@ -35,6 +47,11 @@ describe("checkGrammar routing", () => {
   it("routes to OpenAI", async () => {
     await checkGrammar("hi", { ...basePrefs, provider: "openai" });
     expect(checkWithOpenAI).toHaveBeenCalled();
+  });
+
+  it("routes to OpenAI Codex", async () => {
+    await checkGrammar("hi", { ...basePrefs, provider: "openai-codex" });
+    expect(checkWithOpenAICodex).toHaveBeenCalled();
   });
 
   it("routes to Claude", async () => {
@@ -63,6 +80,11 @@ describe("generateText routing", () => {
   it("routes to OpenAI", async () => {
     await generateText("sys", "hi", { ...basePrefs, provider: "openai" });
     expect(generateWithOpenAI).toHaveBeenCalled();
+  });
+
+  it("routes to OpenAI Codex", async () => {
+    await generateText("sys", "hi", { ...basePrefs, provider: "openai-codex" });
+    expect(generateWithOpenAICodex).toHaveBeenCalled();
   });
 
   it("routes to Claude", async () => {

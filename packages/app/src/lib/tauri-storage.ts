@@ -5,24 +5,28 @@ import {
   mkdir,
   exists,
 } from "@tauri-apps/plugin-fs";
-import { homeDir } from "@tauri-apps/api/path";
+import { homeDir, join } from "@tauri-apps/api/path";
 
-const FILE_NAME = ".bex/data.json";
+const DIR_NAME = ".bex";
+const FILE_NAME = "data.json";
 
 export class TauriFileStorage implements StorageAdapter {
   private cache: Record<string, string> | null = null;
   private filePath: string | null = null;
+  private dirPath: string | null = null;
+
+  private async getDirPath(): Promise<string> {
+    if (this.dirPath) return this.dirPath;
+    const home = await homeDir();
+    this.dirPath = await join(home, DIR_NAME);
+    return this.dirPath;
+  }
 
   private async getFilePath(): Promise<string> {
     if (this.filePath) return this.filePath;
-    const home = await homeDir();
-    this.filePath = `${home}${FILE_NAME}`;
+    const dirPath = await this.getDirPath();
+    this.filePath = await join(dirPath, FILE_NAME);
     return this.filePath;
-  }
-
-  private async getDirPath(): Promise<string> {
-    const home = await homeDir();
-    return `${home}.bex`;
   }
 
   private async load(): Promise<Record<string, string>> {

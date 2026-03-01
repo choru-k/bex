@@ -91,6 +91,10 @@ function validatePreferences(prefs: Preferences | null): string | null {
       return prefs.openaiApiKey
         ? null
         : "OpenAI API key is missing. Add it in Settings.";
+    case "openai-codex":
+      return prefs.openaiCodexRefreshToken
+        ? null
+        : "OpenAI Codex is not connected. Connect ChatGPT in Settings.";
     case "claude":
       return prefs.claudeApiKey
         ? null
@@ -108,6 +112,9 @@ function getProcessingDisclosure(prefs: Preferences | null): string {
   if (!prefs) return "Set up your provider to start grammar checks.";
   if (prefs.provider === "ollama") {
     return "Processing runs locally via Ollama.";
+  }
+  if (prefs.provider === "openai-codex") {
+    return "Processing is sent to your ChatGPT Codex subscription.";
   }
   return `Processing is sent to your ${prefs.provider} cloud model.`;
 }
@@ -128,6 +135,7 @@ export default function CheckGrammar() {
 
   // Preferences
   const [prefs, setPrefs] = useState<Preferences | null>(null);
+  const [prefsLoaded, setPrefsLoaded] = useState(false);
   const [model, setModel] = useState("");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -138,7 +146,26 @@ export default function CheckGrammar() {
   const [activeProfileId, setActiveProfileState] = useState<string>("");
   const [profileError, setProfileError] = useState<string | null>(null);
 
-  const setupError = validatePreferences(prefs);
+  const setupError = prefsLoaded ? validatePreferences(prefs) : null;
+
+  const persistCodexSessionIfUpdated = useCallback(
+    async (nextPrefs: Preferences) => {
+      if (!prefs || prefs.provider !== "openai-codex") return;
+      if (nextPrefs.provider !== "openai-codex") return;
+
+      const changed =
+        nextPrefs.openaiCodexAccessToken !== prefs.openaiCodexAccessToken ||
+        nextPrefs.openaiCodexRefreshToken !== prefs.openaiCodexRefreshToken ||
+        nextPrefs.openaiCodexExpiresAt !== prefs.openaiCodexExpiresAt ||
+        nextPrefs.openaiCodexAccountId !== prefs.openaiCodexAccountId;
+
+      if (!changed) return;
+
+      setPrefs(nextPrefs);
+      await storage.setItem(PREFS_KEY, JSON.stringify(nextPrefs));
+    },
+    [prefs],
+  );
 
   // Load preferences + draft on mount
   useEffect(() => {
@@ -157,6 +184,8 @@ export default function CheckGrammar() {
       if (draftInput) {
         setInput(draftInput);
       }
+
+      setPrefsLoaded(true);
     })();
   }, []);
 
@@ -286,6 +315,8 @@ export default function CheckGrammar() {
         systemPrompt,
       );
 
+      await persistCodexSessionIfUpdated(checkPrefs);
+
       setResult(grammarResult);
       setDiff(computeWordDiff(input, grammarResult.corrected));
 
@@ -310,7 +341,15 @@ export default function CheckGrammar() {
     } finally {
       setLoading(false);
     }
-  }, [input, setupError, prefs, profiles, activeProfileId, model]);
+  }, [
+    input,
+    setupError,
+    prefs,
+    profiles,
+    activeProfileId,
+    model,
+    persistCodexSessionIfUpdated,
+  ]);
 
   const handleCopy = useCallback(async () => {
     if (!result) return;
@@ -348,6 +387,8 @@ export default function CheckGrammar() {
           checkPrefs,
         );
 
+        await persistCodexSessionIfUpdated(checkPrefs);
+
         const cleaned = rewritten.trim();
         if (!cleaned) throw new Error("Received empty rewrite");
 
@@ -365,7 +406,14 @@ export default function CheckGrammar() {
         setRewritingIntent(null);
       }
     },
-    [result, prefs, model, setupError, input],
+    [
+      result,
+      prefs,
+      model,
+      setupError,
+      input,
+      persistCodexSessionIfUpdated,
+    ],
   );
 
   const handleProfileChange = useCallback(async (id: string) => {

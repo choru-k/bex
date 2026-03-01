@@ -3,11 +3,20 @@ export interface GrammarResult {
   explanation: string;
 }
 
-export type LlmProvider = "openai" | "claude" | "gemini" | "ollama";
+export type LlmProvider =
+  | "openai"
+  | "openai-codex"
+  | "claude"
+  | "gemini"
+  | "ollama";
 
 export interface Preferences {
   provider: LlmProvider;
   openaiApiKey?: string;
+  openaiCodexAccessToken?: string;
+  openaiCodexRefreshToken?: string;
+  openaiCodexExpiresAt?: number;
+  openaiCodexAccountId?: string;
   claudeApiKey?: string;
   geminiApiKey?: string;
   ollamaUrl?: string;

@@ -25,7 +25,7 @@ Download the latest `.zip` from [GitHub Releases](https://github.com/choru-k/bex
 ## Features
 
 - **Grammar & expression checking** — paste text, get corrected output with explanations
-- **Multi-provider support** — OpenAI, Claude, Gemini, Ollama (local)
+- **Multi-provider support** — OpenAI, OpenAI Codex (desktop OAuth), Claude, Gemini, Ollama (local)
 - **Dynamic model selection** — fetches available models from your provider's API
 - **Diff view** — word-level highlighting of changes
 - **Writing profiles** — custom prompts for different contexts (emails, code reviews, etc.)
@@ -38,6 +38,7 @@ Download the latest `.zip` from [GitHub Releases](https://github.com/choru-k/bex
 | Provider | API Key Required | Default Model |
 |----------|-----------------|---------------|
 | OpenAI | Yes | gpt-4.1-mini |
+| OpenAI Codex (Desktop only) | No API key (ChatGPT Plus/Pro OAuth) | gpt-5.1-codex-mini |
 | Claude | Yes | claude-sonnet-4-5-20250929 |
 | Gemini | Yes | gemini-2.5-flash |
 | Ollama | No (local) | llama3.2 |

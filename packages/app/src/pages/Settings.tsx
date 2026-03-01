@@ -1,8 +1,21 @@
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import type { LlmProvider, Preferences, ModelOption } from "@bex/core";
-import { fetchModels, DEFAULT_MODELS } from "@bex/core";
+import type {
+  LlmProvider,
+  Preferences,
+  ModelOption,
+  OpenAICodexAuthFlow,
+} from "@bex/core";
+import {
+  fetchModels,
+  DEFAULT_MODELS,
+  beginOpenAICodexOAuth,
+  completeOpenAICodexOAuth,
+  applyOpenAICodexSessionToPreferences,
+} from "@bex/core";
 import { storage } from "@/lib/tauri-storage";
+import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   applyAppTheme,
   normalizeAppTheme,
@@ -31,11 +44,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Eye, EyeOff, Save, RotateCcw } from "lucide-react";
+import {
+  Loader2,
+  Eye,
+  EyeOff,
+  Save,
+  RotateCcw,
+  Link2,
+  LogOut,
+} from "lucide-react";
 
 const PREFS_KEY = "preferences";
 const PROVIDERS: { value: LlmProvider; label: string }[] = [
-  { value: "openai", label: "OpenAI" },
+  { value: "openai", label: "OpenAI (API Key)" },
+  { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
   { value: "claude", label: "Claude (Anthropic)" },
   { value: "gemini", label: "Gemini (Google)" },
   { value: "ollama", label: "Ollama (Local)" },
@@ -79,6 +101,10 @@ const APP_COLOR_MODES: {
 export default function Settings() {
   const [provider, setProvider] = useState<LlmProvider>("openai");
   const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [openaiCodexAccessToken, setOpenaiCodexAccessToken] = useState("");
+  const [openaiCodexRefreshToken, setOpenaiCodexRefreshToken] = useState("");
+  const [openaiCodexAccountId, setOpenaiCodexAccountId] = useState("");
+  const [openaiCodexExpiresAt, setOpenaiCodexExpiresAt] = useState<number>(0);
   const [claudeApiKey, setClaudeApiKey] = useState("");
   const [geminiApiKey, setGeminiApiKey] = useState("");
   const [ollamaUrl, setOllamaUrl] = useState("http://localhost:11434");
@@ -92,6 +118,10 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState(false);
+  const [codexAuthFlow, setCodexAuthFlow] =
+    useState<OpenAICodexAuthFlow | null>(null);
+  const [connectingCodex, setConnectingCodex] = useState(false);
+  const [disconnectingCodex, setDisconnectingCodex] = useState(false);
 
   // Load preferences on mount
   useEffect(() => {
@@ -102,6 +132,10 @@ export default function Settings() {
       if (prefs) {
         setProvider(prefs.provider || "openai");
         setOpenaiApiKey(prefs.openaiApiKey || "");
+        setOpenaiCodexAccessToken(prefs.openaiCodexAccessToken || "");
+        setOpenaiCodexRefreshToken(prefs.openaiCodexRefreshToken || "");
+        setOpenaiCodexAccountId(prefs.openaiCodexAccountId || "");
+        setOpenaiCodexExpiresAt(prefs.openaiCodexExpiresAt || 0);
         setClaudeApiKey(prefs.claudeApiKey || "");
         setGeminiApiKey(prefs.geminiApiKey || "");
         setOllamaUrl(prefs.ollamaUrl || "http://localhost:11434");
@@ -126,6 +160,10 @@ export default function Settings() {
     return {
       provider,
       openaiApiKey: openaiApiKey || undefined,
+      openaiCodexAccessToken: openaiCodexAccessToken || undefined,
+      openaiCodexRefreshToken: openaiCodexRefreshToken || undefined,
+      openaiCodexExpiresAt: openaiCodexExpiresAt || undefined,
+      openaiCodexAccountId: openaiCodexAccountId || undefined,
       claudeApiKey: claudeApiKey || undefined,
       geminiApiKey: geminiApiKey || undefined,
       ollamaUrl: ollamaUrl || undefined,
@@ -136,6 +174,10 @@ export default function Settings() {
   }, [
     provider,
     openaiApiKey,
+    openaiCodexAccessToken,
+    openaiCodexRefreshToken,
+    openaiCodexExpiresAt,
+    openaiCodexAccountId,
     claudeApiKey,
     geminiApiKey,
     ollamaUrl,
@@ -150,6 +192,10 @@ export default function Settings() {
     const prefs: Preferences = {
       provider,
       openaiApiKey: openaiApiKey || undefined,
+      openaiCodexAccessToken: openaiCodexAccessToken || undefined,
+      openaiCodexRefreshToken: openaiCodexRefreshToken || undefined,
+      openaiCodexExpiresAt: openaiCodexExpiresAt || undefined,
+      openaiCodexAccountId: openaiCodexAccountId || undefined,
       claudeApiKey: claudeApiKey || undefined,
       geminiApiKey: geminiApiKey || undefined,
       ollamaUrl: ollamaUrl || undefined,
@@ -163,6 +209,7 @@ export default function Settings() {
       const hasCredentials =
         provider === "ollama" ||
         (provider === "openai" && !!openaiApiKey) ||
+        (provider === "openai-codex" && !!openaiCodexRefreshToken) ||
         (provider === "claude" && !!claudeApiKey) ||
         (provider === "gemini" && !!geminiApiKey);
 
@@ -187,6 +234,10 @@ export default function Settings() {
   }, [
     provider,
     openaiApiKey,
+    openaiCodexAccessToken,
+    openaiCodexRefreshToken,
+    openaiCodexExpiresAt,
+    openaiCodexAccountId,
     claudeApiKey,
     geminiApiKey,
     ollamaUrl,
@@ -218,12 +269,104 @@ export default function Settings() {
     setShowKeys((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
+  const codexConnected =
+    !!openaiCodexRefreshToken && !!openaiCodexAccountId;
+  const codexExpiryLabel = openaiCodexExpiresAt
+    ? new Date(openaiCodexExpiresAt).toLocaleString()
+    : null;
+
+  const handleConnectCodex = async () => {
+    setConnectingCodex(true);
+    try {
+      const flow = codexAuthFlow || (await beginOpenAICodexOAuth("bex"));
+      setCodexAuthFlow(flow);
+
+      const callbackPromise = invoke<string>("openai_codex_wait_for_callback", {
+        payload: {
+          state: flow.state,
+          timeoutMs: 180_000,
+        },
+      });
+
+      await openUrl(flow.url);
+      toast.message("Waiting for ChatGPT login...", {
+        description: "Complete the browser sign-in. Bex will finish automatically.",
+      });
+
+      let callbackUrl: string;
+      try {
+        callbackUrl = await callbackPromise;
+      } catch {
+        const pasted = window.prompt(
+          "Automatic callback capture failed. Paste the full callback URL from your browser.",
+        );
+        if (!pasted) {
+          toast.message("Login not completed", {
+            description: "You can run Connect again anytime.",
+          });
+          return;
+        }
+        callbackUrl = pasted;
+      }
+
+      const session = await completeOpenAICodexOAuth(flow, callbackUrl);
+      const nextPrefs = applyOpenAICodexSessionToPreferences(buildPrefs(), session);
+
+      setOpenaiCodexAccessToken(session.accessToken);
+      setOpenaiCodexRefreshToken(session.refreshToken);
+      setOpenaiCodexAccountId(session.accountId);
+      setOpenaiCodexExpiresAt(session.expiresAt);
+      setCodexAuthFlow(null);
+
+      await storage.setItem(PREFS_KEY, JSON.stringify(nextPrefs));
+
+      setModel((current) => current || DEFAULT_MODELS["openai-codex"]);
+      void refreshModels();
+
+      toast.success("Connected to OpenAI Codex");
+    } catch (err) {
+      toast.error(
+        `Codex login failed: ${err instanceof Error ? err.message : "Unknown error"}`,
+      );
+    } finally {
+      setConnectingCodex(false);
+    }
+  };
+
+  const handleDisconnectCodex = async () => {
+    setDisconnectingCodex(true);
+    try {
+      setOpenaiCodexAccessToken("");
+      setOpenaiCodexRefreshToken("");
+      setOpenaiCodexAccountId("");
+      setOpenaiCodexExpiresAt(0);
+      setCodexAuthFlow(null);
+
+      const nextPrefs: Preferences = {
+        ...buildPrefs(),
+        openaiCodexAccessToken: undefined,
+        openaiCodexRefreshToken: undefined,
+        openaiCodexExpiresAt: undefined,
+        openaiCodexAccountId: undefined,
+      };
+
+      await storage.setItem(PREFS_KEY, JSON.stringify(nextPrefs));
+      toast.success("Disconnected from OpenAI Codex");
+    } catch (err) {
+      toast.error(
+        `Failed to disconnect Codex: ${err instanceof Error ? err.message : "Unknown error"}`,
+      );
+    } finally {
+      setDisconnectingCodex(false);
+    }
+  };
+
   return (
     <div className="max-w-2xl space-y-6">
       <div>
         <h2 className="text-2xl font-bold">Settings</h2>
         <p className="text-muted-foreground leading-relaxed">
-          Configure appearance, provider, API keys, and default model.
+          Configure appearance, provider, credentials, and default model.
         </p>
       </div>
 
@@ -327,6 +470,60 @@ export default function Settings() {
                   )}
                 </Button>
               </div>
+            </div>
+          )}
+
+          {provider === "openai-codex" && (
+            <div className="space-y-3 rounded-md border p-3">
+              <div className="space-y-1">
+                <Label>ChatGPT OAuth</Label>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  Use your ChatGPT Plus/Pro account. No OpenAI API key required.
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Status: {codexConnected ? "Connected" : "Not connected"}
+                  {codexConnected && codexExpiryLabel ? ` · Expires: ${codexExpiryLabel}` : ""}
+                </p>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="gap-2"
+                  onClick={() => void handleConnectCodex()}
+                  disabled={connectingCodex || disconnectingCodex}
+                >
+                  {connectingCodex ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Link2 className="h-4 w-4" />
+                  )}
+                  {codexConnected ? "Reconnect ChatGPT" : "Connect ChatGPT"}
+                </Button>
+
+                {codexConnected && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2"
+                    onClick={() => void handleDisconnectCodex()}
+                    disabled={connectingCodex || disconnectingCodex}
+                  >
+                    {disconnectingCodex ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <LogOut className="h-4 w-4" />
+                    )}
+                    Disconnect
+                  </Button>
+                )}
+              </div>
+
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                Login completes automatically after browser sign-in.
+              </p>
             </div>
           )}
 

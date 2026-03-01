@@ -107,9 +107,7 @@ describe("Popup", () => {
       screen.getByPlaceholderText(/Type or paste text here/),
     ).toBeInTheDocument();
     expect(screen.getByText("Check")).toBeInTheDocument();
-    expect(
-      screen.getByText("Finish setup to start checking grammar"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Results will appear here")).toBeInTheDocument();
   });
 
   it("check button is disabled when input is empty", () => {
@@ -197,9 +195,11 @@ describe("Popup", () => {
   it("shows setup guardrail when no prefs configured", async () => {
     // storage.getItem returns undefined (no prefs)
     renderPopup();
-    await vi.waitFor(() => {});
 
-    expect(screen.getByText("Setup required")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Setup required")).toBeInTheDocument();
+    });
+
     expect(
       screen.getByText(/Configure your provider and API key in Settings/),
     ).toBeInTheDocument();

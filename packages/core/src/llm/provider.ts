@@ -1,5 +1,9 @@
 import { GrammarResult, Preferences } from "./types";
 import { checkWithOpenAI, generateWithOpenAI } from "./openai";
+import {
+  checkWithOpenAICodex,
+  generateWithOpenAICodex,
+} from "./openai-codex";
 import { checkWithClaude, generateWithClaude } from "./claude";
 import { checkWithGemini, generateWithGemini } from "./gemini";
 import { checkWithOllama, generateWithOllama } from "./ollama";
@@ -22,6 +26,8 @@ export async function checkGrammar(
   switch (prefs.provider) {
     case "openai":
       return checkWithOpenAI(text, prefs, prompt, signal);
+    case "openai-codex":
+      return checkWithOpenAICodex(text, prefs, prompt, signal);
     case "claude":
       return checkWithClaude(text, prefs, prompt, signal);
     case "gemini":
@@ -51,6 +57,8 @@ export async function generateText(
   switch (prefs.provider) {
     case "openai":
       return generateWithOpenAI(userMessage, prefs, systemPrompt, signal);
+    case "openai-codex":
+      return generateWithOpenAICodex(userMessage, prefs, systemPrompt, signal);
     case "claude":
       return generateWithClaude(userMessage, prefs, systemPrompt, signal);
     case "gemini":

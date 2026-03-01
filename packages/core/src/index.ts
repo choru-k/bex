@@ -16,6 +16,18 @@ export {
   generateText,
 } from "./llm/provider";
 
+// OpenAI Codex OAuth helpers
+export type {
+  OpenAICodexAuthFlow,
+  OpenAICodexSession,
+} from "./llm/openai-codex";
+export {
+  beginOpenAICodexOAuth,
+  completeOpenAICodexOAuth,
+  refreshOpenAICodexSession,
+  applyOpenAICodexSessionToPreferences,
+} from "./llm/openai-codex";
+
 // Model fetching
 export type { ModelOption } from "./llm/models";
 export { DEFAULT_MODELS, fetchModels } from "./llm/models";
