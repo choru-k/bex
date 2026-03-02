@@ -1,6 +1,6 @@
 [package]
 name = "Bex"
-version = "0.3.1"
+version = "0.3.2"
 description = "Bex Grammar Checker"
 authors = ["you"]
 edition = "2021"
