@@ -76,6 +76,10 @@ jobs:
           chmod +x "$APP_RESOURCES/bex"
           "$APP_RESOURCES/bex" --help
 
+          # Ensure symlink invocation works (matches Homebrew binary linking behavior)
+          ln -sf "$APP_RESOURCES/bex" "$RUNNER_TEMP/bex"
+          "$RUNNER_TEMP/bex" --help
+
       - name: Zip app bundle
         run: |
           cd packages/app/src-tauri/target/release/bundle/macos

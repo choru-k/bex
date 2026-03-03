@@ -1,6 +1,31 @@
 #!/bin/sh
 
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+SCRIPT_PATH="$0"
+
+case "$SCRIPT_PATH" in
+  */*)
+    ;;
+  *)
+    RESOLVED_FROM_PATH="$(command -v "$SCRIPT_PATH" 2>/dev/null || true)"
+    if [ -n "$RESOLVED_FROM_PATH" ]; then
+      SCRIPT_PATH="$RESOLVED_FROM_PATH"
+    fi
+    ;;
+esac
+
+while [ -L "$SCRIPT_PATH" ]; do
+  LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+  case "$LINK_TARGET" in
+    /*)
+      SCRIPT_PATH="$LINK_TARGET"
+      ;;
+    *)
+      SCRIPT_PATH="$(dirname -- "$SCRIPT_PATH")/$LINK_TARGET"
+      ;;
+  esac
+done
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$SCRIPT_PATH")" && pwd -P)"
 CLI_JS="$SCRIPT_DIR/bex-cli/index.js"
 
 if [ ! -f "$CLI_JS" ]; then
