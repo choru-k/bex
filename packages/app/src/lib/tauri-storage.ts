@@ -11,9 +11,9 @@ const DIR_NAME = ".bex";
 const FILE_NAME = "data.json";
 
 export class TauriFileStorage implements StorageAdapter {
-  private cache: Record<string, string> | null = null;
   private filePath: string | null = null;
   private dirPath: string | null = null;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   private async getDirPath(): Promise<string> {
     if (this.dirPath) return this.dirPath;
@@ -30,20 +30,21 @@ export class TauriFileStorage implements StorageAdapter {
   }
 
   private async load(): Promise<Record<string, string>> {
-    if (this.cache) return this.cache;
     try {
       const filePath = await this.getFilePath();
       const fileExists = await exists(filePath);
       if (!fileExists) {
-        this.cache = {};
-        return this.cache;
+        return {};
       }
       const raw = await readTextFile(filePath);
-      this.cache = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, string>;
+      }
+      return {};
     } catch {
-      this.cache = {};
+      return {};
     }
-    return this.cache!;
   }
 
   private async persist(data: Record<string, string>): Promise<void> {
@@ -55,7 +56,6 @@ export class TauriFileStorage implements StorageAdapter {
 
     const filePath = await this.getFilePath();
     await writeTextFile(filePath, JSON.stringify(data, null, 2));
-    this.cache = data;
   }
 
   async getItem<T = string>(key: string): Promise<T | undefined> {
@@ -70,14 +70,22 @@ export class TauriFileStorage implements StorageAdapter {
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    const data = await this.load();
-    await this.persist({ ...data, [key]: value });
+    const run = this.writeQueue.then(async () => {
+      const data = await this.load();
+      await this.persist({ ...data, [key]: value });
+    });
+    this.writeQueue = run.catch(() => {});
+    return run;
   }
 
   async removeItem(key: string): Promise<void> {
-    const data = await this.load();
-    const { [key]: _, ...rest } = data;
-    await this.persist(rest);
+    const run = this.writeQueue.then(async () => {
+      const data = await this.load();
+      const { [key]: _, ...rest } = data;
+      await this.persist(rest);
+    });
+    this.writeQueue = run.catch(() => {});
+    return run;
   }
 
   async getAllKeys(): Promise<string[]> {

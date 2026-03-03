@@ -6,21 +6,23 @@ import { StorageAdapter } from "./storage";
 
 export class JsonFileStorage implements StorageAdapter {
   private filePath: string;
-  private cache: Record<string, string> | null = null;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(filePath?: string) {
     this.filePath = filePath ?? join(homedir(), ".bex", "data.json");
   }
 
   private async load(): Promise<Record<string, string>> {
-    if (this.cache) return this.cache;
     try {
       const raw = await readFile(this.filePath, "utf-8");
-      this.cache = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        return parsed as Record<string, string>;
+      }
+      return {};
     } catch {
-      this.cache = {};
+      return {};
     }
-    return this.cache!;
   }
 
   private async persist(data: Record<string, string>): Promise<void> {
@@ -33,8 +35,6 @@ export class JsonFileStorage implements StorageAdapter {
       mode: 0o600,
     });
     await rename(tmp, this.filePath);
-
-    this.cache = data;
   }
 
   async getItem<T = string>(key: string): Promise<T | undefined> {
@@ -49,14 +49,22 @@ export class JsonFileStorage implements StorageAdapter {
   }
 
   async setItem(key: string, value: string): Promise<void> {
-    const data = await this.load();
-    await this.persist({ ...data, [key]: value });
+    const run = this.writeQueue.then(async () => {
+      const data = await this.load();
+      await this.persist({ ...data, [key]: value });
+    });
+    this.writeQueue = run.catch(() => {});
+    return run;
   }
 
   async removeItem(key: string): Promise<void> {
-    const data = await this.load();
-    const { [key]: _, ...rest } = data;
-    await this.persist(rest);
+    const run = this.writeQueue.then(async () => {
+      const data = await this.load();
+      const { [key]: _, ...rest } = data;
+      await this.persist(rest);
+    });
+    this.writeQueue = run.catch(() => {});
+    return run;
   }
 
   async getAllKeys(): Promise<string[]> {

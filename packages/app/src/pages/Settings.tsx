@@ -48,7 +48,6 @@ import {
   Loader2,
   Eye,
   EyeOff,
-  Save,
   RotateCcw,
   Link2,
   LogOut,
@@ -115,7 +114,6 @@ export default function Settings() {
   const [appTheme, setAppTheme] = useState<AppTheme>(DEFAULT_APP_THEME);
   const [appColorMode, setAppColorMode] =
     useState<AppColorMode>(DEFAULT_APP_COLOR_MODE);
-  const [saving, setSaving] = useState(false);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState(false);
   const [codexAuthFlow, setCodexAuthFlow] =
@@ -250,20 +248,25 @@ export default function Settings() {
     void refreshModels();
   }, [refreshModels]);
 
-  const handleSave = async () => {
-    setSaving(true);
-    try {
-      const prefs = buildPrefs();
-      await storage.setItem(PREFS_KEY, JSON.stringify(prefs));
-      toast.success("Settings saved");
-    } catch (err) {
-      toast.error(
-        `Failed to save: ${err instanceof Error ? err.message : "Unknown error"}`,
-      );
-    } finally {
-      setSaving(false);
-    }
-  };
+  useEffect(() => {
+    if (!loaded) return;
+
+    const timeout = setTimeout(() => {
+      const persist = async () => {
+        try {
+          await storage.setItem(PREFS_KEY, JSON.stringify(buildPrefs()));
+        } catch (err) {
+          toast.error(
+            `Failed to auto-save settings: ${err instanceof Error ? err.message : "Unknown error"}`,
+          );
+        }
+      };
+
+      void persist();
+    }, 200);
+
+    return () => clearTimeout(timeout);
+  }, [buildPrefs, loaded]);
 
   const toggleKeyVisibility = (key: string) => {
     setShowKeys((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -312,13 +315,13 @@ export default function Settings() {
       const session = await completeOpenAICodexOAuth(flow, callbackUrl);
       const nextPrefs = applyOpenAICodexSessionToPreferences(buildPrefs(), session);
 
+      await storage.setItem(PREFS_KEY, JSON.stringify(nextPrefs));
+
       setOpenaiCodexAccessToken(session.accessToken);
       setOpenaiCodexRefreshToken(session.refreshToken);
       setOpenaiCodexAccountId(session.accountId);
       setOpenaiCodexExpiresAt(session.expiresAt);
       setCodexAuthFlow(null);
-
-      await storage.setItem(PREFS_KEY, JSON.stringify(nextPrefs));
 
       setModel((current) => current || DEFAULT_MODELS["openai-codex"]);
       void refreshModels();
@@ -336,12 +339,6 @@ export default function Settings() {
   const handleDisconnectCodex = async () => {
     setDisconnectingCodex(true);
     try {
-      setOpenaiCodexAccessToken("");
-      setOpenaiCodexRefreshToken("");
-      setOpenaiCodexAccountId("");
-      setOpenaiCodexExpiresAt(0);
-      setCodexAuthFlow(null);
-
       const nextPrefs: Preferences = {
         ...buildPrefs(),
         openaiCodexAccessToken: undefined,
@@ -351,6 +348,12 @@ export default function Settings() {
       };
 
       await storage.setItem(PREFS_KEY, JSON.stringify(nextPrefs));
+
+      setOpenaiCodexAccessToken("");
+      setOpenaiCodexRefreshToken("");
+      setOpenaiCodexAccountId("");
+      setOpenaiCodexExpiresAt(0);
+      setCodexAuthFlow(null);
       toast.success("Disconnected from OpenAI Codex");
     } catch (err) {
       toast.error(
@@ -366,7 +369,7 @@ export default function Settings() {
       <div>
         <h2 className="text-2xl font-bold">Settings</h2>
         <p className="text-muted-foreground leading-relaxed">
-          Configure appearance, provider, credentials, and default model.
+          Configure appearance, provider, credentials, and default model. Changes save automatically.
         </p>
       </div>
 
@@ -642,14 +645,6 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      <Button onClick={handleSave} disabled={saving} className="gap-2">
-        {saving ? (
-          <Loader2 className="h-4 w-4 animate-spin" />
-        ) : (
-          <Save className="h-4 w-4" />
-        )}
-        Save settings
-      </Button>
     </div>
   );
 }

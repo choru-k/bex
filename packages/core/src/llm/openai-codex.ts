@@ -292,6 +292,11 @@ function parseCodexErrorBody(text: string): string {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const parsed: any = JSON.parse(text);
+
+    if (typeof parsed?.detail === "string" && parsed.detail) {
+      return parsed.detail;
+    }
+
     const error = parsed?.error;
     if (!error) return text;
 
@@ -333,8 +338,9 @@ function extractTextFromSseBody(raw: string): string {
   let outputText = "";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let completedResponse: any = null;
+  const normalized = raw.replace(/\r\n/g, "\n");
 
-  for (const chunk of raw.split("\n\n")) {
+  for (const chunk of normalized.split("\n\n")) {
     const data = chunk
       .split("\n")
       .filter((line) => line.startsWith("data:"))
@@ -349,6 +355,12 @@ function extractTextFromSseBody(raw: string): string {
       const event: any = JSON.parse(data);
       if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
         outputText += event.delta;
+      } else if (
+        event.type === "response.output_text.done" &&
+        typeof event.text === "string" &&
+        outputText.length === 0
+      ) {
+        outputText += event.text;
       } else if (
         (event.type === "response.completed" || event.type === "response.done") &&
         event.response
@@ -422,13 +434,13 @@ async function requestCodexJsonDirect(
       "chatgpt-account-id": session.accountId,
       "OpenAI-Beta": "responses=experimental",
       originator: "bex",
-      accept: "application/json",
+      accept: "text/event-stream",
       "content-type": "application/json",
     },
     body: JSON.stringify({
       model,
       store: false,
-      stream: false,
+      stream: true,
       instructions: systemPrompt,
       input: [
         {

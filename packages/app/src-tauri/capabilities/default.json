@@ -16,24 +16,28 @@
     {
       "identifier": "fs:allow-read-text-file",
       "allow": [
+        { "path": "$HOME/.bex" },
         { "path": "$HOME/.bex/**" }
       ]
     },
     {
       "identifier": "fs:allow-write-text-file",
       "allow": [
+        { "path": "$HOME/.bex" },
         { "path": "$HOME/.bex/**" }
       ]
     },
     {
       "identifier": "fs:allow-exists",
       "allow": [
+        { "path": "$HOME/.bex" },
         { "path": "$HOME/.bex/**" }
       ]
     },
     {
       "identifier": "fs:allow-mkdir",
       "allow": [
+        { "path": "$HOME/.bex" },
         { "path": "$HOME/.bex/**" }
       ]
     }

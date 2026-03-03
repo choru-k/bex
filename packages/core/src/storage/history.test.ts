@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { HistoryEntry } from "../llm/types";
 import { createMockStorage } from "../__test__/mock-storage";
+import type { StorageAdapter } from "./storage";
 import {
   loadHistory,
   saveToHistory,
@@ -37,6 +38,18 @@ describe("loadHistory", () => {
     const storage = createMockStorage();
     await storage.setItem("history", "broken{json");
     expect(await loadHistory(storage)).toEqual([]);
+  });
+
+  it("accepts already-parsed arrays from storage adapters", async () => {
+    const entries = [makeEntry("1")];
+    const storage: StorageAdapter = {
+      getItem: async <T = string>() => entries as unknown as T,
+      setItem: async () => undefined,
+      removeItem: async () => undefined,
+      getAllKeys: async () => [],
+    };
+
+    expect(await loadHistory(storage)).toEqual(entries);
   });
 });
 

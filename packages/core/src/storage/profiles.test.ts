@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { Profile } from "../llm/types";
 import { createMockStorage } from "../__test__/mock-storage";
+import type { StorageAdapter } from "./storage";
 import {
   getDefaultProfile,
   loadProfiles,
@@ -60,6 +61,18 @@ describe("loadProfiles", () => {
     const storage = createMockStorage();
     await storage.setItem("profiles", "not-json");
     expect(await loadProfiles(storage)).toEqual([]);
+  });
+
+  it("accepts already-parsed arrays from storage adapters", async () => {
+    const profiles: Profile[] = [{ id: "1", name: "A", prompt: "a" }];
+    const storage: StorageAdapter = {
+      getItem: async <T = string>() => profiles as unknown as T,
+      setItem: async () => undefined,
+      removeItem: async () => undefined,
+      getAllKeys: async () => [],
+    };
+
+    expect(await loadProfiles(storage)).toEqual(profiles);
   });
 });
 

@@ -5,13 +5,23 @@ const HISTORY_KEY = "history";
 const MAX_HISTORY_ENTRIES = 500;
 
 export async function loadHistory(storage: StorageAdapter): Promise<HistoryEntry[]> {
-  const raw = await storage.getItem<string>(HISTORY_KEY);
+  const raw = await storage.getItem<unknown>(HISTORY_KEY);
   if (!raw) return [];
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return [];
+
+  if (Array.isArray(raw)) {
+    return raw as HistoryEntry[];
   }
+
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as HistoryEntry[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
 }
 
 export async function saveToHistory(storage: StorageAdapter, entry: HistoryEntry): Promise<void> {

@@ -245,6 +245,8 @@ export default function Popup() {
         model,
         timestamp: new Date().toISOString(),
         profileName: activeProfile?.name,
+      }).catch(() => {
+        // keep main flow successful even if history persistence fails
       });
 
       toast.success("Grammar check complete");

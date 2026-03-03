@@ -52,4 +52,26 @@ describe("parseGrammarResponse", () => {
       parseGrammarResponse('{"explanation": "Something."}'),
     ).toThrow("Could not parse LLM response");
   });
+
+  it("parses first JSON object when multiple objects are concatenated", () => {
+    const result = parseGrammarResponse(
+      '{"corrected":"First.","explanation":"One."}{"corrected":"Second.","explanation":"Two."}',
+    );
+
+    expect(result).toEqual({
+      corrected: "First.",
+      explanation: "One.",
+    });
+  });
+
+  it("parses balanced object even when trailing text has braces", () => {
+    const result = parseGrammarResponse(
+      '{"corrected":"Hello.","explanation":"Done."} trailing {debug}',
+    );
+
+    expect(result).toEqual({
+      corrected: "Hello.",
+      explanation: "Done.",
+    });
+  });
 });

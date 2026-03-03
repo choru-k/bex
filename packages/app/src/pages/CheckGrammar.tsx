@@ -331,7 +331,9 @@ export default function CheckGrammar() {
         timestamp: new Date().toISOString(),
         profileName: activeProfile?.name,
       };
-      void saveToHistory(storage, entry);
+      void saveToHistory(storage, entry).catch(() => {
+        // keep main flow successful even if history persistence fails
+      });
 
       toast.success("Grammar check complete");
     } catch (err) {

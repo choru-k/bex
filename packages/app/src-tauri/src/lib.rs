@@ -166,12 +166,12 @@ async fn openai_codex_proxy_request(
         .header("chatgpt-account-id", payload.account_id)
         .header("OpenAI-Beta", "responses=experimental")
         .header("originator", "bex")
-        .header("accept", "application/json")
+        .header("accept", "text/event-stream")
         .header("content-type", "application/json")
         .json(&serde_json::json!({
             "model": payload.model,
             "store": false,
-            "stream": false,
+            "stream": true,
             "instructions": payload.system_prompt,
             "input": [
                 {
