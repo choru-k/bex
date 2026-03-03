@@ -8,11 +8,17 @@ AI-powered grammar and expression checker. Available as a Raycast extension and 
 
 ```bash
 brew install --cask choru-k/tap/bex
+
+# GUI app + CLI command
+open -a Bex
+bex check --help
 ```
 
 ### Direct Download
 
 Download the latest `.zip` from [GitHub Releases](https://github.com/choru-k/bex/releases).
+
+> Homebrew cask installs a `bex` shim from the app bundle and depends on `node` for CLI execution.
 
 ## Packages
 
@@ -21,6 +27,7 @@ Download the latest `.zip` from [GitHub Releases](https://github.com/choru-k/bex
 | `@bex/core` | Shared LLM providers, storage, diff utilities, profiles |
 | `@bex/raycast` | Raycast extension |
 | `@bex/app` | Tauri v2 desktop companion app |
+| `@bex/cli` | Simple CLI (`bex check`) sharing `~/.bex/data.json` |
 
 ## Features
 
@@ -31,7 +38,8 @@ Download the latest `.zip` from [GitHub Releases](https://github.com/choru-k/bex
 - **Writing profiles** — custom prompts for different contexts (emails, code reviews, etc.)
 - **AI profile wizard** — generate profile prompts from role/audience/tone inputs
 - **History** — review past corrections, shared across Raycast and desktop app
-- **Cross-app data** — both apps read/write `~/.bex/data.json`
+- **Cross-app data** — desktop app, Raycast, and CLI read/write `~/.bex/data.json`
+- **CLI check command** — run grammar checks from terminal with `bex check`
 
 ## Providers
 
@@ -90,6 +98,29 @@ pnpm dev:app
 pnpm build:app
 ```
 
+### CLI
+
+The CLI reuses the same preferences/history as desktop app via `~/.bex/data.json`.
+
+```sh
+# Build everything (includes @bex/cli)
+pnpm build
+
+# Run locally from repo
+pnpm bex -- check --text "this are a test"
+pnpm bex -- check --file ./note.txt --json
+
+# Optional one-time global command in local dev
+pnpm --filter @bex/cli link --global
+bex check --text "this are a test"
+```
+
+Options:
+- `--text` or `--file` (exactly one required)
+- `--provider` override (`openai`, `openai-codex`, `claude`, `gemini`, `ollama`)
+- `--model` override
+- `--json` machine output
+
 ### Raycast Extension
 
 ```sh
@@ -105,6 +136,7 @@ packages/
   core/       — @bex/core: LLM providers, storage adapter, diff, profiles
   raycast/    — @bex/raycast: Raycast extension consuming @bex/core
   app/        — @bex/app: Tauri v2 desktop app consuming @bex/core
+  cli/        — @bex/cli: terminal command (`bex check`) consuming @bex/core
 ```
 
 ## License

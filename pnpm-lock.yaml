@@ -114,6 +114,22 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@20.8.10)(jiti@2.6.1)(jsdom@28.0.0)(lightningcss@1.30.2)
 
+  packages/cli:
+    dependencies:
+      '@bex/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: 20.8.10
+        version: 20.8.10
+      esbuild:
+        specifier: ^0.25.12
+        version: 0.25.12
+      typescript:
+        specifier: ^5.4
+        version: 5.7.3
+
   packages/core:
     devDependencies:
       '@types/node':

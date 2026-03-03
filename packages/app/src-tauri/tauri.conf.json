@@ -35,6 +35,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": {
+      "resources/bex": "bex",
+      "resources/bex-cli/index.js": "bex-cli/index.js"
+    },
     "macOS": {
       "signingIdentity": "Developer ID Application: Cheol Kang (ESURPGU29C)",
       "minimumSystemVersion": "13.0"

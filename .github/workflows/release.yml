@@ -70,9 +70,16 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: pnpm build:app
 
+      - name: Smoke test bundled CLI
+        run: |
+          APP_RESOURCES="packages/app/src-tauri/target/release/bundle/macos/Bex.app/Contents/Resources"
+          chmod +x "$APP_RESOURCES/bex"
+          "$APP_RESOURCES/bex" --help
+
       - name: Zip app bundle
         run: |
           cd packages/app/src-tauri/target/release/bundle/macos
+          chmod +x Bex.app/Contents/Resources/bex
           ditto -c -k --keepParent Bex.app Bex.zip
 
       - name: Create GitHub Release
@@ -101,6 +108,27 @@ jobs:
 
           sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/bex.rb
           sed -i '' "s/sha256 \".*\"/sha256 \"${SHA256}\"/" Casks/bex.rb
+
+          ruby <<'RUBY'
+          path = "Casks/bex.rb"
+          content = File.read(path)
+
+          unless content.include?('depends_on formula: "node"')
+            content.sub!(
+              /depends_on macos: ">= :ventura"\n/,
+              "depends_on macos: \">= :ventura\"\n  depends_on formula: \"node\"\n",
+            )
+          end
+
+          unless content.include?('binary "#{appdir}/Bex.app/Contents/Resources/bex", target: "bex"')
+            content.sub!(
+              /app "Bex\.app"\n/,
+              "app \"Bex.app\"\n  binary \"\#{appdir}/Bex.app/Contents/Resources/bex\", target: \"bex\"\n",
+            )
+          end
+
+          File.write(path, content)
+          RUBY
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

@@ -9,7 +9,10 @@
     "dev:raycast": "pnpm --filter @bex/raycast dev",
     "lint:raycast": "pnpm --filter @bex/raycast lint",
     "dev:app": "pnpm --filter @bex/app tauri dev",
-    "build:app": "pnpm --filter @bex/app tauri build",
+    "prepare:cli-resource": "node ./scripts/prepare-cli-resource.mjs",
+    "build:app": "pnpm --filter @bex/cli build && pnpm prepare:cli-resource && pnpm --filter @bex/app tauri build",
+    "dev:cli": "pnpm --filter @bex/cli dev",
+    "bex": "pnpm --filter @bex/cli run bex",
     "test": "pnpm -r test",
     "test:core": "pnpm --filter @bex/core test"
   }

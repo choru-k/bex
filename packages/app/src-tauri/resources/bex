@@ -1,0 +1,18 @@
+#!/bin/sh
+
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+CLI_JS="$SCRIPT_DIR/bex-cli/index.js"
+
+if [ ! -f "$CLI_JS" ]; then
+  echo "Error: Bundled Bex CLI script not found: $CLI_JS" >&2
+  echo "Try reinstalling Bex." >&2
+  exit 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "Error: Node.js is required for the bundled Bex CLI." >&2
+  echo "Install with: brew install node" >&2
+  exit 1
+fi
+
+exec node "$CLI_JS" "$@"
