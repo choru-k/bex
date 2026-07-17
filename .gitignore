@@ -1,10 +1,7 @@
+.DS_Store
 node_modules/
 build/
-dist/
-.DS_Store
+DerivedData.noindex/
+*.xcuserstate
+**/xcuserdata/
 plan/
-
-# Tauri
-packages/app/src-tauri/target/
-packages/app/src-tauri/gen/
-packages/app/src-tauri/resources/bex-cli/

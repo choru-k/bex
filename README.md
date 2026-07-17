@@ -1,142 +1,112 @@
 # Bex — Better Expression
 
-AI-powered grammar and expression checker. Available as a Raycast extension and a desktop companion app, both sharing the same core engine and data.
+Bex is a native macOS menubar app for checking English grammar and expression with the AI provider you choose. It opens only when needed, has no Dock icon, and uses native AppKit and SwiftUI controls throughout.
+
+## Requirements
+
+- macOS 13 Ventura or later
+- A credential for OpenAI, Claude, or Gemini; a ChatGPT account for OpenAI Codex; or a local Ollama installation
 
 ## Install
 
-### Homebrew (macOS)
+### Homebrew
 
-```bash
+```sh
 brew install --cask choru-k/tap/bex
-
-# GUI app + CLI command
-open -a Bex
-bex check --help
 ```
 
-### Direct Download
+### Direct download
 
-Download the latest `.zip` from [GitHub Releases](https://github.com/choru-k/bex/releases).
+Download `Bex.zip` from [GitHub Releases](https://github.com/choru-k/bex/releases), extract it, and move `Bex.app` to `/Applications`.
 
-> Homebrew cask installs a `bex` shim from the app bundle and depends on `node` for CLI execution.
+Launch Bex from Applications or with:
 
-## Packages
+```sh
+open -a Bex
+```
 
-| Package | Description |
-|---------|-------------|
-| `@bex/core` | Shared LLM providers, storage, diff utilities, profiles |
-| `@bex/raycast` | Raycast extension |
-| `@bex/app` | Tauri v2 desktop companion app |
-| `@bex/cli` | Simple CLI (`bex check`) sharing `~/.bex/data.json` |
+Bex appears in the macOS menu bar rather than the Dock.
 
-## Features
+## Use Bex
 
-- **Grammar & expression checking** — paste text, get corrected output with explanations
-- **Multi-provider support** — OpenAI, OpenAI Codex (desktop OAuth), Claude, Gemini, Ollama (local)
-- **Dynamic model selection** — fetches available models from your provider's API
-- **Diff view** — word-level highlighting of changes
-- **Writing profiles** — custom prompts for different contexts (emails, code reviews, etc.)
-- **AI profile wizard** — generate profile prompts from role/audience/tone inputs
-- **History** — review past corrections, shared across Raycast and desktop app
-- **Cross-app data** — desktop app, Raycast, and CLI read/write `~/.bex/data.json`
-- **CLI check command** — run grammar checks from terminal with `bex check`
+1. Open **Settings** from the Bex menu and select a provider and model.
+2. Add the provider credential, connect OpenAI Codex, or configure the local Ollama URL.
+3. Press **⌘⇧G** from any app to open Quick Check.
+4. Enter text, run **Check**, review the word-level diff and explanation, then copy the result.
+
+Quick Check also supports three in-place rewrites:
+
+- **More Formal** (`⌘1`)
+- **More Friendly** (`⌘2`)
+- **Shorter** (`⌘3`)
+
+The Bex menu opens the management windows only when needed:
+
+- **History** — search and filter prior checks, inspect their diffs, reuse an input, or delete entries
+- **Profiles** — maintain writing-context prompts and generate a profile with the AI wizard
+- **Settings** — choose providers, models, and effort, manage credentials, validate Ollama, and select system, light, or dark appearance
 
 ## Providers
 
-| Provider | API Key Required | Default Model |
-|----------|-----------------|---------------|
-| OpenAI | Yes | gpt-4.1-mini |
-| OpenAI Codex (Desktop only) | No API key (ChatGPT Plus/Pro OAuth) | gpt-5.1-codex-mini |
-| Claude | Yes | claude-sonnet-4-5-20250929 |
-| Gemini | Yes | gemini-2.5-flash |
-| Ollama | No (local) | llama3.2 |
+| Provider | Authentication | Default model |
+| --- | --- | --- |
+| OpenAI | API key | `gpt-5.6-sol` |
+| OpenAI Codex | ChatGPT OAuth | `gpt-5.6-sol` |
+| Claude | API key | `claude-opus-4-8` |
+| Gemini | API key | `gemini-3.5-flash` |
+| Ollama | Local service | `llama3.3` |
 
-## Getting Started
+Available model lists are fetched on demand from every provider. After a successful refresh, Bex uses only models reported by that account or Ollama installation; if a saved model is no longer available, Bex selects the current default when possible, then the first available model.
+Reasoning-capable providers use the Settings effort control. Medium is the default: OpenAI and OpenAI Codex send medium reasoning effort, current Claude models use adaptive thinking with medium effort, Gemini 3 uses medium thinking without sampling overrides, supported legacy Claude and Gemini models use token budgets, and Ollama enables `think` for supported local thinking models unless effort is Low.
 
-### Prerequisites
+## Data and credentials
 
-- Node.js 20+
-- pnpm 10+
-- Rust toolchain (for desktop app)
+API keys and the OpenAI Codex session are stored in macOS Keychain. Profiles and correction history stay on the Mac at:
 
-### Install
+```text
+~/Library/Application Support/Bex/data.json
+```
+
+Bex keeps at most 500 history entries and writes its data atomically. Provider requests go directly from the app to the selected provider; Ollama uses the configured local URL.
+
+## Build and test
+
+Open `Bex.xcodeproj` in Xcode 26 or build from the repository root.
+
+Run the deterministic unit and UI test suites:
 
 ```sh
-pnpm install
+xcodebuild \
+  -project Bex.xcodeproj \
+  -scheme Bex \
+  -destination 'platform=macOS' \
+  -derivedDataPath build/DerivedData.noindex \
+  test
 ```
 
-### Development
+Build an unsigned Release app:
 
 ```sh
-# Build all packages
-pnpm build
-
-# Desktop app
-pnpm dev:app
-
-# Raycast extension
-pnpm dev:raycast
-
-# Core library (watch mode)
-pnpm dev:core
+xcodebuild \
+  -project Bex.xcodeproj \
+  -scheme Bex \
+  -configuration Release \
+  -destination 'platform=macOS' \
+  -derivedDataPath build/DerivedData.noindex \
+  CODE_SIGNING_ALLOWED=NO \
+  build
 ```
 
-### Desktop App
+The resulting app is at `build/DerivedData.noindex/Build/Products/Release/Bex.app`. The `.noindex` suffix prevents Spotlight from listing Debug, Release, and UI-test build bundles as installed applications.
 
-The companion app is built with Tauri v2 + React + Tailwind CSS. It provides:
+## Project structure
 
-- **Check Grammar** — split-pane editor with diff output
-- **History** — expandable list of past corrections with diffs
-- **Profiles** — create, edit, delete writing profiles with AI wizard
-- **Settings** — configure provider, API keys, and default model
-
-```sh
-# Dev mode (opens app window with hot reload)
-pnpm dev:app
-
-# Production build (generates .app and .dmg)
-pnpm build:app
-```
-
-### CLI
-
-The CLI reuses the same preferences/history as desktop app via `~/.bex/data.json`.
-
-```sh
-# Build everything (includes @bex/cli)
-pnpm build
-
-# Run locally from repo
-pnpm bex -- check --text "this are a test"
-pnpm bex -- check --file ./note.txt --json
-
-# Optional one-time global command in local dev
-pnpm --filter @bex/cli link --global
-bex check --text "this are a test"
-```
-
-Options:
-- `--text` or `--file` (exactly one required)
-- `--provider` override (`openai`, `openai-codex`, `claude`, `gemini`, `ollama`)
-- `--model` override
-- `--json` machine output
-
-### Raycast Extension
-
-```sh
-pnpm dev:raycast
-```
-
-Open Raycast, configure the extension preferences (provider + API key), then use the **Check Grammar** command.
-
-## Project Structure
-
-```
-packages/
-  core/       — @bex/core: LLM providers, storage adapter, diff, profiles
-  raycast/    — @bex/raycast: Raycast extension consuming @bex/core
-  app/        — @bex/app: Tauri v2 desktop app consuming @bex/core
-  cli/        — @bex/cli: terminal command (`bex check`) consuming @bex/core
+```text
+Bex/          Native application source and resources
+BexTests/     Provider, parser, diff, storage, and view-model tests
+BexUITests/   End-to-end native UI tests
+Config/       Application and distribution property lists
+Bex.xcodeproj Shared Xcode project and scheme
 ```
 
 ## License

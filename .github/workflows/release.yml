@@ -17,30 +17,12 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          test -n "$VERSION"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
-      - name: Install dependencies
-        run: pnpm install
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Rust cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: packages/app/src-tauri
-
-      - name: Import signing certificate
+      - name: Import Developer ID certificate
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -50,92 +32,119 @@ jobs:
           KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
 
           echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
-
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERTIFICATE_PATH" -P "$APPLE_CERTIFICATE_PASSWORD" \
+          security import "$CERTIFICATE_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
             -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: \
-            -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "$KEYCHAIN_PASSWORD" \
+            "$KEYCHAIN_PATH"
           security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
 
-      - name: Build core package
-        run: pnpm --filter @bex/core build
+      - name: Test native app
+        run: |
+          xcodebuild \
+            -project Bex.xcodeproj \
+            -scheme Bex \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath build/DerivedData.noindex \
+            -parallel-testing-enabled NO \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            test
 
-      - name: Build app
+      - name: Archive Developer ID app
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          xcodebuild archive \
+            -project Bex.xcodeproj \
+            -scheme Bex \
+            -configuration Release \
+            -archivePath build/Bex.xcarchive \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Developer ID Application" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+
+      - name: Export signed app
+        run: |
+          rm -rf build/export
+          xcodebuild -exportArchive \
+            -archivePath build/Bex.xcarchive \
+            -exportPath build/export \
+            -exportOptionsPlist Config/ExportOptions.plist
+
+      - name: Submit for notarization
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: pnpm build:app
-
-      - name: Smoke test bundled CLI
         run: |
-          APP_RESOURCES="packages/app/src-tauri/target/release/bundle/macos/Bex.app/Contents/Resources"
-          chmod +x "$APP_RESOURCES/bex"
-          "$APP_RESOURCES/bex" --help
+          ditto -c -k --keepParent build/export/Bex.app build/Bex-notarization.zip
+          xcrun notarytool submit build/Bex-notarization.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
 
-          # Ensure symlink invocation works (matches Homebrew binary linking behavior)
-          ln -sf "$APP_RESOURCES/bex" "$RUNNER_TEMP/bex"
-          "$RUNNER_TEMP/bex" --help
-
-      - name: Zip app bundle
+      - name: Staple and verify app
         run: |
-          cd packages/app/src-tauri/target/release/bundle/macos
-          chmod +x Bex.app/Contents/Resources/bex
-          ditto -c -k --keepParent Bex.app Bex.zip
+          xcrun stapler staple build/export/Bex.app
+          xcrun stapler validate build/export/Bex.app
+          codesign --verify --deep --strict --verbose=2 build/export/Bex.app
+          spctl --assess --type execute --verbose=2 build/export/Bex.app
+          rm -f build/Bex.zip
+          ditto -c -k --keepParent build/export/Bex.app build/Bex.zip
 
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes
-
-      - name: Upload release asset
+      - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$GITHUB_REF_NAME" \
-            packages/app/src-tauri/target/release/bundle/macos/Bex.zip
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" build/Bex.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" build/Bex.zip --generate-notes
+          fi
 
       - name: Update Homebrew cask
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          SHA256=$(shasum -a 256 packages/app/src-tauri/target/release/bundle/macos/Bex.zip | awk '{print $1}')
-
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/choru-k/homebrew-tap.git" \
+          SHA256="$(shasum -a 256 build/Bex.zip | awk '{print $1}')"
+          git clone \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/choru-k/homebrew-tap.git" \
             "$RUNNER_TEMP/homebrew-tap"
-
           cd "$RUNNER_TEMP/homebrew-tap"
 
-          sed -i '' "s/version \".*\"/version \"${VERSION}\"/" Casks/bex.rb
-          sed -i '' "s/sha256 \".*\"/sha256 \"${SHA256}\"/" Casks/bex.rb
-
-          ruby <<'RUBY'
+          VERSION="$VERSION" SHA256="$SHA256" ruby <<'RUBY'
           path = "Casks/bex.rb"
           content = File.read(path)
-
-          unless content.include?('depends_on formula: "node"')
-            content.sub!(
-              /depends_on macos: ">= :ventura"\n/,
-              "depends_on macos: \">= :ventura\"\n  depends_on formula: \"node\"\n",
-            )
-          end
-
-          unless content.include?('binary "#{appdir}/Bex.app/Contents/Resources/bex", target: "bex"')
-            content.sub!(
-              /app "Bex\.app"\n/,
-              "app \"Bex.app\"\n  binary \"\#{appdir}/Bex.app/Contents/Resources/bex\", target: \"bex\"\n",
-            )
-          end
-
+          content.sub!(/^\s*version ".*"$/, %(  version "#{ENV.fetch("VERSION")}"))
+          content.sub!(/^\s*sha256 ".*"$/, %(  sha256 "#{ENV.fetch("SHA256")}"))
+          content.gsub!(/^\s*depends_on formula: "node"\n/, "")
+          content.gsub!(
+            /^\s*binary "#\{appdir\}\/Bex\.app\/Contents\/Resources\/bex", target: "bex"\n/,
+            "",
+          )
+          abort "Bex cask must require macOS Ventura or newer" unless content.include?(
+            'depends_on macos: ">= :ventura"',
+          )
+          abort "Bex cask must install Bex.app" unless content.include?('app "Bex.app"')
           File.write(path, content)
           RUBY
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Casks/bex.rb
-          git commit -m "bex ${VERSION}"
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "bex ${VERSION}"
+            git push
+          fi
