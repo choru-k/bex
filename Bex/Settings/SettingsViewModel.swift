@@ -1,6 +1,28 @@
 import AppKit
 import Foundation
 
+enum SettingsSetupOrigin: Equatable, Sendable {
+  case quickCheck
+  case fixAndSend
+}
+
+enum SettingsRouteIntent: Equatable, Sendable {
+  case returnToQuickCheck
+  case returnToFixAndSendTarget
+}
+
+enum ShortcutUpdateOutcome: Equatable {
+  case accepted
+  case rejected
+}
+
+enum ProviderConnectionState: Equatable {
+  case notConfigured
+  case validating
+  case ready
+  case failed
+}
+
 @MainActor
 final class SettingsViewModel: ObservableObject {
   @Published private(set) var provider: LLMProvider = .openAI
@@ -13,6 +35,7 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var credentialStored = false
   @Published private(set) var isFetchingModels = false
   @Published private(set) var modelFetchError: String?
+  @Published private(set) var validatedProvider: LLMProvider?
   @Published private(set) var ollamaError: String?
   @Published private(set) var userVisibleError: String?
   @Published private(set) var codexConnected = false
@@ -27,6 +50,24 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var hookConfigPaths: [PromptClient: String] = [:]
   @Published private(set) var promptGateError: String?
   @Published private(set) var promptOperationClient: PromptClient?
+  @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
+  @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
+  @Published private(set) var outboundConfirmationPolicy: OutboundConfirmationPolicy =
+    .alwaysConfirm
+  @Published private(set) var quickCheckKeyChord: KeyChord = .defaultQuickCheck
+  @Published private(set) var fixAndSendKeyChord: KeyChord = .defaultFixAndSend
+  @Published private(set) var shortcutErrors: [BexShortcut: String] = [:]
+  @Published private(set) var accessibilityStatusMessage: String?
+  @Published private(set) var setupOrigin: SettingsSetupOrigin?
+  @Published private(set) var isClearingHistory = false
+  @Published private(set) var isDeletingSavedDraft = false
+  @Published private(set) var savedDraftDeletionError: String?
+  @Published private(set) var isRequestingSetupRoute = false
+
+  static let draftRetentionDisclosure =
+    "When enabled, Bex saves the current Quick Check draft in this Mac’s app preferences so it can be restored after Bex relaunches or when Quick Check is temporarily hidden for navigation. Closing or canceling Quick Check deletes the saved draft. Don’t Save and Not Decided never block correction and do not save new drafts."
+  static let historyRetentionDisclosure =
+    "When enabled, Bex saves the original, correction, explanation, provider, model, Writing Style name, and timestamp in Bex’s local database on this Mac, keeping at most 500 entries. Fix & Send is not stored. Don’t Save and Not Decided never block correction and do not save new history."
 
   private let preferences: PreferencesStore
   private let keychain: KeychainStore
@@ -35,13 +76,21 @@ final class SettingsViewModel: ObservableObject {
   private let promptTarget: any PromptTargetServicing
   private let hookManager: any HookInstallationManaging
   private let applyAppearance: @MainActor (AppearancePreference) -> Void
+  private let updateShortcut: @MainActor (BexShortcut, KeyChord) throws -> Void
+  private let onDeleteSavedDraft: @MainActor () async throws -> Void
+  private let onClearHistory: @MainActor () async throws -> Void
+  private let onSetupRoute: @MainActor (SettingsRouteIntent) -> Void
 
   private var modelTask: Task<Void, Never>?
   private var ollamaTask: Task<Void, Never>?
   private var oauthTask: Task<Void, Never>?
   private var promptTask: Task<Void, Never>?
+  private var preferenceTask: Task<Void, Never>?
+  private var clearHistoryTask: Task<Void, Never>?
+  private var deleteSavedDraftTask: Task<Void, Never>?
   private var isLoaded = false
   private var isNormalizingOllamaURL = false
+  private var connectionValidationGeneration = 0
 
   init(
     preferences: PreferencesStore,
@@ -50,7 +99,14 @@ final class SettingsViewModel: ObservableObject {
     codexOAuth: CodexOAuthService,
     promptTarget: any PromptTargetServicing = PromptTargetService(),
     hookManager: any HookInstallationManaging = HookInstallationManager(),
-    applyAppearance: @escaping @MainActor (AppearancePreference) -> Void
+    applyAppearance: @escaping @MainActor (AppearancePreference) -> Void,
+    setupOrigin: SettingsSetupOrigin? = nil,
+    updateShortcut: @escaping @MainActor (BexShortcut, KeyChord) throws -> Void = {
+      try BexShortcutBridge.update($0, chord: $1)
+    },
+    onDeleteSavedDraft: @escaping @MainActor () async throws -> Void = {},
+    onClearHistory: @escaping @MainActor () async throws -> Void = {},
+    onSetupRoute: @escaping @MainActor (SettingsRouteIntent) -> Void = { _ in }
   ) {
     self.preferences = preferences
     self.keychain = keychain
@@ -59,6 +115,11 @@ final class SettingsViewModel: ObservableObject {
     self.promptTarget = promptTarget
     self.hookManager = hookManager
     self.applyAppearance = applyAppearance
+    self.setupOrigin = setupOrigin
+    self.updateShortcut = updateShortcut
+    self.onDeleteSavedDraft = onDeleteSavedDraft
+    self.onClearHistory = onClearHistory
+    self.onSetupRoute = onSetupRoute
   }
 
   var showsCredential: Bool {
@@ -69,12 +130,95 @@ final class SettingsViewModel: ObservableObject {
     "\(provider.displayName) API Key"
   }
 
+  var providerConnectionState: ProviderConnectionState {
+    if isFetchingModels {
+      return .validating
+    }
+    if validatedProvider == provider {
+      return .ready
+    }
+    if modelFetchError != nil {
+      return .failed
+    }
+    return .notConfigured
+  }
+
+  var providerConnectionLabel: String {
+    switch providerConnectionState {
+    case .notConfigured:
+      return "\(provider.displayName) needs connection"
+    case .validating:
+      return "Validating \(provider.displayName)…"
+    case .ready:
+      return "\(provider.displayName) is ready"
+    case .failed:
+      return "\(provider.displayName) connection failed"
+    }
+  }
+
+  var isSelectedProviderConnected: Bool {
+    providerConnectionState == .ready
+  }
+
+  var setupRouteTitle: String? {
+    guard isSelectedProviderConnected else { return nil }
+    switch setupOrigin {
+    case .quickCheck:
+      return "Return to Quick Check"
+    case .fixAndSend:
+      return "Return to Target and Invoke Fix & Send"
+    case nil:
+      return nil
+    }
+  }
+
+  var providerDisclosure: String {
+    let destination: String
+    if provider == .ollama {
+      if let normalizedURL = try? OllamaURL.normalize(ollamaURL),
+        OllamaURL.isLoopback(normalizedURL)
+      {
+        destination = "The configured Ollama endpoint is local to this Mac."
+      } else {
+        destination =
+          "The configured Ollama endpoint is external; Bex sends these payloads to that endpoint."
+      }
+    } else {
+      destination = "Bex sends these payloads to \(provider.displayName)."
+    }
+    return destination
+      + " Quick Check sends the full draft plus any custom Writing Style guidance."
+      + " Rewrite sends the corrected draft."
+      + " Fix & Send sends the masked prompt; the payload is shown for approval whenever confirmation is required."
+      + " Writing Style generation sends the labeled context fields you fill in: Role, Audience,"
+      + " Tone, Formality, Domain, and Additional notes."
+  }
+
+  var showsAccessibilityRequest: Bool {
+    !accessibilityTrusted
+  }
+
   func load() async {
-    provider = await preferences.selectedProvider()
+    async let selectedProvider = preferences.selectedProvider()
+    async let savedAppearance = preferences.appearance()
+    async let savedPromptDeliveryMode = preferences.promptDeliveryMode()
+    async let savedDraftRetention = preferences.draftRetentionChoice()
+    async let savedHistoryRetention = preferences.historyRetentionChoice()
+    async let savedConfirmationPolicy = preferences.outboundConfirmationPolicy()
+    async let savedQuickCheckChord = preferences.quickCheckKeyChord()
+    async let savedFixAndSendChord = preferences.fixAndSendKeyChord()
+
+    provider = await selectedProvider
     model = await preferences.selectedModel(for: provider)
     effort = await preferences.selectedEffort(for: provider)
     ollamaURL = await preferences.ollamaURL()
-    appearance = await preferences.appearance()
+    appearance = await savedAppearance
+    promptDeliveryMode = await savedPromptDeliveryMode
+    draftRetentionChoice = await savedDraftRetention
+    historyRetentionChoice = await savedHistoryRetention
+    outboundConfirmationPolicy = await savedConfirmationPolicy
+    quickCheckKeyChord = await savedQuickCheckChord
+    fixAndSendKeyChord = await savedFixAndSendChord
     isLoaded = true
     await refreshCredentialState()
     await refreshCodexState()
@@ -102,14 +246,14 @@ final class SettingsViewModel: ObservableObject {
 
   func selectModel(_ model: String) {
     self.model = model
-    Task { [preferences, provider] in
+    enqueuePreferenceUpdate { [preferences, provider] in
       await preferences.setSelectedModel(model, for: provider)
     }
   }
 
   func selectEffort(_ effort: ReasoningEffort) {
     self.effort = effort
-    Task { [preferences, provider] in
+    enqueuePreferenceUpdate { [preferences, provider] in
       await preferences.setSelectedEffort(effort, for: provider)
     }
   }
@@ -117,7 +261,7 @@ final class SettingsViewModel: ObservableObject {
   func selectAppearance(_ appearance: AppearancePreference) {
     self.appearance = appearance
     applyAppearance(appearance)
-    Task { [preferences] in
+    enqueuePreferenceUpdate { [preferences] in
       await preferences.setAppearance(appearance)
     }
   }
@@ -272,18 +416,205 @@ final class SettingsViewModel: ObservableObject {
 
   func selectPromptDeliveryMode(_ mode: PromptDeliveryMode) {
     promptDeliveryMode = mode
-    Task { [preferences] in
+    enqueuePreferenceUpdate { [preferences] in
       await preferences.setPromptDeliveryMode(mode)
     }
   }
 
+  func selectDraftRetentionChoice(_ choice: RetentionChoice) {
+    draftRetentionChoice = choice
+    enqueuePreferenceUpdate { [preferences] in
+      await preferences.setDraftRetentionChoice(choice)
+    }
+  }
+
+  func selectHistoryRetentionChoice(_ choice: RetentionChoice) {
+    historyRetentionChoice = choice
+    enqueuePreferenceUpdate { [preferences] in
+      await preferences.setHistoryRetentionChoice(choice)
+    }
+  }
+
+  func selectOutboundConfirmationPolicy(_ policy: OutboundConfirmationPolicy) {
+    outboundConfirmationPolicy = policy
+    enqueuePreferenceUpdate { [preferences] in
+      await preferences.setOutboundConfirmationPolicy(policy)
+    }
+  }
+
+  func deleteSavedDraft() {
+    guard deleteSavedDraftTask == nil else { return }
+    savedDraftDeletionError = nil
+    isDeletingSavedDraft = true
+    deleteSavedDraftTask = Task { [weak self] in
+      guard let self else { return }
+      defer {
+        isDeletingSavedDraft = false
+        deleteSavedDraftTask = nil
+      }
+      await preferenceTask?.value
+      do {
+        try await onDeleteSavedDraft()
+      } catch {
+        savedDraftDeletionError =
+          "Couldn’t delete the saved draft. \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func clearHistory() {
+    guard clearHistoryTask == nil else { return }
+    userVisibleError = nil
+    isClearingHistory = true
+    clearHistoryTask = Task { [weak self] in
+      guard let self else { return }
+      defer {
+        isClearingHistory = false
+        clearHistoryTask = nil
+      }
+      do {
+        try await onClearHistory()
+      } catch {
+        userVisibleError = "Couldn’t clear History. \(error.localizedDescription)"
+      }
+    }
+  }
+
+  func shortcutError(for shortcut: BexShortcut) -> String? {
+    shortcutErrors[shortcut]
+  }
+
+  func updateKeyChord(
+    _ chord: KeyChord,
+    for shortcut: BexShortcut
+  ) -> ShortcutUpdateOutcome {
+    let otherChord =
+      shortcut == .quickCheck
+      ? fixAndSendKeyChord
+      : quickCheckKeyChord
+    guard chord != otherChord else {
+      return rejectShortcut(
+        shortcut,
+        message: "That shortcut is already assigned to another Bex command."
+      )
+    }
+    guard chord.isValidGlobalShortcut else {
+      return rejectShortcut(
+        shortcut,
+        message: HotKeyRegistrationError.invalidChord.localizedDescription
+      )
+    }
+
+    do {
+      try updateShortcut(shortcut, chord)
+      shortcutErrors[shortcut] = nil
+      switch shortcut {
+      case .quickCheck:
+        quickCheckKeyChord = chord
+      case .fixAndSend:
+        fixAndSendKeyChord = chord
+      }
+      enqueuePreferenceUpdate { [preferences] in
+        switch shortcut {
+        case .quickCheck:
+          await preferences.setQuickCheckKeyChord(chord)
+        case .fixAndSend:
+          await preferences.setFixAndSendKeyChord(chord)
+        }
+      }
+      return .accepted
+    } catch {
+      return rejectShortcut(
+        shortcut,
+        message: (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+      )
+    }
+  }
+
+  private func rejectShortcut(
+    _ shortcut: BexShortcut,
+    message: String
+  ) -> ShortcutUpdateOutcome {
+    shortcutErrors[shortcut] = message
+    return .rejected
+  }
+
+  func setSetupOrigin(_ origin: SettingsSetupOrigin?) {
+    setupOrigin = origin
+  }
+
+  func requestSetupRoute() async {
+    guard setupOrigin != nil, !isRequestingSetupRoute else { return }
+    isRequestingSetupRoute = true
+    userVisibleError = nil
+    defer { isRequestingSetupRoute = false }
+
+    guard await flushOllamaURLForSetupRoute() else { return }
+    await modelTask?.value
+    await preferenceTask?.value
+    guard isSelectedProviderConnected else {
+      userVisibleError = "\(provider.displayName) must be connected before returning."
+      return
+    }
+
+    switch setupOrigin {
+    case .quickCheck:
+      onSetupRoute(.returnToQuickCheck)
+    case .fixAndSend:
+      onSetupRoute(.returnToFixAndSendTarget)
+    case nil:
+      break
+    }
+  }
+
+  private func flushOllamaURLForSetupRoute() async -> Bool {
+    guard provider == .ollama else { return true }
+    ollamaTask?.cancel()
+    await ollamaTask?.value
+    ollamaTask = nil
+    do {
+      let normalized = try OllamaURL.normalize(ollamaURL)
+      isNormalizingOllamaURL = true
+      ollamaURL = normalized
+      isNormalizingOllamaURL = false
+      ollamaError = nil
+      await preferences.setOllamaURL(normalized)
+      return true
+    } catch {
+      isNormalizingOllamaURL = false
+      ollamaError = "Enter a valid Ollama URL."
+      userVisibleError = "Enter a valid Ollama URL before returning."
+      return false
+    }
+  }
+
   func requestAccessibility() {
-    accessibilityTrusted = promptTarget.requestAccessibilityTrust()
+    let trusted = promptTarget.requestAccessibilityTrust()
+    accessibilityTrusted = trusted
+    if trusted {
+      accessibilityStatusMessage =
+        "Accessibility is enabled. Invoke Fix & Send again to capture the focused field."
+      promptGateError = nil
+    }
+  }
+
+  func refreshAccessibilityState() {
+    let wasTrusted = accessibilityTrusted
+    accessibilityTrusted = promptTarget.isAccessibilityTrusted
+    if accessibilityTrusted, !wasTrusted {
+      accessibilityStatusMessage =
+        "Accessibility is enabled. Invoke Fix & Send again to capture the focused field."
+      promptGateError = nil
+    } else if !accessibilityTrusted, wasTrusted {
+      accessibilityStatusMessage =
+        "Accessibility was revoked. Fix & Send will use copy-only fallback for manual capture."
+    }
   }
 
   func testAccessibility() {
-    accessibilityTrusted = promptTarget.isAccessibilityTrusted
-    promptGateError = accessibilityTrusted
+    refreshAccessibilityState()
+    promptGateError =
+      accessibilityTrusted
       ? nil
       : BexError.accessibilityPermissionRequired.localizedDescription
   }
@@ -372,6 +703,17 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
+  private func enqueuePreferenceUpdate(
+    _ operation: @escaping @Sendable () async -> Void
+  ) {
+    let previousTask = preferenceTask
+    preferenceTask = Task {
+      await previousTask?.value
+      guard !Task.isCancelled else { return }
+      await operation()
+    }
+  }
+
   func close() {
     modelTask?.cancel()
     ollamaTask?.cancel()
@@ -387,15 +729,25 @@ final class SettingsViewModel: ObservableObject {
     await ollamaTask?.value
     await oauthTask?.value
     await promptTask?.value
+    await preferenceTask?.value
+    await clearHistoryTask?.value
+    await deleteSavedDraftTask?.value
   }
 
   private func reloadModels() async {
     let requestedProvider = provider
+    connectionValidationGeneration &+= 1
+    let validationGeneration = connectionValidationGeneration
+    validatedProvider = nil
     isFetchingModels = true
     modelFetchError = nil
     do {
       let fetched = try await grammar.fetchModels(for: requestedProvider)
-      guard !Task.isCancelled, provider == requestedProvider else { return }
+      guard
+        !Task.isCancelled,
+        provider == requestedProvider,
+        connectionValidationGeneration == validationGeneration
+      else { return }
       if !fetched.contains(where: { $0.id == model }),
         let replacement = fetched.first(where: { $0.id == requestedProvider.defaultModel })
           ?? fetched.first
@@ -404,11 +756,17 @@ final class SettingsViewModel: ObservableObject {
         await preferences.setSelectedModel(replacement.id, for: requestedProvider)
       }
       models = mergedModels(fetched, provider: requestedProvider, selectedModel: model)
+      validatedProvider = requestedProvider
       isFetchingModels = false
     } catch {
-      guard !Task.isCancelled, provider == requestedProvider else { return }
+      guard
+        !Task.isCancelled,
+        provider == requestedProvider,
+        connectionValidationGeneration == validationGeneration
+      else { return }
       models = mergedModels([], provider: requestedProvider, selectedModel: model)
-      modelFetchError = "Could not fetch models. Using provider default."
+      validatedProvider = nil
+      modelFetchError = "Connection failed: \(error.localizedDescription)"
       isFetchingModels = false
     }
   }

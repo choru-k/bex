@@ -1,83 +1,131 @@
+import AppKit
 import SwiftUI
+
+enum QuickCheckLayout {
+  static func editorHeight(for availableHeight: CGFloat) -> CGFloat {
+    min(280, max(120, availableHeight * 0.3))
+  }
+}
 
 struct QuickCheckView: View {
   @ObservedObject var viewModel: QuickCheckViewModel
   let openSettings: () -> Void
-  let openProfiles: () -> Void
+  let openWritingStyles: () -> Void
   let openHistory: () -> Void
 
+  @FocusState private var isEditorFocused: Bool
+
   var body: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
-        contextRow
-        inputSection
-        setupSection
-        actionRow
-        disclosureSection
-        errorSection
-        resultSection
-        managementRow
+    GeometryReader { geometry in
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          contextRow
+          inputSection(height: QuickCheckLayout.editorHeight(for: geometry.size.height))
+          retentionSection
+          setupSection
+          actionRow
+          outboundConfirmationSection
+          disclosureSection
+          errorSection
+          resultSection
+          managementRow
+        }
+        .padding(16)
+        .frame(minHeight: geometry.size.height, alignment: .top)
       }
-      .padding(16)
     }
     .frame(minWidth: 460, minHeight: 360)
+    .onAppear {
+      viewModel.sessionDidShow()
+      isEditorFocused = true
+    }
+    .onChange(of: viewModel.editorFocusRequest) { _ in
+      isEditorFocused = true
+    }
+    .onChange(of: viewModel.accessibilityAnnouncement) { announcement in
+      guard let announcement else { return }
+      NSAccessibility.post(
+        element: NSApp as Any,
+        notification: .announcementRequested,
+        userInfo: [
+          .announcement: announcement.message,
+          .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ]
+      )
+    }
     .onExitCommand {
-      viewModel.close()
+      viewModel.dismiss(.explicitCancel)
     }
   }
 
   private var contextRow: some View {
     HStack(spacing: 5) {
-      Button(viewModel.providerLabel, action: openSettings)
-        .buttonStyle(.link)
-        .accessibilityIdentifier("quick-check-provider")
+      Button(viewModel.providerLabel) {
+        navigate(openSettings)
+      }
+      .buttonStyle(.link)
+      .accessibilityIdentifier("quick-check-provider")
       Text("·").foregroundStyle(.secondary)
-      Button(viewModel.modelLabel, action: openSettings)
-        .buttonStyle(.link)
-        .lineLimit(1)
-        .accessibilityIdentifier("quick-check-model")
+      Button(viewModel.modelLabel) {
+        navigate(openSettings)
+      }
+      .buttonStyle(.link)
+      .lineLimit(1)
+      .accessibilityIdentifier("quick-check-model")
       Text("·").foregroundStyle(.secondary)
       Menu {
         Button {
-          Task { await viewModel.selectProfile(id: nil) }
+          Task { await viewModel.selectWritingStyle(id: nil) }
         } label: {
-          profileMenuLabel("No Profile", selected: viewModel.selectedProfileID == nil)
+          writingStyleMenuLabel(
+            "Bex Standard",
+            selected: viewModel.selectedWritingStyleID == nil
+          )
         }
-        if !viewModel.availableProfiles.isEmpty {
+        if !viewModel.availableWritingStyles.isEmpty {
           Divider()
-          ForEach(viewModel.availableProfiles) { profile in
+          ForEach(viewModel.availableWritingStyles) { style in
             Button {
-              Task { await viewModel.selectProfile(id: profile.id) }
+              Task { await viewModel.selectWritingStyle(id: style.id) }
             } label: {
-              profileMenuLabel(
-                profile.name,
-                selected: viewModel.selectedProfileID == profile.id
+              writingStyleMenuLabel(
+                style.name,
+                selected: viewModel.selectedWritingStyleID == style.id
               )
             }
           }
         }
         Divider()
-        Button("Manage Profiles…", action: openProfiles)
+        Button("Manage Writing Styles…") {
+          navigate(openWritingStyles)
+        }
       } label: {
-        Label(viewModel.profileLabel, systemImage: "person.crop.circle")
+        Label(viewModel.writingStyleLabel, systemImage: "text.badge.checkmark")
           .lineLimit(1)
       }
       .menuStyle(.borderlessButton)
-      .accessibilityIdentifier("quick-check-profile")
+      .accessibilityLabel("Writing Style: \(viewModel.writingStyleLabel)")
+      .accessibilityIdentifier("quick-check-writing-style")
       Spacer(minLength: 0)
     }
     .font(.caption)
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Correction context")
   }
 
-  private var inputSection: some View {
+  private func inputSection(height: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 6) {
-      Text("Text to check")
+      Text("Draft")
         .font(.headline)
+        .accessibilityAddTraits(.isHeader)
       ZStack(alignment: .topLeading) {
         TextEditor(text: $viewModel.input)
+          .focused($isEditorFocused)
           .font(.body)
           .scrollContentBackground(.hidden)
           .padding(5)
+          .accessibilityLabel("Draft editor")
+          .accessibilityHint("Plain Return inserts a new line. Command Return performs the primary action.")
           .accessibilityIdentifier("quick-check-input")
         if viewModel.input.isEmpty {
           Text("Paste or type English text…")
@@ -85,14 +133,75 @@ struct QuickCheckView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 12)
             .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
       }
-      .frame(minHeight: 120, maxHeight: 170)
+      .frame(minHeight: height)
       .background(Color(nsColor: .textBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 7))
       .overlay {
         RoundedRectangle(cornerRadius: 7)
           .stroke(Color(nsColor: .separatorColor))
+      }
+    }
+    .accessibilityElement(children: .contain)
+    .accessibilityLabel("Draft editor section")
+  }
+
+  @ViewBuilder
+  private var retentionSection: some View {
+    if viewModel.draftRetentionChoice == .undecided
+      || viewModel.historyRetentionChoice == .undecided
+    {
+      GroupBox("Local storage choices") {
+        VStack(alignment: .leading, spacing: 12) {
+          if viewModel.draftRetentionChoice == .undecided {
+            retentionChoiceRow(
+              title: "Save unfinished drafts?",
+              disclosure: QuickCheckViewModel.draftStorageDisclosure,
+              enableIdentifier: "quick-check-enable-draft-retention",
+              disableIdentifier: "quick-check-disable-draft-retention",
+              setChoice: { choice in
+                Task { await viewModel.setDraftRetentionChoice(choice) }
+              }
+            )
+          }
+          if viewModel.historyRetentionChoice == .undecided {
+            retentionChoiceRow(
+              title: "Save Quick Check history?",
+              disclosure: QuickCheckViewModel.historyStorageDisclosure,
+              enableIdentifier: "quick-check-enable-history-retention",
+              disableIdentifier: "quick-check-disable-history-retention",
+              setChoice: { choice in
+                Task { await viewModel.setHistoryRetentionChoice(choice) }
+              }
+            )
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .accessibilityIdentifier("quick-check-retention-choices")
+    }
+  }
+
+  private func retentionChoiceRow(
+    title: String,
+    disclosure: String,
+    enableIdentifier: String,
+    disableIdentifier: String,
+    setChoice: @escaping (RetentionChoice) -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.headline)
+      Text(disclosure)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      HStack {
+        Button("Enable") { setChoice(.enabled) }
+          .accessibilityIdentifier(enableIdentifier)
+        Button("Don't Save") { setChoice(.disabled) }
+          .accessibilityIdentifier(disableIdentifier)
       }
     }
   }
@@ -110,8 +219,10 @@ struct QuickCheckView: View {
             Text(setupError)
               .font(.caption)
               .foregroundStyle(.secondary)
-            Button("Open Settings", action: openSettings)
-              .accessibilityIdentifier("quick-check-open-settings")
+            Button("Open Settings") {
+              navigate(openSettings)
+            }
+            .accessibilityIdentifier("quick-check-open-settings")
           }
           Spacer()
         }
@@ -120,39 +231,106 @@ struct QuickCheckView: View {
     }
   }
 
+  @ViewBuilder
   private var actionRow: some View {
-    HStack {
-      Button {
-        viewModel.check()
-      } label: {
-        if viewModel.isChecking {
-          ProgressView()
-            .controlSize(.small)
-        } else {
+    if viewModel.result == nil {
+      HStack {
+        Button {
+          viewModel.check()
+        } label: {
           Label("Check", systemImage: "checkmark.circle")
         }
-      }
-      .keyboardShortcut(.return, modifiers: .command)
-      .disabled(!viewModel.canCheck)
-      .accessibilityIdentifier("quick-check-check")
+        .keyboardShortcut(.return, modifiers: .command)
+        .disabled(!viewModel.canCheck)
+        .accessibilityIdentifier("quick-check-check")
 
-      if viewModel.isChecking {
-        Text("Checking…")
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      } else if let intent = viewModel.rewritingIntent {
-        Text("Applying \(intent.label)…")
-          .font(.caption)
-          .foregroundStyle(.secondary)
+        if let busyLabel = viewModel.busyLabel {
+          ProgressView()
+            .controlSize(.small)
+            .accessibilityHidden(true)
+          Text(busyLabel)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("quick-check-busy-label")
+        }
+        Spacer()
       }
-      Spacer()
+    }
+  }
+
+  @ViewBuilder
+  private var outboundConfirmationSection: some View {
+    if let summary = viewModel.outboundSummary {
+      GroupBox("Confirm what will be sent") {
+        VStack(alignment: .leading, spacing: 8) {
+          summaryRow(label: "Action", value: summary.action)
+          summaryRow(label: "Provider", value: summary.provider)
+          summaryRow(label: "Model", value: summary.model)
+          if let writingStyle = summary.writingStyle {
+            summaryRow(label: "Writing Style", value: writingStyle.name)
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Writing Style guidance")
+                .font(.caption.bold())
+              Text(writingStyle.guidance)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(8)
+                .background(Color(nsColor: .textBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .accessibilityIdentifier("quick-check-outbound-writing-style-guidance")
+            }
+          }
+          VStack(alignment: .leading, spacing: 4) {
+            Text("Full draft")
+              .font(.caption.bold())
+            Text(summary.fullDraft)
+              .frame(maxWidth: .infinity, alignment: .leading)
+              .fixedSize(horizontal: false, vertical: true)
+              .textSelection(.enabled)
+              .padding(8)
+              .background(Color(nsColor: .textBackgroundColor))
+              .clipShape(RoundedRectangle(cornerRadius: 6))
+              .accessibilityIdentifier("quick-check-outbound-full-draft")
+          }
+          Text(summary.disclosure)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          HStack {
+            Button("Cancel") {
+              viewModel.cancelOutboundConfirmation()
+            }
+            .accessibilityIdentifier("quick-check-outbound-cancel")
+            Spacer()
+            Button("Send to \(summary.provider)") {
+              viewModel.confirmOutbound()
+            }
+            .keyboardShortcut(.return, modifiers: .command)
+            .accessibilityIdentifier("quick-check-outbound-confirm")
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Outbound request confirmation")
+      .accessibilityIdentifier("quick-check-outbound-summary")
+    }
+  }
+
+  private func summaryRow(label: String, value: String) -> some View {
+    HStack(alignment: .firstTextBaseline, spacing: 6) {
+      Text("\(label):")
+        .font(.caption.bold())
+      Text(value)
+        .font(.caption)
+        .textSelection(.enabled)
     }
   }
 
   private var disclosureSection: some View {
     VStack(alignment: .leading, spacing: 3) {
       Label(
-        "AI-generated edits may contain mistakes. Review before sending.",
+        "AI-generated edits may contain mistakes. Review before using them.",
         systemImage: "exclamationmark.shield"
       )
       Text(viewModel.processingDisclosure)
@@ -169,6 +347,8 @@ struct QuickCheckView: View {
         .font(.caption)
         .foregroundStyle(.red)
         .textSelection(.enabled)
+        .accessibilityLabel("Quick Check error")
+        .accessibilityValue(error)
         .accessibilityIdentifier("quick-check-error")
     }
   }
@@ -177,43 +357,86 @@ struct QuickCheckView: View {
   private var resultSection: some View {
     if let result = viewModel.result {
       Divider()
-      if result.corrected == viewModel.input {
-        VStack(alignment: .leading, spacing: 5) {
-          Label("Your text looks good!", systemImage: "checkmark.seal.fill")
-            .font(.headline)
-            .foregroundStyle(.green)
-          Text("No grammar or expression changes needed.")
-            .foregroundStyle(.secondary)
-        }
-        .accessibilityIdentifier("quick-check-unchanged")
-      } else {
-        diffSection
-      }
+      VStack(alignment: .leading, spacing: 14) {
+        Text("Result")
+          .font(.title3.bold())
+          .accessibilityAddTraits(.isHeader)
 
-      VStack(alignment: .leading, spacing: 5) {
-        Text("Corrected")
-          .font(.headline)
-        Text(result.corrected)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .textSelection(.enabled)
-          .accessibilityIdentifier("quick-check-corrected")
-          .accessibilityLabel("Corrected text")
-          .accessibilityValue(result.corrected)
-      }
-
-      VStack(alignment: .leading, spacing: 5) {
-        Text("Explanation")
-          .font(.headline)
-        Text(result.explanation)
+        if let provenance = viewModel.resultProvenance {
+          VStack(alignment: .leading, spacing: 3) {
+            Label(
+              "\(provenance.provider.displayName) · \(provenance.model)",
+              systemImage: "checkmark.shield"
+            )
+            Text(
+              "Writing Style: \(provenance.writingStyleName) · "
+                + provenance.completedAt.formatted(date: .abbreviated, time: .shortened)
+            )
+          }
+          .font(.caption)
           .foregroundStyle(.secondary)
-          .textSelection(.enabled)
-          .accessibilityIdentifier("quick-check-explanation")
-          .accessibilityLabel("Explanation")
-          .accessibilityValue(result.explanation)
-      }
+          .accessibilityElement(children: .combine)
+          .accessibilityLabel("Result provenance")
+          .accessibilityValue(
+            "\(provenance.provider.displayName), \(provenance.model), "
+              + "\(provenance.writingStyleName), "
+              + provenance.completedAt.formatted(date: .abbreviated, time: .shortened)
+          )
+          .accessibilityIdentifier("quick-check-result-provenance")
+        }
 
-      rewriteRow
-      resultActionRow
+        if result.corrected == viewModel.input {
+          VStack(alignment: .leading, spacing: 5) {
+            Label("Your text looks good!", systemImage: "checkmark.seal.fill")
+              .font(.headline)
+              .foregroundStyle(.green)
+            Text("No grammar or expression changes needed.")
+              .foregroundStyle(.secondary)
+          }
+          .accessibilityIdentifier("quick-check-unchanged")
+        } else {
+          diffSection
+        }
+
+        resultTextSection(
+          title: "Corrected",
+          text: result.corrected,
+          identifier: "quick-check-corrected",
+          secondary: false
+        )
+        resultTextSection(
+          title: "Explanation",
+          text: result.explanation,
+          identifier: "quick-check-explanation",
+          secondary: true
+        )
+        rewriteRow
+        resultActionRow
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Quick Check result section")
+    }
+  }
+
+  private func resultTextSection(
+    title: String,
+    text: String,
+    identifier: String,
+    secondary: Bool
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 5) {
+      Text(title)
+        .font(.headline)
+        .accessibilityAddTraits(.isHeader)
+      Text(text)
+        .foregroundStyle(secondary ? .secondary : .primary)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+        .accessibilityLabel(title)
+        .accessibilityValue(text)
+        .accessibilityIdentifier(identifier)
     }
   }
 
@@ -222,6 +445,7 @@ struct QuickCheckView: View {
       HStack {
         Text("Changes")
           .font(.headline)
+          .accessibilityAddTraits(.isHeader)
         Spacer()
         Button(viewModel.changesOnly ? "Show full text" : "Show only changes") {
           viewModel.changesOnly.toggle()
@@ -230,25 +454,16 @@ struct QuickCheckView: View {
       }
       DiffText(segments: viewModel.diff, changesOnly: viewModel.changesOnly)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
-        .accessibilityIdentifier("quick-check-diff")
+        .accessibilityHidden(true)
+      Color.clear
+        .frame(width: 1, height: 1)
+        .accessibilityElement()
         .accessibilityLabel("Changes")
-        .accessibilityValue(diffAccessibilityLabel)
+        .accessibilityValue(viewModel.diffAccessibilitySummary)
+        .accessibilityIdentifier("quick-check-diff")
     }
-  }
-
-  private var diffAccessibilityLabel: String {
-    viewModel.diff.compactMap { segment in
-      switch segment.kind {
-      case .inserted:
-        "Inserted: \(segment.text)"
-      case .removed:
-        "Removed: \(segment.text)"
-      case .unchanged:
-        nil
-      }
-    }
-    .joined(separator: ", ")
   }
 
   private var rewriteRow: some View {
@@ -258,8 +473,14 @@ struct QuickCheckView: View {
           viewModel.rewrite(intent)
         }
         .keyboardShortcut(rewriteShortcut(for: intent), modifiers: .command)
-        .disabled(viewModel.isBusy)
+        .disabled(viewModel.isBusy || viewModel.outboundSummary != nil)
         .accessibilityIdentifier("quick-check-rewrite-\(intent.rawValue)")
+      }
+      if let busyLabel = viewModel.busyLabel {
+        Text(busyLabel)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .accessibilityIdentifier("quick-check-busy-label")
       }
       Spacer()
     }
@@ -289,23 +510,35 @@ struct QuickCheckView: View {
       Button("Copy and Close") {
         viewModel.copy(closeAfter: true)
       }
-      .keyboardShortcut(.return, modifiers: [.command, .shift])
+      .keyboardShortcut(.return, modifiers: .command)
+      .disabled(viewModel.isBusy || viewModel.outboundSummary != nil)
       .accessibilityIdentifier("quick-check-copy-close")
     }
   }
 
   private var managementRow: some View {
     HStack(spacing: 12) {
-      Button("History", action: openHistory)
-        .accessibilityIdentifier("quick-check-history")
-      Button("Profiles", action: openProfiles)
-        .accessibilityIdentifier("quick-check-profiles")
-      Button("Settings", action: openSettings)
-        .accessibilityIdentifier("quick-check-settings")
+      Button("History") {
+        navigate(openHistory)
+      }
+      .accessibilityIdentifier("quick-check-history")
+      Button("Writing Styles") {
+        navigate(openWritingStyles)
+      }
+      .accessibilityIdentifier("quick-check-writing-styles")
+      Button("Settings") {
+        navigate(openSettings)
+      }
+      .accessibilityIdentifier("quick-check-settings")
       Spacer()
     }
     .buttonStyle(.link)
     .font(.caption)
+  }
+
+  private func navigate(_ action: () -> Void) {
+    viewModel.dismiss(.auxiliaryNavigation)
+    action()
   }
 
   private func rewriteShortcut(for intent: RewriteIntent) -> KeyEquivalent {
@@ -316,51 +549,12 @@ struct QuickCheckView: View {
     }
   }
 
-  private func profileMenuLabel(_ title: String, selected: Bool) -> some View {
+  private func writingStyleMenuLabel(_ title: String, selected: Bool) -> some View {
     HStack {
       Text(title)
       if selected {
         Image(systemName: "checkmark")
       }
     }
-  }
-}
-
-struct DiffText: View {
-  let segments: [DiffSegment]
-  let changesOnly: Bool
-
-  var body: some View {
-    if visibleSegments.isEmpty {
-      Text("No differences")
-        .foregroundStyle(.secondary)
-    } else {
-      Text(attributedText)
-    }
-  }
-
-  private var visibleSegments: [DiffSegment] {
-    changesOnly ? segments.filter { $0.kind != .unchanged } : segments
-  }
-
-  private var attributedText: AttributedString {
-    var result = AttributedString()
-    for segment in visibleSegments {
-      var part = AttributedString(segment.text)
-      switch segment.kind {
-      case .unchanged:
-        break
-      case .inserted:
-        part.foregroundColor = .green
-        part.backgroundColor = Color.green.opacity(0.14)
-        part.inlinePresentationIntent = .stronglyEmphasized
-      case .removed:
-        part.foregroundColor = .red
-        part.backgroundColor = Color.red.opacity(0.12)
-        part.strikethroughStyle = .single
-      }
-      result.append(part)
-    }
-    return result
   }
 }

@@ -134,8 +134,7 @@ final class ProviderParserDiffStorageTests: XCTestCase {
 
     _ = try await service.check(
       text: "This are a test.",
-      provider: .openAI,
-      model: "",
+      destination: try OutboundDestination(provider: .openAI, model: ""),
       profilePrompt: nil
     )
 

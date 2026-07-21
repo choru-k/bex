@@ -86,6 +86,34 @@ actor BexDataStore {
     NotificationCenter.default.post(name: .bexHistoryDidChange, object: nil)
   }
 
+  func restoreHistory(_ entry: HistoryEntry, at originalIndex: Int) throws {
+    var data = try dataForMutation()
+    try persistRestoredHistory(entry, in: &data, at: originalIndex)
+  }
+
+  func restoreHistory(
+    _ entry: HistoryEntry,
+    after predecessorID: UUID?,
+    before successorID: UUID?
+  ) throws {
+    var data = try dataForMutation()
+    let insertionIndex: Int
+    if
+      let predecessorID,
+      let predecessorIndex = data.history.firstIndex(where: { $0.id == predecessorID })
+    {
+      insertionIndex = data.history.index(after: predecessorIndex)
+    } else if
+      let successorID,
+      let successorIndex = data.history.firstIndex(where: { $0.id == successorID })
+    {
+      insertionIndex = successorIndex
+    } else {
+      insertionIndex = data.history.endIndex
+    }
+    try persistRestoredHistory(entry, in: &data, at: insertionIndex)
+  }
+
   func updateHistory(id: UUID, corrected: String, explanation: String) throws {
     var data = try dataForMutation()
     guard let index = data.history.firstIndex(where: { $0.id == id }) else {
@@ -107,6 +135,25 @@ actor BexDataStore {
   func clearHistory() throws {
     var data = try dataForMutation()
     data.history.removeAll(keepingCapacity: false)
+    try persist(data)
+    NotificationCenter.default.post(name: .bexHistoryDidChange, object: nil)
+  }
+
+  private func persistRestoredHistory(
+    _ entry: HistoryEntry,
+    in data: inout BexData,
+    at requestedIndex: Int
+  ) throws {
+    guard !data.history.contains(where: { $0.id == entry.id }) else {
+      return
+    }
+
+    let lastRestorableIndex = min(data.history.endIndex, Self.historyLimit - 1)
+    let insertionIndex = min(max(requestedIndex, data.history.startIndex), lastRestorableIndex)
+    data.history.insert(entry, at: insertionIndex)
+    if data.history.count > Self.historyLimit {
+      data.history.removeLast(data.history.count - Self.historyLimit)
+    }
     try persist(data)
     NotificationCenter.default.post(name: .bexHistoryDidChange, object: nil)
   }

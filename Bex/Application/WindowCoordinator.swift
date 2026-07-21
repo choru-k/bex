@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import OSLog
 import SwiftUI
 
@@ -6,15 +7,53 @@ import SwiftUI
 final class WindowCoordinator: NSObject, NSWindowDelegate {
   private let services: AppServices
   private static let signposter = OSSignposter(subsystem: "com.bex.desktop", category: "ui")
+  static let currentWelcomeVersion = 1
   private var quickCheckInterval: OSSignpostIntervalState?
 
   private var quickCheckPanelController: QuickCheckPanelController?
   private var quickCheckViewModel: QuickCheckViewModel?
   private var promptGatePanelController: PromptGatePanelController?
   private var promptGateViewModel: PromptGateViewModel?
+  private var promptGatePhaseCancellable: AnyCancellable?
+  private var promptGateReinvokeCancellable: AnyCancellable?
+  private var pendingManualFixAndSendDraft: String?
+  private var welcomeWindowController: NSWindowController?
   private var historyWindowController: NSWindowController?
   private var profilesWindowController: NSWindowController?
   private var settingsWindowController: NSWindowController?
+  private var settingsViewModel: SettingsViewModel?
+  struct StandardWindowConfiguration {
+    let title: String
+    let defaultContentSize: NSSize
+    let minimumContentSize: NSSize
+    let frameAutosaveName: String
+  }
+
+  static let welcomeWindowConfiguration = StandardWindowConfiguration(
+    title: "Welcome to Bex",
+    defaultContentSize: NSSize(width: 560, height: 420),
+    minimumContentSize: NSSize(width: 500, height: 360),
+    frameAutosaveName: "Bex.WelcomeWindow"
+  )
+
+  static let historyWindowConfiguration = StandardWindowConfiguration(
+    title: "History",
+    defaultContentSize: NSSize(width: 760, height: 560),
+    minimumContentSize: NSSize(width: 620, height: 400),
+    frameAutosaveName: "Bex.HistoryWindow"
+  )
+  static let writingStylesWindowConfiguration = StandardWindowConfiguration(
+    title: "Writing Styles",
+    defaultContentSize: NSSize(width: 620, height: 520),
+    minimumContentSize: NSSize(width: 580, height: 360),
+    frameAutosaveName: "Bex.WritingStylesWindow"
+  )
+  static let settingsWindowConfiguration = StandardWindowConfiguration(
+    title: "Settings",
+    defaultContentSize: NSSize(width: 640, height: 620),
+    minimumContentSize: NSSize(width: 520, height: 480),
+    frameAutosaveName: "Bex.SettingsWindow"
+  )
 
   init(services: AppServices) {
     self.services = services
@@ -37,50 +76,73 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         data: services.data,
         grammar: services.grammar,
         pasteboard: services.pasteboard,
-        onClose: { [weak self] in
-          self?.closeQuickCheck()
+        onDismiss: { [weak self] reason in
+          self?.closeQuickCheck(reason: reason)
         }
       )
       quickCheckViewModel = viewModel
       let rootView = QuickCheckView(
         viewModel: viewModel,
-        openSettings: { [weak self] in self?.showSettings() },
-        openProfiles: { [weak self] in self?.showProfiles() },
+        openSettings: { [weak self] in self?.showSettings(origin: .quickCheck) },
+        openWritingStyles: { [weak self] in self?.showProfiles() },
         openHistory: { [weak self] in self?.showHistory() }
       )
       quickCheckPanelController = QuickCheckPanelController(
         rootView: AnyView(rootView),
-        closeAction: { [weak viewModel] in
-          viewModel?.panelDidClose()
+        dismissalAction: { [weak viewModel] reason in
+          viewModel?.panelDidDismiss(reason)
+        },
+        showAction: { [weak viewModel] in
+          viewModel?.sessionDidShow()
         },
         focusAction: { [weak self] in
           self?.endQuickCheckSignpost()
         },
+        primaryAction: { [weak viewModel] in
+          viewModel?.performPrimaryAction()
+        },
+        backAction: { [weak viewModel] in
+          viewModel?.backToInput()
+        },
         copyAction: { [weak viewModel] in
           viewModel?.copy(closeAfter: false)
-        },
-        copyAndCloseAction: { [weak viewModel] in
-          viewModel?.copy(closeAfter: true)
         },
         autoDismissOnDeactivate: services.autoDismissQuickCheck
       )
     }
-    quickCheckPanelController?.show()
-    if let quickCheckViewModel {
-      Task {
+    if let draft, let quickCheckViewModel {
+      Task { [weak self, weak quickCheckViewModel] in
+        guard let self, let quickCheckViewModel else { return }
         await quickCheckViewModel.loadContext()
-        if let draft {
-          quickCheckViewModel.replaceDraft(with: draft)
+        guard !Task.isCancelled else { return }
+        guard confirmQuickCheckReplacementIfNeeded(quickCheckViewModel) else {
+          endQuickCheckSignpost()
+          return
+        }
+        quickCheckViewModel.replaceDraft(with: draft)
+        historyWindowController?.close()
+        quickCheckPanelController?.show()
+      }
+    } else {
+      quickCheckPanelController?.show()
+      if let quickCheckViewModel {
+        Task {
+          await quickCheckViewModel.loadContext()
         }
       }
     }
   }
 
-  func closeQuickCheck() {
-    quickCheckPanelController?.closePanel()
+  func closeQuickCheck(reason: QuickCheckDismissalReason = .explicitCancel) {
+    _ = reason
+    quickCheckPanelController?.window?.orderOut(nil)
   }
 
   func showPromptGate() {
+    if pendingManualFixAndSendDraft != nil {
+      reinvokeManualFixAndSend()
+      return
+    }
     if let promptGateViewModel, promptGateViewModel.phase != .closed {
       promptGatePanelController?.show()
       return
@@ -93,6 +155,36 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         source: capture.source
       )
       showPromptGate(session: session)
+    } catch {
+      let alert = NSAlert(error: error)
+      NSApp.activate(ignoringOtherApps: true)
+      alert.runModal()
+    }
+  }
+
+  private func reinvokeManualFixAndSend() {
+    guard let draft = pendingManualFixAndSendDraft else { return }
+    do {
+      let capture = try services.promptTarget.captureFrontmostTarget()
+      let newSession = PromptGateSession(
+        initialDraft: draft,
+        target: capture.target,
+        source: capture.source
+      )
+      pendingManualFixAndSendDraft = nil
+
+      guard let promptGateViewModel, promptGateViewModel.phase != .closed else {
+        _ = showPromptGate(session: newSession)
+        return
+      }
+      promptGateReinvokeCancellable = promptGateViewModel.$phase
+        .filter { $0 == .closed }
+        .prefix(1)
+        .sink { [weak self] _ in
+          self?.promptGateReinvokeCancellable = nil
+          _ = self?.showPromptGate(session: newSession)
+        }
+      promptGateViewModel.cancel()
     } catch {
       let alert = NSAlert(error: error)
       NSApp.activate(ignoringOtherApps: true)
@@ -123,44 +215,91 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     promptGatePanelController?.orderOut()
   }
 
+  func showWelcome() {
+    if welcomeWindowController == nil {
+      welcomeWindowController = Self.makeWindowController(
+        configuration: Self.welcomeWindowConfiguration,
+        rootView: WelcomeView(
+          dismiss: { [weak self] in
+            self?.welcomeWindowController?.close()
+          },
+          openQuickCheck: { [weak self] in
+            self?.welcomeWindowController?.close()
+            self?.showQuickCheck()
+          },
+          setUpProvider: { [weak self] in
+            self?.welcomeWindowController?.close()
+            self?.showSettings(origin: .quickCheck)
+          }
+        ),
+        delegate: self
+      )
+    }
+    show(welcomeWindowController)
+  }
+
   func showHistory() {
-    closeQuickCheck()
+    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
     if historyWindowController == nil {
       let viewModel = HistoryViewModel(
         data: services.data,
         useAsNewInput: { [weak self] text in
+          self?.replaceQuickCheckDraftFromHistory(with: text)
+        },
+        openQuickCheck: { [weak self] in
           self?.historyWindowController?.close()
-          self?.showQuickCheck(draft: text)
+          self?.showQuickCheck()
         }
       )
-      historyWindowController = makeWindowController(
-        title: "History",
-        size: NSSize(width: 760, height: 560),
-        rootView: HistoryView(viewModel: viewModel)
+      historyWindowController = Self.makeWindowController(
+        configuration: Self.historyWindowConfiguration,
+        rootView: HistoryView(viewModel: viewModel),
+        delegate: self
       )
     }
     show(historyWindowController)
   }
 
+  private func replaceQuickCheckDraftFromHistory(with text: String) {
+    showQuickCheck(draft: text)
+  }
+
+  private func confirmQuickCheckReplacementIfNeeded(
+    _ viewModel: QuickCheckViewModel
+  ) -> Bool {
+    guard viewModel.hasPreservedUserWork else { return true }
+    let alert = NSAlert()
+    alert.messageText = "Replace the current Quick Check?"
+    alert.informativeText =
+      "Quick Check has work in progress. Keep it, or replace it with this History entry."
+    alert.addButton(withTitle: "Keep Current")
+    alert.addButton(withTitle: "Replace")
+    NSApp.activate(ignoringOtherApps: true)
+    return alert.runModal() == .alertSecondButtonReturn
+  }
+
   func showProfiles() {
-    closeQuickCheck()
+    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
     if profilesWindowController == nil {
       let viewModel = ProfilesViewModel(
         data: services.data,
         preferences: services.preferences,
         grammar: services.grammar
       )
-      profilesWindowController = makeWindowController(
-        title: "Profiles",
-        size: NSSize(width: 620, height: 520),
-        rootView: ProfilesView(viewModel: viewModel)
+      profilesWindowController = Self.makeWindowController(
+        configuration: Self.writingStylesWindowConfiguration,
+        rootView: ProfilesView(viewModel: viewModel),
+        delegate: self
       )
     }
     show(profilesWindowController)
   }
 
-  func showSettings() {
-    closeQuickCheck()
+  func showSettings(origin: SettingsSetupOrigin? = nil) {
+    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
+    if origin == .fixAndSend {
+      promptGatePanelController?.orderOut()
+    }
     if settingsWindowController == nil {
       let viewModel = SettingsViewModel(
         preferences: services.preferences,
@@ -171,15 +310,60 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         hookManager: services.hookManager,
         applyAppearance: { [weak self] appearance in
           self?.applyAppearance(appearance)
+        },
+        setupOrigin: origin,
+        onDeleteSavedDraft: { [weak self, preferences = services.preferences] in
+          if let quickCheckViewModel = self?.quickCheckViewModel {
+            await quickCheckViewModel.deletePersistedDraft()
+          } else {
+            await preferences.deleteSavedQuickDraft()
+          }
+        },
+        onClearHistory: { [data = services.data] in
+          try await data.clearHistory()
+        },
+        onSetupRoute: { [weak self] intent in
+          self?.handleSettingsRoute(intent)
         }
       )
-      settingsWindowController = makeWindowController(
-        title: "Settings",
-        size: NSSize(width: 640, height: 620),
-        rootView: SettingsView(viewModel: viewModel)
+      settingsViewModel = viewModel
+      settingsWindowController = Self.makeWindowController(
+        configuration: Self.settingsWindowConfiguration,
+        rootView: SettingsView(viewModel: viewModel),
+        delegate: self
       )
     }
+    settingsViewModel?.setSetupOrigin(origin)
     show(settingsWindowController)
+  }
+
+  private func handleSettingsRoute(_ intent: SettingsRouteIntent) {
+    settingsWindowController?.close()
+    switch intent {
+    case .returnToQuickCheck:
+      if let quickCheckViewModel {
+        Task {
+          await quickCheckViewModel.refreshConfiguration()
+          showQuickCheck()
+        }
+      } else {
+        showQuickCheck()
+      }
+    case .returnToFixAndSendTarget:
+      guard let promptGateViewModel, let session = promptGateViewModel.session else { return }
+      if session.hookRequestID != nil {
+        Task {
+          await promptGateViewModel.refreshConfigurationAfterSettings()
+          promptGatePanelController?.show()
+        }
+        return
+      }
+      pendingManualFixAndSendDraft = promptGateViewModel.draft
+      promptGateViewModel.cancel()
+      if let processID = session.target.processID {
+        NSRunningApplication(processIdentifier: processID)?.activate()
+      }
+    }
   }
 
   func applyStoredAppearance() {
@@ -206,12 +390,20 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
   func windowWillClose(_ notification: Notification) {
     guard let window = notification.object as? NSWindow else { return }
+    if window === welcomeWindowController?.window {
+      Task {
+        await services.preferences.setWelcomeCompletedVersion(Self.currentWelcomeVersion)
+      }
+      welcomeWindowController = nil
+      return
+    }
     if window === historyWindowController?.window {
       historyWindowController = nil
     } else if window === profilesWindowController?.window {
       profilesWindowController = nil
     } else if window === settingsWindowController?.window {
       settingsWindowController = nil
+      settingsViewModel = nil
     }
   }
 
@@ -227,13 +419,18 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         hookManager: services.hookManager,
         hookResponder: services.promptGateIPC,
         onClose: { [weak self] in self?.closePromptGate() },
-        onOpenSettings: { [weak self] in self?.showSettings() }
+        onOpenSettings: { [weak self] in self?.showSettings(origin: .fixAndSend) }
       )
       promptGateViewModel = viewModel
       promptGatePanelController = PromptGatePanelController(
         rootView: AnyView(PromptGateView(viewModel: viewModel)),
         cancelAction: { [weak viewModel] in viewModel?.cancel() }
       )
+      promptGatePhaseCancellable = viewModel.$phase
+        .removeDuplicates()
+        .sink { [weak promptGatePanelController] phase in
+          promptGatePanelController?.accommodate(phase)
+        }
     }
     guard let promptGateViewModel else { return false }
     let began = promptGateViewModel.begin(session)
@@ -241,20 +438,26 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     return began
   }
 
-  private func makeWindowController<Content: View>(
-    title: String,
-    size: NSSize,
-    rootView: Content
+  static func makeWindowController<Content: View>(
+    configuration: StandardWindowConfiguration,
+    rootView: Content,
+    delegate: (any NSWindowDelegate)? = nil
   ) -> NSWindowController {
     let hostingController = NSHostingController(rootView: rootView)
     let window = NSWindow(contentViewController: hostingController)
-    window.title = title
-    window.setContentSize(size)
+    window.title = configuration.title
+    window.setContentSize(configuration.defaultContentSize)
+    window.contentMinSize = configuration.minimumContentSize
     window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
     window.isReleasedWhenClosed = false
-    window.delegate = self
-    window.center()
-    return NSWindowController(window: window)
+    window.delegate = delegate
+    let controller = NSWindowController(window: window)
+    let restoredSavedFrame = window.setFrameUsingName(configuration.frameAutosaveName)
+    _ = window.setFrameAutosaveName(configuration.frameAutosaveName)
+    if !restoredSavedFrame {
+      window.center()
+    }
+    return controller
   }
 
   private func show(_ controller: NSWindowController?) {

@@ -36,23 +36,21 @@ struct URLSessionTransport: HTTPTransport {
   }
 }
 
+
 protocol GrammarServicing: Sendable {
   func check(
     text: String,
-    provider: LLMProvider,
-    model: String,
+    destination: OutboundDestination,
     profilePrompt: String?
   ) async throws -> GrammarResult
   func rewrite(
     text: String,
     intent: RewriteIntent,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> String
   func generateProfile(
     context: ProfileContext,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> String
   func fetchModels(for provider: LLMProvider) async throws -> [ModelOption]
 }
@@ -60,7 +58,26 @@ protocol GrammarServicing: Sendable {
 protocol PromptGrammarServicing: Sendable {
   func checkPrompt(
     text: String,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> GrammarResult
+  func checkPrompt(
+    protectedText: PromptTechnicalSpanProtector.ProtectedText,
+    destination: OutboundDestination
+  ) async throws -> GrammarResult
+}
+
+extension PromptGrammarServicing {
+  func checkPrompt(
+    protectedText: PromptTechnicalSpanProtector.ProtectedText,
+    destination: OutboundDestination
+  ) async throws -> GrammarResult {
+    let result = try await checkPrompt(
+      text: protectedText.masked,
+      destination: destination
+    )
+    return GrammarResult(
+      corrected: try protectedText.restore(result.corrected),
+      explanation: result.explanation
+    )
+  }
 }

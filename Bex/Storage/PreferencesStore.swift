@@ -1,5 +1,38 @@
 import Foundation
 
+enum RetentionChoice: String, Codable, CaseIterable, Sendable {
+  case undecided
+  case enabled
+  case disabled
+}
+
+enum OutboundConfirmationPolicy: String, Codable, CaseIterable, Sendable {
+  case alwaysConfirm
+  case skipUnambiguousManual
+}
+
+enum OutboundConfirmationContext: Equatable, Sendable {
+  case quickCheckExternal
+  case manualCapturedField
+  case ambiguousManual
+  case hook
+}
+
+extension OutboundConfirmationPolicy {
+  func requiresConfirmation(
+    for context: OutboundConfirmationContext,
+    hasAcceptedDisclosure: Bool
+  ) -> Bool {
+    guard hasAcceptedDisclosure else { return true }
+    switch context {
+    case .quickCheckExternal, .manualCapturedField:
+      return self == .alwaysConfirm
+    case .ambiguousManual, .hook:
+      return true
+    }
+  }
+}
+
 actor PreferencesStore {
   private enum Key {
     static let selectedProvider = "selectedProvider"
@@ -10,7 +43,22 @@ actor PreferencesStore {
     static let quickDraft = "quickDraft"
     static let promptDeliveryMode = "promptGate.deliveryMode"
     static let promptLastClient = "promptGate.lastClient"
-    static let promptDisclosureAccepted = "promptGate.disclosureAccepted"
+    static let draftRetentionChoice = "storage.quickDraft.choice"
+    static let historyRetentionChoice = "storage.history.choice"
+    static let outboundConfirmationPolicy = "outbound.confirmationPolicy"
+    static let quickCheckKeyChord = "shortcut.quickCheck"
+    static let fixAndSendKeyChord = "shortcut.fixAndSend"
+    static let welcomeCompletedVersion = "welcome.completedVersion"
+
+
+    static func outboundDisclosureVersion(for destination: OutboundDestination) -> String {
+      guard destination.provider == .ollama, let endpoint = destination.ollamaEndpoint else {
+        return "outbound.disclosureVersion.\(destination.provider.rawValue)"
+      }
+      let encodedEndpoint = Data(endpoint.utf8).base64EncodedString()
+      return "outbound.disclosureVersion.ollama.endpoint.\(encodedEndpoint)"
+    }
+
 
     static func selectedModel(for provider: LLMProvider) -> String {
       "selectedModel.\(provider.rawValue)"
@@ -36,6 +84,8 @@ actor PreferencesStore {
   ]
 
   private let defaults: UserDefaults
+
+  static let currentOutboundDisclosureVersion = 1
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
@@ -105,6 +155,15 @@ actor PreferencesStore {
     defaults.set(url, forKey: Key.ollamaURL)
   }
 
+  func outboundDestination() throws -> OutboundDestination {
+    let provider = selectedProvider()
+    return try OutboundDestination(
+      provider: provider,
+      model: selectedModel(for: provider),
+      ollamaEndpoint: provider == .ollama ? ollamaURL() : nil
+    )
+  }
+
   func appearance() -> AppearancePreference {
     guard
       let rawValue = defaults.string(forKey: Key.appearance),
@@ -145,11 +204,33 @@ actor PreferencesStore {
   }
 
   func quickDraft() -> String {
-    defaults.string(forKey: Key.quickDraft) ?? ""
+    guard draftRetentionChoice() == .enabled else { return "" }
+    return defaults.string(forKey: Key.quickDraft) ?? ""
   }
 
   func setQuickDraft(_ draft: String) {
+    guard draftRetentionChoice() == .enabled else { return }
     defaults.set(draft, forKey: Key.quickDraft)
+  }
+
+  func deleteSavedQuickDraft() {
+    defaults.removeObject(forKey: Key.quickDraft)
+  }
+
+  func draftRetentionChoice() -> RetentionChoice {
+    retentionChoice(forKey: Key.draftRetentionChoice)
+  }
+
+  func setDraftRetentionChoice(_ choice: RetentionChoice) {
+    defaults.set(choice.rawValue, forKey: Key.draftRetentionChoice)
+  }
+
+  func historyRetentionChoice() -> RetentionChoice {
+    retentionChoice(forKey: Key.historyRetentionChoice)
+  }
+
+  func setHistoryRetentionChoice(_ choice: RetentionChoice) {
+    defaults.set(choice.rawValue, forKey: Key.historyRetentionChoice)
   }
 
   func preferredPromptClient() -> PromptClient {
@@ -180,13 +261,85 @@ actor PreferencesStore {
     defaults.set(mode.rawValue, forKey: Key.promptDeliveryMode)
   }
 
-  func promptGateDisclosureAccepted() -> Bool {
-    defaults.bool(forKey: Key.promptDisclosureAccepted)
+
+  func outboundConfirmationPolicy() -> OutboundConfirmationPolicy {
+    guard
+      let rawValue = defaults.string(forKey: Key.outboundConfirmationPolicy),
+      let policy = OutboundConfirmationPolicy(rawValue: rawValue)
+    else {
+      return .alwaysConfirm
+    }
+    return policy
   }
 
-  func setPromptGateDisclosureAccepted(_ accepted: Bool) {
-    defaults.set(accepted, forKey: Key.promptDisclosureAccepted)
+  func setOutboundConfirmationPolicy(_ policy: OutboundConfirmationPolicy) {
+    defaults.set(policy.rawValue, forKey: Key.outboundConfirmationPolicy)
   }
+
+  func outboundDisclosureVersion(for destination: OutboundDestination) -> Int {
+    defaults.integer(forKey: Key.outboundDisclosureVersion(for: destination))
+  }
+
+  func acceptCurrentOutboundDisclosure(for destination: OutboundDestination) {
+    defaults.set(
+      Self.currentOutboundDisclosureVersion,
+      forKey: Key.outboundDisclosureVersion(for: destination)
+    )
+  }
+
+  func hasAcceptedCurrentOutboundDisclosure(for destination: OutboundDestination) -> Bool {
+    outboundDisclosureVersion(for: destination) >= Self.currentOutboundDisclosureVersion
+  }
+
+  func quickCheckKeyChord() -> KeyChord {
+    keyChord(forKey: Key.quickCheckKeyChord, fallback: .defaultQuickCheck)
+  }
+
+  func setQuickCheckKeyChord(_ chord: KeyChord) {
+    setKeyChord(chord, forKey: Key.quickCheckKeyChord)
+  }
+
+  func fixAndSendKeyChord() -> KeyChord {
+    keyChord(forKey: Key.fixAndSendKeyChord, fallback: .defaultFixAndSend)
+  }
+
+  func setFixAndSendKeyChord(_ chord: KeyChord) {
+    setKeyChord(chord, forKey: Key.fixAndSendKeyChord)
+  }
+
+  func welcomeCompletedVersion() -> Int {
+    defaults.integer(forKey: Key.welcomeCompletedVersion)
+  }
+
+  func setWelcomeCompletedVersion(_ version: Int) {
+    defaults.set(version, forKey: Key.welcomeCompletedVersion)
+  }
+
+  private func keyChord(forKey key: String, fallback: KeyChord) -> KeyChord {
+    guard
+      let data = defaults.data(forKey: key),
+      let chord = try? JSONDecoder().decode(KeyChord.self, from: data)
+    else {
+      return fallback
+    }
+    return chord
+  }
+
+  private func setKeyChord(_ chord: KeyChord, forKey key: String) {
+    guard let data = try? JSONEncoder().encode(chord) else { return }
+    defaults.set(data, forKey: key)
+  }
+
+  private func retentionChoice(forKey key: String) -> RetentionChoice {
+    guard
+      let rawValue = defaults.string(forKey: key),
+      let choice = RetentionChoice(rawValue: rawValue)
+    else {
+      return .undecided
+    }
+    return choice
+  }
+
 
   private func uuid(forKey key: String) -> UUID? {
     defaults.string(forKey: key).flatMap(UUID.init(uuidString:))

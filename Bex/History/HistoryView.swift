@@ -1,39 +1,16 @@
+import AppKit
 import SwiftUI
 
 struct HistoryView: View {
+  @Environment(\.undoManager) private var undoManager
   @ObservedObject var viewModel: HistoryViewModel
   @State private var expandedIDs: Set<UUID> = []
   @State private var confirmClear = false
+  @State private var selectedEntryID: UUID?
 
   var body: some View {
     VStack(spacing: 0) {
-      controls
-      Divider()
-      if viewModel.isLoading {
-        ProgressView("Loading history…")
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else if viewModel.filteredEntries.isEmpty {
-        VStack(spacing: 8) {
-          Image(systemName: "clock.arrow.circlepath")
-            .font(.largeTitle)
-            .foregroundStyle(.secondary)
-          Text(viewModel.entries.isEmpty ? "No history yet" : "No matching history")
-            .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        List(viewModel.filteredEntries) { entry in
-          DisclosureGroup(
-            isExpanded: expansionBinding(for: entry.id)
-          ) {
-            entryDetails(entry)
-              .padding(.top, 8)
-          } label: {
-            entrySummary(entry)
-          }
-          .accessibilityIdentifier("history-entry-\(entry.id.uuidString)")
-        }
-      }
+      content
 
       if let error = viewModel.userVisibleError {
         Divider()
@@ -43,50 +20,174 @@ struct HistoryView: View {
           .textSelection(.enabled)
           .padding(10)
           .frame(maxWidth: .infinity, alignment: .leading)
+          .accessibilityLabel("History error")
+          .accessibilityValue(error)
           .accessibilityIdentifier("history-error")
       }
     }
-    .searchable(text: $viewModel.searchQuery, prompt: "Search history")
+    .onChange(of: viewModel.accessibilityAnnouncement) { announcement in
+      guard let announcement else { return }
+      NSAccessibility.post(
+        element: NSApp as Any,
+        notification: .announcementRequested,
+        userInfo: [
+          .announcement: announcement.message,
+          .priority: NSAccessibilityPriorityLevel.high.rawValue,
+        ]
+      )
+    }
+    .searchable(
+      text: $viewModel.searchQuery,
+      placement: .toolbar,
+      prompt: "Search History"
+    )
+    .toolbar {
+      ToolbarItemGroup {
+        Picker("Provider Filter", selection: $viewModel.providerFilter) {
+          Text("All Providers").tag(LLMProvider?.none)
+          ForEach(LLMProvider.allCases, id: \.self) { provider in
+            Text(provider.displayName).tag(Optional(provider))
+          }
+        }
+        .accessibilityIdentifier("history-provider-filter")
+
+        Toggle(isOn: $viewModel.changesOnly) {
+          Label("Changes Only", systemImage: "plus.forwardslash.minus")
+        }
+        .toggleStyle(.button)
+        .help("Show only inserted and removed text in expanded entries")
+        .accessibilityIdentifier("history-changes-only")
+
+        Menu {
+          if let entry = selectedEntry {
+            Button("Use Original as Input") {
+              viewModel.useOriginalAsInput(entry)
+            }
+            .keyboardShortcut("o", modifiers: [.command, .shift])
+
+            Button("Use Corrected as Input") {
+              viewModel.useCorrectedAsInput(entry)
+            }
+            .keyboardShortcut("c", modifiers: [.command, .shift])
+
+            Divider()
+          }
+          Button(role: .destructive) {
+            confirmClear = true
+          } label: {
+            Label("Clear History", systemImage: "trash")
+          }
+          .disabled(viewModel.entries.isEmpty)
+          .accessibilityIdentifier("history-clear")
+        } label: {
+          Label("History Actions", systemImage: "ellipsis.circle")
+        }
+        .help("History Actions")
+      }
+    }
+    .safeAreaInset(edge: .bottom) {
+      if viewModel.canUndoDeletion {
+        HStack(spacing: 12) {
+          Text("History entry deleted.")
+          Spacer()
+          Button("Undo") {
+            viewModel.undoLastDeletion(using: undoManager)
+          }
+          .accessibilityIdentifier("history-undo")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("History entry deleted. Undo available.")
+      }
+    }
     .task {
       await viewModel.load()
     }
     .onDisappear {
       viewModel.close()
     }
-    .alert("Clear all history?", isPresented: $confirmClear) {
-      Button("Clear All", role: .destructive) {
-        viewModel.clearAll()
+    .alert("Clear History?", isPresented: $confirmClear) {
+      Button("Clear History", role: .destructive) {
+        viewModel.clearAll(using: undoManager)
         expandedIDs.removeAll()
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("This permanently deletes every Bex history entry.")
+      Text(
+        "This permanently deletes all History entries. "
+          + "It does not delete Writing Styles, credentials, or your current work."
+      )
     }
   }
 
-  private var controls: some View {
-    HStack(spacing: 12) {
-      Text("History")
-        .font(.title2.bold())
-      Picker("Provider", selection: $viewModel.providerFilter) {
-        Text("All Providers").tag(LLMProvider?.none)
-        ForEach(LLMProvider.allCases, id: \.self) { provider in
-          Text(provider.displayName).tag(Optional(provider))
+  @ViewBuilder
+  private var content: some View {
+    switch viewModel.contentState {
+    case .loading:
+      ProgressView("Loading History…")
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .accessibilityIdentifier("history-loading")
+    case .empty, .filteredEmpty:
+      if let emptyState = viewModel.emptyStateContent {
+        emptyStateView(emptyState)
+      }
+    case .entries:
+      List(viewModel.filteredEntries, selection: $selectedEntryID) { entry in
+        DisclosureGroup(
+          isExpanded: expansionBinding(for: entry.id)
+        ) {
+          entryDetails(entry)
+            .padding(.top, 8)
+        } label: {
+          entrySummary(entry)
+        }
+        .tag(entry.id)
+        .accessibilityIdentifier("history-entry-\(entry.id.uuidString)")
+      }
+      .contextMenu(forSelectionType: UUID.self) { selectedIDs in
+        if let entry = selectedEntry(in: selectedIDs) {
+          Button("Use Original as Input") {
+            viewModel.useOriginalAsInput(entry)
+          }
+          Button("Use Corrected as Input") {
+            viewModel.useCorrectedAsInput(entry)
+          }
         }
       }
-      .frame(width: 180)
-      .accessibilityIdentifier("history-provider-filter")
-      Toggle("Show only changes", isOn: $viewModel.changesOnly)
-        .toggleStyle(.checkbox)
-        .accessibilityIdentifier("history-changes-only")
-      Spacer()
-      Button("Clear All", role: .destructive) {
-        confirmClear = true
-      }
-      .disabled(viewModel.entries.isEmpty)
-      .accessibilityIdentifier("history-clear")
     }
-    .padding()
+  }
+
+  private func emptyStateView(_ state: HistoryEmptyStateContent) -> some View {
+    VStack(spacing: 10) {
+      Image(
+        systemName: viewModel.contentState == .empty
+          ? "clock.arrow.circlepath"
+          : "line.3.horizontal.decrease.circle"
+      )
+      .font(.largeTitle)
+      .foregroundStyle(.secondary)
+      Text(state.title)
+        .font(.headline)
+      Text(state.message)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+      Button(state.actionTitle) {
+        if viewModel.contentState == .empty {
+          viewModel.openQuickCheck()
+        } else {
+          viewModel.clearFilters()
+        }
+      }
+      .accessibilityIdentifier(
+        viewModel.contentState == .empty
+          ? "history-open-quick-check"
+          : "history-clear-filters"
+      )
+    }
+    .padding(24)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
 
   private func entrySummary(_ entry: HistoryEntry) -> some View {
@@ -101,10 +202,8 @@ struct HistoryView: View {
           Text(entry.provider.displayName)
           Text("·")
           Text(entry.model)
-          if let profileName = entry.profileName {
-            Text("·")
-            Label(profileName, systemImage: "person.crop.circle")
-          }
+          Text("·")
+          Label(entry.profileName ?? "Bex Standard", systemImage: "textformat")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -117,33 +216,41 @@ struct HistoryView: View {
   }
 
   private func entryDetails(_ entry: HistoryEntry) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
+    let segments = viewModel.diffSegments(for: entry)
+
+    return VStack(alignment: .leading, spacing: 12) {
       detailSection(title: "Original", text: entry.original)
 
       VStack(alignment: .leading, spacing: 5) {
         Text("Changes")
           .font(.headline)
+          .accessibilityAddTraits(.isHeader)
         DiffText(
-          segments: WordDiff.compute(
-            original: entry.original,
-            corrected: entry.corrected
-          ),
+          segments: segments,
           changesOnly: viewModel.changesOnly
         )
         .textSelection(.enabled)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Changes")
+        .accessibilityValue(AccessibleDiffSummary.make(from: segments))
+        .accessibilityIdentifier("history-diff-\(entry.id.uuidString)")
       }
 
       detailSection(title: "Corrected", text: entry.corrected)
       detailSection(title: "Explanation", text: entry.explanation)
 
       HStack {
-        Button("Use as New Input") {
-          viewModel.useAsNewInput(entry)
+        Button("Use Original as Input") {
+          viewModel.useOriginalAsInput(entry)
+        }
+        .accessibilityIdentifier("history-use-original-\(entry.id.uuidString)")
+        Button("Use Corrected as Input") {
+          viewModel.useCorrectedAsInput(entry)
         }
         .accessibilityIdentifier("history-use-input-\(entry.id.uuidString)")
         Spacer()
         Button("Delete", role: .destructive) {
-          viewModel.delete(id: entry.id)
+          viewModel.delete(entry, using: undoManager)
           expandedIDs.remove(entry.id)
         }
         .accessibilityIdentifier("history-delete-\(entry.id.uuidString)")
@@ -156,12 +263,23 @@ struct HistoryView: View {
     VStack(alignment: .leading, spacing: 5) {
       Text(title)
         .font(.headline)
+        .accessibilityAddTraits(.isHeader)
       Text(text)
         .frame(maxWidth: .infinity, alignment: .leading)
         .textSelection(.enabled)
         .accessibilityLabel(title)
         .accessibilityValue(text)
     }
+  }
+
+  private var selectedEntry: HistoryEntry? {
+    guard let selectedEntryID else { return nil }
+    return viewModel.filteredEntries.first { $0.id == selectedEntryID }
+  }
+
+  private func selectedEntry(in selectedIDs: Set<UUID>) -> HistoryEntry? {
+    guard selectedIDs.count == 1, let id = selectedIDs.first else { return nil }
+    return viewModel.filteredEntries.first { $0.id == id }
   }
 
   private func expansionBinding(for id: UUID) -> Binding<Bool> {

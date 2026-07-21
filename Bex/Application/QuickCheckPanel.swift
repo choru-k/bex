@@ -3,50 +3,69 @@ import SwiftUI
 
 final class QuickCheckPanel: NSPanel {
   override var canBecomeKey: Bool { true }
-  override var canBecomeMain: Bool { true }
+  override var canBecomeMain: Bool { false }
+}
+
+enum QuickCheckPanelCommand: Equatable, Sendable {
+  case cancel
+  case primaryAction
+  case back
+  case copy
 }
 
 @MainActor
 final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
+  static let frameAutosaveName = "Bex.QuickCheckPanel"
   private let hostingController: NSHostingController<AnyView>
-  private let closeAction: @MainActor () -> Void
+  private let dismissalAction: @MainActor (QuickCheckDismissalReason) -> Void
+  private let showAction: @MainActor () -> Void
   private let focusAction: @MainActor () -> Void
+  private let primaryAction: @MainActor () -> Void
+  private let backAction: @MainActor () -> Void
   private let copyAction: @MainActor () -> Void
-  private let copyAndCloseAction: @MainActor () -> Void
   nonisolated(unsafe) private var keyMonitor: Any?
   private var isClosing = false
 
   init(
     rootView: AnyView,
-    closeAction: @escaping @MainActor () -> Void,
+    dismissalAction: @escaping @MainActor (QuickCheckDismissalReason) -> Void,
+    showAction: @escaping @MainActor () -> Void,
     focusAction: @escaping @MainActor () -> Void,
+    primaryAction: @escaping @MainActor () -> Void,
+    backAction: @escaping @MainActor () -> Void,
     copyAction: @escaping @MainActor () -> Void,
-    copyAndCloseAction: @escaping @MainActor () -> Void,
     autoDismissOnDeactivate: Bool = true
   ) {
     hostingController = NSHostingController(rootView: rootView)
-    self.closeAction = closeAction
+    self.dismissalAction = dismissalAction
+    self.showAction = showAction
     self.focusAction = focusAction
+    self.primaryAction = primaryAction
+    self.backAction = backAction
     self.copyAction = copyAction
-    self.copyAndCloseAction = copyAndCloseAction
 
     let panel = QuickCheckPanel(
-      contentRect: NSRect(x: 0, y: 0, width: 560, height: 520),
+      contentRect: NSRect(x: 0, y: 0, width: 620, height: 620),
       styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
     panel.title = "Quick Check"
     panel.contentViewController = hostingController
-    panel.setContentSize(NSSize(width: 560, height: 520))
+    panel.setContentSize(NSSize(width: 620, height: 620))
     panel.minSize = NSSize(width: 460, height: 360)
     panel.level = .floating
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     panel.hidesOnDeactivate = autoDismissOnDeactivate
     panel.isReleasedWhenClosed = false
     panel.animationBehavior = .utilityWindow
+    let restoredSavedFrame = panel.setFrameUsingName(Self.frameAutosaveName)
+    panel.setFrameAutosaveName(Self.frameAutosaveName)
 
     super.init(window: panel)
+    if !restoredSavedFrame {
+      center(panel, on: activeScreen())
+    }
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self, self.window?.isKeyWindow == true else { return event }
       return self.handleShortcut(event) ? nil : event
@@ -79,7 +98,11 @@ final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
 
   func show() {
     guard let panel = window as? QuickCheckPanel else { return }
-    center(panel, on: activeScreen())
+    showAction()
+    panel.setFrame(
+      panel.constrainFrameRect(panel.frame, to: panel.screen),
+      display: false
+    )
     NSApp.activate(ignoringOtherApps: true)
     panel.makeKeyAndOrderFront(nil)
     DispatchQueue.main.async { [weak self, weak panel] in
@@ -88,40 +111,67 @@ final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
     }
   }
 
-  func closePanel() {
+  func closePanel(reason: QuickCheckDismissalReason) {
     guard !isClosing else { return }
     isClosing = true
-    closeAction()
+    dismissalAction(reason)
     window?.orderOut(nil)
     isClosing = false
   }
 
   func windowShouldClose(_ sender: NSWindow) -> Bool {
-    closePanel()
+    closePanel(reason: .windowClose)
     return false
   }
 
   @objc private func applicationDidResignActive() {
     guard window?.isVisible == true else { return }
-    closePanel()
+    closePanel(reason: .applicationDeactivated)
   }
 
   private func handleShortcut(_ event: NSEvent) -> Bool {
-    let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
-    if modifiers.isEmpty, event.keyCode == 53 {
-      closePanel()
-      return true
-    }
-    guard modifiers == [.command, .shift] else { return false }
-    if event.charactersIgnoringModifiers?.lowercased() == "c" {
+    guard
+      let command = Self.command(
+        keyCode: event.keyCode,
+        charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+        modifierFlags: event.modifierFlags
+      )
+    else { return false }
+
+    switch command {
+    case .cancel:
+      closePanel(reason: .explicitCancel)
+    case .primaryAction:
+      primaryAction()
+    case .back:
+      backAction()
+    case .copy:
       copyAction()
-      return true
     }
-    if event.keyCode == 36 || event.keyCode == 76 {
-      copyAndCloseAction()
-      return true
+    return true
+  }
+
+  nonisolated static func command(
+    keyCode: UInt16,
+    charactersIgnoringModifiers: String?,
+    modifierFlags: NSEvent.ModifierFlags
+  ) -> QuickCheckPanelCommand? {
+    let modifiers = modifierFlags.intersection([.command, .shift, .option, .control])
+    if modifiers.isEmpty, keyCode == 53 {
+      return .cancel
     }
-    return false
+    if modifiers == [.command] {
+      if keyCode == 36 || keyCode == 76 {
+        return .primaryAction
+      }
+      if charactersIgnoringModifiers == "[" {
+        return .back
+      }
+    }
+    if modifiers == [.command, .shift], charactersIgnoringModifiers?.lowercased() == "c" {
+      return .copy
+    }
+    return nil
   }
 
   private func focusInput(in panel: NSPanel, remainingAttempts: Int) {

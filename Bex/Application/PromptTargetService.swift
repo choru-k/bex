@@ -17,6 +17,38 @@ protocol PromptTargetServicing: AnyObject {
   func discard(_ target: PromptTarget)
 }
 
+extension PromptTargetServicing {
+  func deliver(
+    _ correctedText: String,
+    to target: PromptTarget,
+    action: PromptDeliveryAction
+  ) async throws -> PromptDeliveryOutcome {
+    guard target.availableDeliveryActions.contains(action) else {
+      throw PromptDeliveryFailure(
+        effect: .none,
+        underlyingError: BexError.promptDeliveryFailed(
+          "That delivery action is not available for \(target.applicationName)."
+        )
+      )
+    }
+
+    switch action {
+    case .copyCorrection:
+      let clipboardTarget = PromptTarget(
+        kind: .copyOnly,
+        applicationName: target.applicationName,
+        guidance: target.guidance,
+        hookContext: target.hookContext
+      )
+      return try await deliver(correctedText, to: clipboardTarget, pressReturn: false)
+    case .pasteInDestination:
+      return try await deliver(correctedText, to: target, pressReturn: false)
+    case .pasteAndSubmit:
+      return try await deliver(correctedText, to: target, pressReturn: true)
+    }
+  }
+}
+
 struct PromptApplicationSnapshot: Equatable, Sendable {
   let processID: Int32
   let bundleID: String?
@@ -294,7 +326,7 @@ final class PromptTargetService: PromptTargetServicing {
         processID: nil,
         bundleID: application.bundleID,
         applicationName: application.name,
-        guidance: "Replace the destination draft with this correction manually."
+        guidance: "Accessibility is required for manual capture and replacement. Grant access, then invoke Fix & Send again. Client hooks can still supply prompts without Accessibility."
       )
       return PromptCapture(draft: "", target: target, source: .composer)
     }
@@ -325,7 +357,7 @@ final class PromptTargetService: PromptTargetServicing {
       processID: application.processID,
       bundleID: application.bundleID,
       applicationName: application.name,
-      guidance: "Bex will replace this exact field after approval."
+      guidance: "Bex captured this exact field and can paste the correction back into \(application.name)."
     )
     capturedFields[target.id] = CapturedField(
       element: element,
@@ -353,7 +385,7 @@ final class PromptTargetService: PromptTargetServicing {
       return PromptTarget(
         kind: .copyOnly,
         applicationName: "Prompt client",
-        guidance: "Replace the destination draft with this correction manually.",
+        guidance: "This hook supplied the prompt without Accessibility. Bex will copy the approved correction; replace the client draft manually.",
         hookContext: context
       )
     }
@@ -363,8 +395,8 @@ final class PromptTargetService: PromptTargetServicing {
       bundleID: application.bundleID,
       applicationName: application.name,
       guidance: accessibility.isTrusted
-        ? "Bex will paste the correction. Press Return in the target to submit."
-        : "Replace the destination draft with this correction manually.",
+        ? "This hook supplied the prompt. Bex will paste the approved correction into \(application.name) without pressing Return."
+        : "This hook supplied the prompt without Accessibility. Bex will copy the approved correction for manual replacement.",
       hookContext: context
     )
   }
@@ -374,19 +406,31 @@ final class PromptTargetService: PromptTargetServicing {
     to target: PromptTarget,
     pressReturn: Bool
   ) async throws -> PromptDeliveryOutcome {
-    try Task.checkCancellation()
-    switch target.kind {
-    case .copyOnly:
-      try pasteboardWriter.write(correctedText)
-      return .copied
-    case .composerPaste:
-      return try await deliverToComposer(correctedText, target: target)
-    case .capturedField:
-      return try await deliverToCapturedField(
-        correctedText,
-        target: target,
-        pressReturn: pressReturn
-      )
+    do {
+      try Task.checkCancellation()
+      switch target.kind {
+      case .copyOnly:
+        do {
+          try pasteboardWriter.write(correctedText)
+        } catch {
+          throw PromptDeliveryFailure(effect: .none, underlyingError: error)
+        }
+        return .copied
+      case .composerPaste:
+        return try await deliverToComposer(correctedText, target: target)
+      case .capturedField:
+        return try await deliverToCapturedField(
+          correctedText,
+          target: target,
+          pressReturn: pressReturn
+        )
+      }
+    } catch let failure as PromptDeliveryFailure {
+      throw failure
+    } catch let cancellation as CancellationError {
+      throw cancellation
+    } catch {
+      throw PromptDeliveryFailure(effect: .none, underlyingError: error)
     }
   }
 
@@ -400,7 +444,7 @@ final class PromptTargetService: PromptTargetServicing {
       processID: application.processID,
       bundleID: application.bundleID,
       applicationName: application.name,
-      guidance: "Bex will paste the correction. Press Return in the target to submit."
+      guidance: "Bex can paste the correction into \(application.name) without pressing Return."
     )
     return PromptCapture(draft: "", target: target, source: .composer)
   }
@@ -409,20 +453,29 @@ final class PromptTargetService: PromptTargetServicing {
     _ correctedText: String,
     target: PromptTarget
   ) async throws -> PromptDeliveryOutcome {
-    guard accessibility.isTrusted, let processID = target.processID else {
-      throw BexError.accessibilityPermissionRequired
+    var effect = PromptDeliveryEffect.none
+    do {
+      guard accessibility.isTrusted, let processID = target.processID else {
+        throw BexError.accessibilityPermissionRequired
+      }
+      orderOutPanel()
+      guard applications.activate(processID: processID) else {
+        throw BexError.promptDeliveryFailed("Bex could not activate the prompt target.")
+      }
+      try await waitUntilFrontmost(processID: processID)
+      try Task.checkCancellation()
+      effect = .unknown
+      try pasteboardWriter.write(correctedText)
+      effect = .copied
+      guard events.postPaste() else {
+        throw BexError.promptDeliveryFailed("Bex could not paste the correction.")
+      }
+      return .pasted
+    } catch let cancellation as CancellationError where effect == .none {
+      throw cancellation
+    } catch {
+      throw PromptDeliveryFailure(effect: effect, underlyingError: error)
     }
-    orderOutPanel()
-    guard applications.activate(processID: processID) else {
-      throw BexError.promptDeliveryFailed("Bex could not activate the prompt target.")
-    }
-    try await waitUntilFrontmost(processID: processID)
-    try Task.checkCancellation()
-    try pasteboardWriter.write(correctedText)
-    guard events.postPaste() else {
-      throw BexError.promptDeliveryFailed("Bex could not paste the correction.")
-    }
-    return .pasted
   }
 
   private func deliverToCapturedField(
@@ -430,35 +483,51 @@ final class PromptTargetService: PromptTargetServicing {
     target: PromptTarget,
     pressReturn: Bool
   ) async throws -> PromptDeliveryOutcome {
-    guard accessibility.isTrusted, let captured = capturedFields[target.id] else {
-      throw BexError.stalePromptTarget
-    }
-    try revalidate(captured)
-    orderOutPanel()
-    guard applications.activate(processID: captured.processID) else {
-      throw BexError.promptDeliveryFailed("Bex could not activate the original prompt target.")
-    }
-    try await waitUntilFrontmost(processID: captured.processID)
-    try Task.checkCancellation()
-    try revalidate(captured)
-    try accessibility.focus(captured.element)
-    try accessibility.selectAll(captured.element, utf16Length: captured.original.utf16.count)
-    try revalidate(captured)
-
-    let restoration = try pasteboardTransaction.stage(correctedText)
-    defer { restoration.restore() }
-    guard events.postPaste() else {
-      throw BexError.promptDeliveryFailed("Bex could not paste the correction.")
-    }
-    try await waitForValue(correctedText, in: captured.element)
-    if pressReturn {
-      try Task.checkCancellation()
-      guard events.postReturn() else {
-        throw BexError.promptDeliveryFailed("Bex could not submit the correction.")
+    var effect = PromptDeliveryEffect.none
+    do {
+      guard accessibility.isTrusted, let captured = capturedFields[target.id] else {
+        throw BexError.stalePromptTarget
       }
-      return .submitted
+      try revalidate(captured)
+      orderOutPanel()
+      guard applications.activate(processID: captured.processID) else {
+        throw BexError.promptDeliveryFailed("Bex could not activate the original prompt target.")
+      }
+      try await waitUntilFrontmost(processID: captured.processID)
+      try Task.checkCancellation()
+      try revalidate(captured)
+      try accessibility.focus(captured.element)
+      try accessibility.selectAll(captured.element, utf16Length: captured.original.utf16.count)
+      try revalidate(captured)
+
+      let restoration: PasteboardRestoration
+      do {
+        restoration = try pasteboardTransaction.stage(correctedText)
+      } catch {
+        throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
+      }
+      defer { restoration.restore() }
+      guard events.postPaste() else {
+        throw BexError.promptDeliveryFailed("Bex could not paste the correction.")
+      }
+      effect = .unknown
+      try await waitForValue(correctedText, in: captured.element)
+      effect = .pastedNotSubmitted
+      if pressReturn {
+        try Task.checkCancellation()
+        guard events.postReturn() else {
+          throw BexError.promptDeliveryFailed("Bex could not submit the correction.")
+        }
+        return .submitted
+      }
+      return .pasted
+    } catch let failure as PromptDeliveryFailure {
+      throw failure
+    } catch let cancellation as CancellationError where effect == .none {
+      throw cancellation
+    } catch {
+      throw PromptDeliveryFailure(effect: effect, underlyingError: error)
     }
-    return .pasted
   }
 
   private func revalidate(_ captured: CapturedField) throws {

@@ -22,6 +22,7 @@ final class PromptTargetServiceTests: XCTestCase {
     )
 
     XCTAssertEqual(outcome, .submitted)
+    XCTAssertEqual(outcome.effect, .submitted)
     XCTAssertEqual(fixture.accessibility.value, "This is original.")
     XCTAssertEqual(fixture.pasteboard.string(forType: .string), "existing clipboard")
     XCTAssertEqual(fixture.events.pasteCount, 1)
@@ -47,7 +48,10 @@ final class PromptTargetServiceTests: XCTestCase {
       )
       XCTFail("Expected stale target")
     } catch {
-      XCTAssertEqual(error as? BexError, .stalePromptTarget)
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .none)
+      XCTAssertTrue(failure.isFullRetrySafe)
+      XCTAssertEqual(failure.underlyingError as? BexError, .stalePromptTarget)
     }
 
     XCTAssertFalse(fixture.log.contains("orderOut"))
@@ -69,9 +73,92 @@ final class PromptTargetServiceTests: XCTestCase {
       )
       XCTFail("Expected verification failure")
     } catch {
-      XCTAssertTrue(error.localizedDescription.contains("verify the pasted correction"))
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .unknown)
+      XCTAssertFalse(failure.isFullRetrySafe)
+      XCTAssertTrue(failure.localizedDescription.contains("verify the pasted correction"))
+      XCTAssertFalse(failure.localizedDescription.contains("Nothing was sent"))
     }
 
+    XCTAssertEqual(fixture.events.pasteCount, 1)
+    XCTAssertEqual(fixture.events.returnCount, 0)
+  }
+
+  func testRejectedPasteReportsNoEffectAndAllowsFullRetry() async throws {
+    let fixture = TargetFixture()
+    let capture = try fixture.service.captureFrontmostTarget()
+    fixture.events.pasteSucceeds = false
+
+    do {
+      _ = try await fixture.service.deliver(
+        "Correction",
+        to: capture.target,
+        pressReturn: true
+      )
+      XCTFail("Expected paste failure")
+    } catch {
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .none)
+      XCTAssertTrue(failure.isFullRetrySafe)
+    }
+
+    XCTAssertEqual(fixture.accessibility.value, "This are original.")
+    XCTAssertEqual(fixture.events.pasteCount, 1)
+    XCTAssertEqual(fixture.events.returnCount, 0)
+  }
+
+  func testReturnFailureAfterVerifiedPasteReportsPartialSuccessWithoutRetrying() async throws {
+    let fixture = TargetFixture()
+    let capture = try fixture.service.captureFrontmostTarget()
+    fixture.events.returnSucceeds = false
+
+    do {
+      _ = try await fixture.service.deliver(
+        "Correction",
+        to: capture.target,
+        pressReturn: true
+      )
+      XCTFail("Expected submit failure")
+    } catch {
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .pastedNotSubmitted)
+      XCTAssertFalse(failure.isFullRetrySafe)
+      XCTAssertTrue(failure.localizedDescription.contains("could not submit"))
+      XCTAssertFalse(failure.localizedDescription.contains("Nothing was sent"))
+    }
+
+    XCTAssertEqual(fixture.accessibility.value, "Correction")
+    XCTAssertEqual(fixture.events.pasteCount, 1)
+    XCTAssertEqual(fixture.events.returnCount, 1)
+  }
+
+  func testCancellationAfterVerifiedPasteReportsPartialSuccess() async throws {
+    let fixture = TargetFixture()
+    let capture = try fixture.service.captureFrontmostTarget()
+    let deliveryTask = Task {
+      try await fixture.service.deliver(
+        "Correction",
+        to: capture.target,
+        pressReturn: true
+      )
+    }
+    fixture.accessibility.onReadValue = { value in
+      if value == "Correction" {
+        deliveryTask.cancel()
+      }
+    }
+
+    do {
+      _ = try await deliveryTask.value
+      XCTFail("Expected cancellation")
+    } catch {
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .pastedNotSubmitted)
+      XCTAssertTrue(failure.underlyingError is CancellationError)
+      XCTAssertFalse(failure.isFullRetrySafe)
+    }
+
+    XCTAssertEqual(fixture.accessibility.value, "Correction")
     XCTAssertEqual(fixture.events.pasteCount, 1)
     XCTAssertEqual(fixture.events.returnCount, 0)
   }
@@ -89,6 +176,7 @@ final class PromptTargetServiceTests: XCTestCase {
       pressReturn: true
     )
     XCTAssertEqual(copied, .copied)
+    XCTAssertEqual(copied.effect, .copied)
     XCTAssertEqual(fixture.pasteboard.string(forType: .string), "Manual correction")
     XCTAssertEqual(fixture.events.returnCount, 0)
 
@@ -97,6 +185,55 @@ final class PromptTargetServiceTests: XCTestCase {
     let composer = try fixture.service.captureFrontmostTarget()
     XCTAssertEqual(composer.target.kind, .composerPaste)
     XCTAssertEqual(composer.draft, "")
+  }
+
+  func testComposerDeliveryReportsPastedWithoutSubmitting() async throws {
+    let fixture = TargetFixture()
+    fixture.accessibility.role = "AXButton"
+    let capture = try fixture.service.captureFrontmostTarget()
+
+    let outcome = try await fixture.service.deliver(
+      "Composer correction",
+      to: capture.target,
+      pressReturn: true
+    )
+
+    XCTAssertEqual(outcome, .pasted)
+    XCTAssertEqual(outcome.effect, .pastedNotSubmitted)
+    XCTAssertEqual(fixture.events.pasteCount, 1)
+    XCTAssertEqual(fixture.events.returnCount, 0)
+  }
+
+  func testComposerPasteFailureReportsCompletedCopyEffect() async throws {
+    let fixture = TargetFixture()
+    fixture.accessibility.role = "AXButton"
+    fixture.events.pasteSucceeds = false
+    let capture = try fixture.service.captureFrontmostTarget()
+
+    do {
+      _ = try await fixture.service.deliver(
+        "Composer correction",
+        to: capture.target,
+        pressReturn: false
+      )
+      XCTFail("Expected paste failure")
+    } catch {
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .copied)
+      XCTAssertFalse(failure.isFullRetrySafe)
+    }
+
+    XCTAssertEqual(fixture.pasteboard.string(forType: .string), "Composer correction")
+    XCTAssertEqual(fixture.events.pasteCount, 1)
+    XCTAssertEqual(fixture.events.returnCount, 0)
+  }
+
+  func testOnlyNoEffectAllowsAFullDeliveryRetry() {
+    XCTAssertTrue(PromptDeliveryEffect.none.isFullRetrySafe)
+    XCTAssertFalse(PromptDeliveryEffect.copied.isFullRetrySafe)
+    XCTAssertFalse(PromptDeliveryEffect.pastedNotSubmitted.isFullRetrySafe)
+    XCTAssertFalse(PromptDeliveryEffect.submitted.isFullRetrySafe)
+    XCTAssertFalse(PromptDeliveryEffect.unknown.isFullRetrySafe)
   }
 
   func testHookTargetRequiresMatchingSourcePIDAndBundleForComposerPaste() throws {
@@ -152,6 +289,75 @@ final class PromptTargetServiceTests: XCTestCase {
     ) { error in
       XCTAssertEqual(error as? BexError, .unsupportedPromptTarget)
     }
+  }
+
+  func testCapabilityActionsExposeOnlySafeTargetSpecificChoices() async throws {
+    let capturedFixture = TargetFixture()
+    let captured = try capturedFixture.service.captureFrontmostTarget()
+    XCTAssertEqual(
+      captured.target.availableDeliveryActions,
+      [.pasteInDestination, .pasteAndSubmit]
+    )
+    let pasted = try await capturedFixture.service.deliver(
+      "Correction",
+      to: captured.target,
+      action: .pasteInDestination
+    )
+    XCTAssertEqual(pasted, .pasted)
+    XCTAssertEqual(capturedFixture.events.returnCount, 0)
+
+    do {
+      _ = try await capturedFixture.service.deliver(
+        "Correction",
+        to: captured.target,
+        action: .copyCorrection
+      )
+      XCTFail("Expected unavailable action failure")
+    } catch {
+      let failure = try XCTUnwrap(error as? PromptDeliveryFailure)
+      XCTAssertEqual(failure.effect, .none)
+      XCTAssertTrue(failure.isFullRetrySafe)
+    }
+
+    let composerFixture = TargetFixture()
+    composerFixture.accessibility.role = "AXButton"
+    let composer = try composerFixture.service.captureFrontmostTarget()
+    XCTAssertEqual(
+      composer.target.availableDeliveryActions,
+      [.copyCorrection, .pasteInDestination]
+    )
+    let copied = try await composerFixture.service.deliver(
+      "Copy instead",
+      to: composer.target,
+      action: .copyCorrection
+    )
+    XCTAssertEqual(copied, .copied)
+    XCTAssertEqual(composerFixture.events.pasteCount, 0)
+    XCTAssertEqual(composerFixture.events.returnCount, 0)
+  }
+
+  func testPermissionGuidanceDistinguishesManualFallbackFromHookSuppliedPrompt() throws {
+    let fixture = TargetFixture()
+    fixture.accessibility.isTrusted = false
+    let manual = try fixture.service.captureFrontmostTarget()
+    XCTAssertTrue(manual.target.guidance.contains("manual capture"))
+    XCTAssertTrue(manual.target.guidance.contains("invoke Fix & Send again"))
+    XCTAssertTrue(manual.target.guidance.contains("Client hooks can still supply"))
+
+    let request = HookReviewRequest(
+      requestID: UUID(),
+      client: .claudeCode,
+      prompt: "Prompt",
+      sessionID: "session",
+      cwd: "/tmp",
+      helperPID: 123,
+      sourcePID: 321,
+      sourceBundleID: "com.example.editor"
+    )
+    let hook = try fixture.service.target(for: request)
+    XCTAssertEqual(hook.kind, .copyOnly)
+    XCTAssertTrue(hook.guidance.contains("hook supplied"))
+    XCTAssertFalse(hook.availableDeliveryActions.contains(.pasteAndSubmit))
   }
 
   private func index(_ value: String, in values: [String]) throws -> Int {
@@ -224,6 +430,7 @@ private final class TargetAccessibility: PromptAccessibilityServicing {
   var value = "This are original."
   var enabled = true
   var settable = true
+  var onReadValue: ((String) -> Void)?
   let element = AXUIElementCreateApplication(321)
 
   func requestTrust() -> Bool { isTrusted }
@@ -246,6 +453,7 @@ private final class TargetAccessibility: PromptAccessibilityServicing {
   }
   func stringValue(of element: AXUIElement) throws -> String {
     log?("revalidateValue")
+    onReadValue?(value)
     return value
   }
   func isSameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool { true }
@@ -259,22 +467,24 @@ private final class TargetEvents: PromptKeyEventPosting {
   weak var accessibility: TargetAccessibility?
   var pasteboard: NSPasteboard?
   var applyPaste = true
+  var pasteSucceeds = true
+  var returnSucceeds = true
   var pasteCount = 0
   var returnCount = 0
 
   func postPaste() -> Bool {
     log?("paste")
     pasteCount += 1
-    if applyPaste, let value = pasteboard?.string(forType: .string) {
+    if pasteSucceeds, applyPaste, let value = pasteboard?.string(forType: .string) {
       accessibility?.value = value
     }
-    return true
+    return pasteSucceeds
   }
 
   func postReturn() -> Bool {
     log?("return")
     returnCount += 1
-    return true
+    return returnSucceeds
   }
 }
 

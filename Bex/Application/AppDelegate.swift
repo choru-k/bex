@@ -10,6 +10,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem?
   private var statusMenu: NSMenu?
   private var globalHotKey: GlobalHotKey?
+  private var shortcutMenuItems: [BexShortcut: [NSMenuItem]] = [:]
+  private var shortcutChords: [BexShortcut: KeyChord] = [
+    .quickCheck: .defaultQuickCheck,
+    .fixAndSend: .defaultFixAndSend,
+  ]
   private let signposter: OSSignposter
   private var launchInterval: OSSignpostIntervalState?
 
@@ -40,21 +45,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let missingCredential =
           arguments.contains("--missing-credential")
           || environment["BEX_UI_TEST_MISSING_CREDENTIAL"] == "1"
-        let openQuickCheck =
+        let explicitQuickCheck =
           arguments.contains("--open-quick-check")
           || environment["BEX_UI_TEST_OPEN_QUICK_CHECK"] == "1"
-        let openPromptGate =
+        let explicitPromptGate =
           arguments.contains("--open-prompt-gate")
           || environment["BEX_UI_TEST_OPEN_PROMPT_GATE"] == "1"
+        let launchDestination: UITestLaunchDestination
+        if explicitPromptGate {
+          launchDestination = .promptGate
+        } else if explicitQuickCheck {
+          launchDestination = .quickCheck
+        } else {
+          launchDestination = UITestScenario.current.configuration.launchDestination
+        }
         Task { [weak self] in
           let services = await AppServices.uiTesting(
             seedCredential: !missingCredential
           )
           self?.finishLaunching(
             with: services,
-            openQuickCheck: openQuickCheck,
-            openPromptGate: openPromptGate
+            openQuickCheck: launchDestination == .quickCheck,
+            openPromptGate: launchDestination == .promptGate,
+            showWelcomeIfNeeded: UITestScenario.current == .welcome
           )
+          switch launchDestination {
+          case .settings:
+            self?.windowCoordinator?.showSettings()
+          case let .setup(origin):
+            self?.windowCoordinator?.showSettings(origin: origin)
+          case .history:
+            self?.windowCoordinator?.showHistory()
+          case .profiles:
+            self?.windowCoordinator?.showProfiles()
+          case .none, .quickCheck, .promptGate, .hookPromptGate:
+            break
+          }
         }
         return
       }
@@ -70,7 +96,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func finishLaunching(
     with services: AppServices,
     openQuickCheck: Bool = false,
-    openPromptGate: Bool = false
+    openPromptGate: Bool = false,
+    showWelcomeIfNeeded: Bool = true
   ) {
     let coordinator = installCoordinator(services: services)
     installMainMenu()
@@ -79,29 +106,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       installUITestingCommands()
     #endif
 
-    let globalHotKey = GlobalHotKey()
+    let globalHotKey: GlobalHotKey
+    #if DEBUG
+      if ProcessInfo.processInfo.environment["BEX_UI_TESTING"] == "1" {
+        let behavior = UITestScenario.current.configuration.hotKeyRegistration
+        globalHotKey = GlobalHotKey(
+          backend: UITestingHotKeyRegistrationBackend(behavior: behavior)
+        )
+      } else {
+        globalHotKey = GlobalHotKey()
+      }
+    #else
+      globalHotKey = GlobalHotKey()
+    #endif
     self.globalHotKey = globalHotKey
-    do {
-      try globalHotKey.register(
-        Shortcut(id: 1, keyCode: UInt32(kVK_ANSI_G), modifiers: UInt32(cmdKey | shiftKey))
-      ) { [weak self] in
-        self?.openQuickCheck()
+    Task { [weak self] in
+      async let quickCheckChord = services.preferences.quickCheckKeyChord()
+      async let fixAndSendChord = services.preferences.fixAndSendKeyChord()
+      let chords: [BexShortcut: KeyChord] = [
+        .quickCheck: await quickCheckChord,
+        .fixAndSend: await fixAndSendChord,
+      ]
+      await MainActor.run {
+        guard let self else { return }
+        self.shortcutChords = chords
+        self.refreshShortcutMenuItems()
+        for shortcut in BexShortcut.allCases {
+          let chord = chords[shortcut] ?? shortcut.defaultChord
+          do {
+            try globalHotKey.register(
+              Shortcut(id: shortcut.rawValue, chord: chord),
+              action: self.shortcutAction(for: shortcut)
+            )
+          } catch {
+            self.showHotKeyConflict(
+              "\(shortcut.title) shortcut could not be registered: \(error.localizedDescription) "
+                + "The command remains available from the Bex menu."
+            )
+          }
+        }
+        BexShortcutBridge.updater = { [weak self] shortcut, chord in
+          guard let self else { throw HotKeyRegistrationError.updaterUnavailable }
+          try self.replaceShortcut(shortcut, with: chord)
+        }
       }
-    } catch {
-      showHotKeyConflict(
-        "⌘⇧G is already in use. Open Quick Check from the Bex menu."
-      )
-    }
-    do {
-      try globalHotKey.register(
-        Shortcut(id: 2, keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey | shiftKey))
-      ) { [weak self] in
-        self?.openPromptGate()
-      }
-    } catch {
-      showHotKeyConflict(
-        "⌘⇧P is already in use. The Fix & Send shortcut is unavailable."
-      )
     }
 
     Task { [weak self, weak coordinator] in
@@ -121,6 +169,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       if let hookManager = services.hookManager as? HookInstallationManager {
         try? await hookManager.refreshInstalledHelper()
       }
+      let completedWelcomeVersion =
+        await services.preferences.welcomeCompletedVersion()
+      let shouldShowWelcome =
+        showWelcomeIfNeeded && !openQuickCheck && !openPromptGate
+          && completedWelcomeVersion < WindowCoordinator.currentWelcomeVersion
       await MainActor.run {
         if openQuickCheck {
           coordinator?.showQuickCheck()
@@ -128,13 +181,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if openPromptGate {
           coordinator?.showPromptGate()
         }
+        if shouldShowWelcome {
+          coordinator?.showWelcome()
+        }
         self?.announceTrayReady()
       }
     }
   }
 
   private func coordinator() -> WindowCoordinator {
-    installMainMenu()
     guard let windowCoordinator else {
       preconditionFailure("Bex services must be composed before opening a window.")
     }
@@ -151,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
+    BexShortcutBridge.updater = nil
     globalHotKey?.unregisterAll()
     #if DEBUG
       DistributedNotificationCenter.default().removeObserver(self)
@@ -166,57 +222,142 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func installMainMenu() {
     guard NSApp.mainMenu == nil else { return }
+    let mainMenu = Self.makeMainMenu(
+      target: self,
+      quickCheckChord: shortcutChords[.quickCheck] ?? .defaultQuickCheck,
+      fixAndSendChord: shortcutChords[.fixAndSend] ?? .defaultFixAndSend
+    )
+    NSApp.mainMenu = mainMenu
+    NSApp.servicesMenu = mainMenu.item(withTitle: "Bex")?.submenu?
+      .item(withTitle: "Services")?.submenu
+    NSApp.windowsMenu = mainMenu.item(withTitle: "Window")?.submenu
+    NSApp.helpMenu = mainMenu.item(withTitle: "Help")?.submenu
+    trackShortcutItems(in: mainMenu)
+  }
+
+  static func makeMainMenu(
+    target: AnyObject?,
+    quickCheckChord: KeyChord,
+    fixAndSendChord: KeyChord
+  ) -> NSMenu {
     let mainMenu = NSMenu()
 
-    let appItem = NSMenuItem()
     let appMenu = NSMenu(title: "Bex")
-    appMenu.addItem(
-      withTitle: "Quit Bex",
-      action: #selector(NSApplication.terminate(_:)),
-      keyEquivalent: "q"
-    )
-    appItem.submenu = appMenu
-    mainMenu.addItem(appItem)
+    appMenu.addItem(command("About Bex", "orderFrontStandardAboutPanel:"))
+    appMenu.addItem(.separator())
+    appMenu.addItem(command("Settings…", "openSettings", ",", target: target))
+    appMenu.addItem(.separator())
+    let servicesItem = NSMenuItem(title: "Services", action: nil, keyEquivalent: "")
+    servicesItem.submenu = NSMenu(title: "Services")
+    appMenu.addItem(servicesItem)
+    appMenu.addItem(.separator())
+    appMenu.addItem(command("Hide Bex", "hide:", "h"))
+    let hideOthers = command("Hide Others", "hideOtherApplications:", "h")
+    hideOthers.keyEquivalentModifierMask = [.command, .option]
+    appMenu.addItem(hideOthers)
+    appMenu.addItem(command("Show All", "unhideAllApplications:"))
+    appMenu.addItem(.separator())
+    appMenu.addItem(command("Quit Bex", "terminate:", "q"))
+    mainMenu.addItem(rootItem(title: "Bex", submenu: appMenu))
 
-    let editItem = NSMenuItem()
     let editMenu = NSMenu(title: "Edit")
-    editMenu.addItem(
-      withTitle: "Undo",
-      action: NSSelectorFromString("undo:"),
-      keyEquivalent: "z"
-    )
-    let redo = editMenu.addItem(
-      withTitle: "Redo",
-      action: NSSelectorFromString("redo:"),
-      keyEquivalent: "Z"
-    )
+    editMenu.addItem(command("Undo", "undo:", "z"))
+    let redo = command("Redo", "redo:", "z")
     redo.keyEquivalentModifierMask = [.command, .shift]
+    editMenu.addItem(redo)
     editMenu.addItem(.separator())
-    editMenu.addItem(
-      withTitle: "Cut",
-      action: #selector(NSText.cut(_:)),
-      keyEquivalent: "x"
-    )
-    editMenu.addItem(
-      withTitle: "Copy",
-      action: #selector(NSText.copy(_:)),
-      keyEquivalent: "c"
-    )
-    editMenu.addItem(
-      withTitle: "Paste",
-      action: #selector(NSText.paste(_:)),
-      keyEquivalent: "v"
-    )
+    editMenu.addItem(command("Cut", "cut:", "x"))
+    editMenu.addItem(command("Copy", "copy:", "c"))
+    editMenu.addItem(command("Paste", "paste:", "v"))
+    let pasteAndMatch = command("Paste and Match Style", "pasteAsPlainText:", "v")
+    pasteAndMatch.keyEquivalentModifierMask = [.command, .option, .shift]
+    editMenu.addItem(pasteAndMatch)
+    editMenu.addItem(command("Delete", "delete:"))
+    editMenu.addItem(command("Select All", "selectAll:", "a"))
     editMenu.addItem(.separator())
-    editMenu.addItem(
-      withTitle: "Select All",
-      action: #selector(NSText.selectAll(_:)),
-      keyEquivalent: "a"
-    )
-    editItem.submenu = editMenu
-    mainMenu.addItem(editItem)
 
-    NSApp.mainMenu = mainMenu
+    let findMenu = NSMenu(title: "Find")
+    findMenu.addItem(command("Find…", "performFindPanelAction:", "f"))
+    findMenu.items.last?.tag = Int(NSFindPanelAction.showFindPanel.rawValue)
+    findMenu.addItem(command("Find Next", "performFindPanelAction:", "g"))
+    findMenu.items.last?.tag = Int(NSFindPanelAction.next.rawValue)
+    let findPrevious = command("Find Previous", "performFindPanelAction:", "g")
+    findPrevious.keyEquivalentModifierMask = [.command, .shift]
+    findPrevious.tag = Int(NSFindPanelAction.previous.rawValue)
+    findMenu.addItem(findPrevious)
+    findMenu.addItem(command("Use Selection for Find", "performFindPanelAction:", "e"))
+    findMenu.items.last?.tag = Int(NSFindPanelAction.setFindString.rawValue)
+    findMenu.addItem(command("Jump to Selection", "centerSelectionInVisibleArea:", "j"))
+    editMenu.addItem(rootItem(title: "Find", submenu: findMenu))
+
+    let spellingMenu = NSMenu(title: "Spelling and Grammar")
+    spellingMenu.addItem(command("Show Spelling and Grammar", "showGuessPanel:", ":"))
+    spellingMenu.addItem(command("Check Document Now", "checkSpelling:", ";"))
+    spellingMenu.addItem(.separator())
+    spellingMenu.addItem(command("Check Spelling While Typing", "toggleContinuousSpellChecking:"))
+    spellingMenu.addItem(command("Check Grammar With Spelling", "toggleGrammarChecking:"))
+    spellingMenu.addItem(command("Correct Spelling Automatically", "toggleAutomaticSpellingCorrection:"))
+    editMenu.addItem(rootItem(title: "Spelling and Grammar", submenu: spellingMenu))
+
+    let substitutionsMenu = NSMenu(title: "Substitutions")
+    substitutionsMenu.addItem(command("Show Substitutions", "orderFrontSubstitutionsPanel:"))
+    substitutionsMenu.addItem(.separator())
+    substitutionsMenu.addItem(command("Smart Copy/Paste", "toggleSmartInsertDelete:"))
+    substitutionsMenu.addItem(command("Smart Quotes", "toggleAutomaticQuoteSubstitution:"))
+    substitutionsMenu.addItem(command("Smart Dashes", "toggleAutomaticDashSubstitution:"))
+    substitutionsMenu.addItem(command("Smart Links", "toggleAutomaticLinkDetection:"))
+    substitutionsMenu.addItem(command("Data Detectors", "toggleAutomaticDataDetection:"))
+    substitutionsMenu.addItem(command("Text Replacement", "toggleAutomaticTextReplacement:"))
+    editMenu.addItem(rootItem(title: "Substitutions", submenu: substitutionsMenu))
+
+    let transformationsMenu = NSMenu(title: "Transformations")
+    transformationsMenu.addItem(command("Make Upper Case", "uppercaseWord:"))
+    transformationsMenu.addItem(command("Make Lower Case", "lowercaseWord:"))
+    transformationsMenu.addItem(command("Capitalize", "capitalizeWord:"))
+    editMenu.addItem(rootItem(title: "Transformations", submenu: transformationsMenu))
+
+    let speechMenu = NSMenu(title: "Speech")
+    speechMenu.addItem(command("Start Speaking", "startSpeaking:"))
+    speechMenu.addItem(command("Stop Speaking", "stopSpeaking:"))
+    editMenu.addItem(rootItem(title: "Speech", submenu: speechMenu))
+    mainMenu.addItem(rootItem(title: "Edit", submenu: editMenu))
+
+    let toolsMenu = NSMenu(title: "Tools")
+    toolsMenu.addItem(
+      shortcutCommand(
+        "Quick Check",
+        "openQuickCheck",
+        shortcut: .quickCheck,
+        chord: quickCheckChord,
+        target: target
+      )
+    )
+    toolsMenu.addItem(
+      shortcutCommand(
+        "Fix & Send…",
+        "openPromptGate",
+        shortcut: .fixAndSend,
+        chord: fixAndSendChord,
+        target: target
+      )
+    )
+    toolsMenu.addItem(.separator())
+    toolsMenu.addItem(command("History", "openHistory", target: target))
+    toolsMenu.addItem(command("Writing Styles", "openProfiles", target: target))
+    mainMenu.addItem(rootItem(title: "Tools", submenu: toolsMenu))
+
+    let windowMenu = NSMenu(title: "Window")
+    windowMenu.addItem(command("Close", "performClose:", "w"))
+    windowMenu.addItem(command("Minimize", "performMiniaturize:", "m"))
+    windowMenu.addItem(command("Zoom", "performZoom:"))
+    windowMenu.addItem(.separator())
+    windowMenu.addItem(command("Bring All to Front", "arrangeInFront:"))
+    mainMenu.addItem(rootItem(title: "Window", submenu: windowMenu))
+
+    let helpMenu = NSMenu(title: "Help")
+    helpMenu.addItem(command("Welcome to Bex", "openWelcome", target: target))
+    mainMenu.addItem(rootItem(title: "Help", submenu: helpMenu))
+    return mainMenu
   }
 
   private func installStatusItem() {
@@ -240,34 +381,132 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       button.setAccessibilityLabel("Bex")
     }
 
-    let menu = NSMenu()
-    let quickCheck = NSMenuItem(
-      title: "Quick Check",
-      action: #selector(openQuickCheck),
-      keyEquivalent: "g"
+    let menu = Self.makeStatusMenu(
+      target: self,
+      quickCheckChord: shortcutChords[.quickCheck] ?? .defaultQuickCheck,
+      fixAndSendChord: shortcutChords[.fixAndSend] ?? .defaultFixAndSend
     )
-    quickCheck.keyEquivalentModifierMask = [.command, .shift]
-    quickCheck.target = self
-    menu.addItem(quickCheck)
-    menu.addItem(menuItem(title: "History", action: #selector(openHistory)))
-    menu.addItem(menuItem(title: "Profiles", action: #selector(openProfiles)))
-    menu.addItem(menuItem(title: "Settings", action: #selector(openSettings)))
-    menu.addItem(.separator())
-    menu.addItem(menuItem(title: "Quit Bex", action: #selector(quit), keyEquivalent: "q"))
-
     item.menu = menu
     statusItem = item
     statusMenu = menu
+    trackShortcutItems(in: menu)
   }
 
-  private func menuItem(
-    title: String,
-    action: Selector,
-    keyEquivalent: String = ""
+  static func makeStatusMenu(
+    target: AnyObject?,
+    quickCheckChord: KeyChord,
+    fixAndSendChord: KeyChord
+  ) -> NSMenu {
+    let menu = NSMenu()
+    menu.addItem(
+      shortcutCommand(
+        "Quick Check",
+        "openQuickCheck",
+        shortcut: .quickCheck,
+        chord: quickCheckChord,
+        target: target
+      )
+    )
+    menu.addItem(
+      shortcutCommand(
+        "Fix & Send…",
+        "openPromptGate",
+        shortcut: .fixAndSend,
+        chord: fixAndSendChord,
+        target: target
+      )
+    )
+    menu.addItem(command("History", "openHistory", target: target))
+    menu.addItem(command("Writing Styles", "openProfiles", target: target))
+    menu.addItem(command("Settings…", "openSettings", target: target))
+    menu.addItem(.separator())
+    menu.addItem(command("Welcome to Bex", "openWelcome", target: target))
+    menu.addItem(command("About Bex", "orderFrontStandardAboutPanel:"))
+    menu.addItem(.separator())
+    menu.addItem(command("Quit Bex", "quit", "q", target: target))
+    return menu
+  }
+
+  private static func command(
+    _ title: String,
+    _ actionName: String,
+    _ keyEquivalent: String = "",
+    target: AnyObject? = nil
   ) -> NSMenuItem {
-    let item = NSMenuItem(title: title, action: action, keyEquivalent: keyEquivalent)
-    item.target = self
+    let item = NSMenuItem(
+      title: title,
+      action: NSSelectorFromString(actionName),
+      keyEquivalent: keyEquivalent
+    )
+    item.target = target
     return item
+  }
+
+  private static func shortcutCommand(
+    _ title: String,
+    _ actionName: String,
+    shortcut: BexShortcut,
+    chord: KeyChord,
+    target: AnyObject?
+  ) -> NSMenuItem {
+    let item = command(title, actionName, chord.keyEquivalent, target: target)
+    item.keyEquivalentModifierMask = chord.modifierMask
+    item.identifier = NSUserInterfaceItemIdentifier("bex-shortcut-\(shortcut.rawValue)")
+    return item
+  }
+
+  private static func rootItem(title: String, submenu: NSMenu) -> NSMenuItem {
+    let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+    item.submenu = submenu
+    return item
+  }
+
+  private func trackShortcutItems(in menu: NSMenu) {
+    for item in menu.items {
+      if let identifier = item.identifier?.rawValue,
+        identifier.hasPrefix("bex-shortcut-"),
+        let rawValue = UInt32(identifier.dropFirst("bex-shortcut-".count)),
+        let shortcut = BexShortcut(rawValue: rawValue)
+      {
+        shortcutMenuItems[shortcut, default: []].append(item)
+      }
+      if let submenu = item.submenu {
+        trackShortcutItems(in: submenu)
+      }
+    }
+  }
+
+  private func refreshShortcutMenuItems() {
+    for (shortcut, items) in shortcutMenuItems {
+      let chord = shortcutChords[shortcut] ?? shortcut.defaultChord
+      for item in items {
+        item.keyEquivalent = chord.keyEquivalent
+        item.keyEquivalentModifierMask = chord.modifierMask
+      }
+    }
+  }
+
+  private func replaceShortcut(_ shortcut: BexShortcut, with chord: KeyChord) throws {
+    guard let globalHotKey else {
+      throw HotKeyRegistrationError.updaterUnavailable
+    }
+    try globalHotKey.replace(
+      Shortcut(id: shortcut.rawValue, chord: chord),
+      action: shortcutAction(for: shortcut)
+    )
+    shortcutChords[shortcut] = chord
+    refreshShortcutMenuItems()
+  }
+
+  private func shortcutAction(for shortcut: BexShortcut) -> @MainActor () -> Void {
+    { [weak self] in
+      switch shortcut {
+      case .quickCheck:
+        self?.openQuickCheck()
+      case .fixAndSend:
+        self?.openPromptGate()
+      }
+    }
   }
 
   private func showHotKeyConflict(_ title: String) {
@@ -294,6 +533,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         name: Notification.Name("com.bex.desktop.ui-testing.open-prompt-gate"),
         object: nil
       )
+      center.addObserver(
+        self,
+        selector: #selector(releaseGrammarForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.release-grammar"),
+        object: nil
+      )
+      center.addObserver(
+        self,
+        selector: #selector(releaseDeliveryForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.release-delivery"),
+        object: nil
+      )
     }
 
     @objc private func openQuickCheckForUITesting(_ notification: Notification) {
@@ -303,6 +554,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openPromptGateForUITesting(_ notification: Notification) {
       openPromptGate()
     }
+    @objc private func releaseGrammarForUITesting(_ notification: Notification) {
+      guard let grammar = services?.grammar as? UITestingGrammarService else { return }
+      Task { await grammar.releaseCheck() }
+    }
+
+    @objc private func releaseDeliveryForUITesting(_ notification: Notification) {
+      guard let target = services?.promptTarget as? UITestingPromptTargetService else { return }
+      Task { await target.releaseDelivery() }
+    }
+
   #endif
 
   private func announceTrayReady() {
@@ -328,6 +589,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func openProfiles() {
     coordinator().showProfiles()
+  }
+
+  @objc private func openWelcome() {
+    coordinator().showWelcome()
   }
 
   @objc private func openSettings() {

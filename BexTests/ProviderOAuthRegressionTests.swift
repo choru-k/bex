@@ -48,8 +48,7 @@ struct ModelCatalogGrammarStub: GrammarServicing {
 
   func check(
     text: String,
-    provider: LLMProvider,
-    model: String,
+    destination: OutboundDestination,
     profilePrompt: String?
   ) async throws -> GrammarResult {
     throw BexError.invalidResponse
@@ -58,16 +57,14 @@ struct ModelCatalogGrammarStub: GrammarServicing {
   func rewrite(
     text: String,
     intent: RewriteIntent,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> String {
     throw BexError.invalidResponse
   }
 
   func generateProfile(
     context: ProfileContext,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> String {
     throw BexError.invalidResponse
   }
@@ -616,7 +613,9 @@ final class ProviderOAuthRegressionTests: XCTestCase {
 
     for provider in [LLMProvider.openAI, .claude, .gemini] {
       let error = await capturedError {
-        _ = try await factory.makeClient(for: provider)
+        _ = try await factory.makeClient(
+          for: OutboundDestination(provider: provider, model: provider.defaultModel)
+        )
       }
       XCTAssertEqual(error, .missingSetup(provider))
     }

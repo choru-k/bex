@@ -3,6 +3,15 @@ import Foundation
 
 @MainActor
 final class PromptGateViewModel: ObservableObject {
+  private struct PendingCorrection {
+    let sessionID: UUID
+    let generation: UUID
+    let original: String
+    let destination: OutboundDestination
+    let protectedText: PromptTechnicalSpanProtector.ProtectedText
+    let forcesConfirmation: Bool
+  }
+
   @Published private(set) var phase: PromptGatePhase = .closed
   @Published private(set) var session: PromptGateSession?
   @Published var draft = ""
@@ -13,8 +22,16 @@ final class PromptGateViewModel: ObservableObject {
   @Published private(set) var deliveryMode: PromptDeliveryMode = .sendAfterApproval
   @Published private(set) var selectedClientStatus: HookInstallationStatus = .notInstalled
   @Published private(set) var providerIsSetUp = false
+  @Published private(set) var isLoadingSession = false
   @Published private(set) var isAccessibilityTrusted = false
+  @Published private(set) var accessibilityStatusMessage: String?
   @Published private(set) var errorMessage: String?
+  @Published private(set) var deliveryFailureEffect: PromptDeliveryEffect?
+  @Published private(set) var focusRequest: PromptGateFocusRequest?
+  @Published private(set) var accessibilityAnnouncement: String?
+  @Published private(set) var showsDiscardConfirmation = false
+  @Published private(set) var showsCheckpointReplacementConfirmation = false
+  private(set) var accessibilityAnnouncementHistory: [String] = []
 
   private let preferences: PreferencesStore
   private let keychain: KeychainStore
@@ -28,8 +45,18 @@ final class PromptGateViewModel: ObservableObject {
 
   private var currentTask: Task<Void, Never>?
   private var currentWorkID: UUID?
+  private var retiredTasks: [Task<Void, Never>] = []
   private var generation = UUID()
   private var activeReceiptID: UUID?
+  private var checkpoint: PromptGateReview?
+  private var confirmedOutboundDraft: String?
+  private var confirmedOutboundDestination: OutboundDestination?
+  private var configuredDestination: OutboundDestination?
+  private var replacementConfirmedDraft: String?
+  private var confirmationPolicy: OutboundConfirmationPolicy = .alwaysConfirm
+  private var hasAcceptedDestinationDisclosure = false
+  private var isClosing = false
+  private var pendingCorrection: PendingCorrection?
 
   init(
     preferences: PreferencesStore,
@@ -55,17 +82,115 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   var clientIsLocked: Bool { session?.knownClient != nil }
-  var canReview: Bool {
-    phase == .composing && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  var providerDisclosureIsAccepted: Bool { hasAcceptedDestinationDisclosure }
+  var needsProviderSetup: Bool { !providerIsSetUp }
+
+  var hasTerminalDeliveryFailure: Bool {
+    deliveryFailureEffect.map { !$0.isFullRetrySafe } ?? false
   }
+
+  var canReview: Bool {
+    phase == .composing
+      && providerIsSetUp
+      && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
   var canApprove: Bool {
     phase == .reviewing
       && review?.corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      && (deliveryFailureEffect == nil || deliveryFailureEffect?.isFullRetrySafe == true)
   }
+
+  var isNoChangeReview: Bool {
+    review?.hasChanges == false
+  }
+
+  var accessibleDiffSummary: String {
+    guard let review else { return "No differences" }
+    return AccessibleDiffSummary.make(from: review.diff)
+  }
+
   var providerDisclosure: String {
-    selectedProvider == .ollama
-      ? "Ollama processes the original draft locally."
-      : "Cloud correction sends the original draft to \(selectedProvider.displayName)."
+    guard let destination = pendingCorrection?.destination ?? configuredDestination else {
+      return "Bex cannot prepare an outbound destination until the provider setup is valid."
+    }
+    return
+      "Bex will send the masked payload below to \(destination.disclosureTarget), model \(destination.model)."
+  }
+
+  var protectedSpanDisclosure: String {
+    let kinds = PromptTechnicalSpanProtector.userFacingProtectedSpanKinds.joined(separator: ", ")
+    let provider = (pendingCorrection?.destination ?? configuredDestination)?.provider
+      ?? selectedProvider
+    return
+      "Before the request, Bex replaces recognized \(kinds) with placeholders and restores those recognized spans locally after correction. Unmatched prose and unrecognized sensitive text remain visible to \(provider.displayName)."
+  }
+
+  var outboundPayload: String {
+    pendingCorrection?.protectedText.masked ?? ""
+  }
+
+  var confirmationActionLabel: String {
+    let provider = (pendingCorrection?.destination ?? configuredDestination)?.provider
+      ?? selectedProvider
+    return provider == .ollama
+      ? "Check with Ollama"
+      : "Send to \(provider.displayName) for Check"
+  }
+
+  var composerPrimaryActionLabel: String {
+    if let checkpoint, checkpoint.original == draft {
+      return "Return to Review"
+    }
+    if checkpoint != nil {
+      return "Check Again with \(selectedProvider.displayName)"
+    }
+    return "Check with \(selectedProvider.displayName)"
+  }
+
+  var availableDeliveryActions: [PromptDeliveryAction] {
+    guard phase == .reviewing, let target = session?.target else { return [] }
+    if hasTerminalDeliveryFailure {
+      return []
+    }
+    return target.availableDeliveryActions
+  }
+
+  var primaryDeliveryAction: PromptDeliveryAction? {
+    guard let target = session?.target else { return nil }
+    if session?.hookRequestID != nil {
+      return target.availableDeliveryActions.first
+    }
+    switch target.kind {
+    case .copyOnly:
+      return .copyCorrection
+    case .composerPaste:
+      return .pasteInDestination
+    case .capturedField:
+      return deliveryMode == .sendAfterApproval ? .pasteAndSubmit : .pasteInDestination
+    }
+  }
+
+  var destinationLabel: String {
+    session?.target.destinationLabel ?? "destination"
+  }
+
+  var permissionGuidance: String {
+    guard let session else { return "" }
+    if session.hookRequestID != nil {
+      if isAccessibilityTrusted, session.target.kind == .composerPaste {
+        return
+          "This client hook supplied the prompt. Accessibility is used only to paste the approved correction; Bex will not press Return."
+      }
+      return
+        "This client hook supplied the prompt without using Accessibility. You can still review it; Bex will copy the approved correction for manual replacement."
+    }
+    if isAccessibilityTrusted {
+      return
+        "Accessibility enables manual capture and replacement in other apps. If access was just granted, invoke Fix & Send again to capture the focused field."
+    }
+    return
+      "Accessibility is required only for manual capture and replacement. Without it, Fix & Send is copy-only. Grant access, then invoke Fix & Send again. Enabled client hooks can still supply prompts without this permission."
   }
 
   @discardableResult
@@ -78,8 +203,22 @@ final class PromptGateViewModel: ObservableObject {
     self.session = session
     draft = session.initialDraft
     review = nil
+    checkpoint = nil
+    confirmedOutboundDraft = nil
+    confirmedOutboundDestination = nil
+    configuredDestination = nil
+    pendingCorrection = nil
+    replacementConfirmedDraft = nil
+    isClosing = false
+    deliveryFailureEffect = nil
     errorMessage = nil
-    phase = .composing
+    accessibilityStatusMessage = nil
+    showsDiscardConfirmation = false
+    showsCheckpointReplacementConfirmation = false
+    accessibilityAnnouncement = nil
+    accessibilityAnnouncementHistory = []
+    isLoadingSession = true
+    phase = .onboarding
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
 
     let workID = UUID()
@@ -95,46 +234,129 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   func acceptDisclosure() {
-    guard phase == .onboarding, let session else { return }
+    guard phase == .onboarding,
+      !isLoadingSession,
+      providerIsSetUp,
+      let session,
+      let pendingCorrection,
+      pendingCorrection.sessionID == session.id,
+      pendingCorrection.generation == generation,
+      pendingCorrection.original == draft,
+      pendingCorrection.destination == configuredDestination
+    else {
+      return
+    }
+    let outboundDraft = pendingCorrection.original
+    let destination = pendingCorrection.destination
     let sessionGeneration = generation
     let workID = UUID()
     currentWorkID = workID
     currentTask = Task { @MainActor [weak self] in
       guard let self else { return }
-      await preferences.setPromptGateDisclosureAccepted(true)
-      guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+      let setup = await providerIsSetUp(for: destination)
+      guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+        self.draft == outboundDraft,
+        self.configuredDestination == destination,
+        self.pendingCorrection?.destination == destination,
+        self.pendingCorrection?.protectedText.masked == pendingCorrection.protectedText.masked,
+        setup
+      else {
+        if self.isCurrent(sessionID: session.id, generation: sessionGeneration), !setup {
+          providerIsSetUp = false
+          phase = .composing
+          errorMessage =
+            "Set up \(destination.provider.displayName) in Settings, then return to Fix & Send."
+          requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
+        }
         self.finishWork(workID)
         return
       }
-      self.finishWork(workID)
-      if self.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        self.phase = .composing
-      } else {
-        self.startCorrection()
+      await preferences.acceptCurrentOutboundDisclosure(for: destination)
+      guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+        self.draft == outboundDraft,
+        self.configuredDestination == destination,
+        self.pendingCorrection?.destination == destination
+      else {
+        self.finishWork(workID)
+        return
       }
+      hasAcceptedDestinationDisclosure = true
+      confirmedOutboundDraft = outboundDraft
+      confirmedOutboundDestination = destination
+      finishWork(workID)
+      gateCorrection(pendingCorrection)
     }
   }
 
   func requestAccessibility() {
+    let wasTrusted = isAccessibilityTrusted
     isAccessibilityTrusted = targetService.requestAccessibilityTrust()
+    updateAccessibilityStatus(wasTrusted: wasTrusted)
+  }
+
+  func refreshAccessibilityState() {
+    let wasTrusted = isAccessibilityTrusted
+    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    updateAccessibilityStatus(wasTrusted: wasTrusted)
   }
 
   func check() {
     guard phase == .composing else { return }
     guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       errorMessage = BexError.emptyInput.localizedDescription
+      requestFocus(keyboard: .draftEditor, accessibility: .errorHeading)
+      announce(errorMessage ?? "The prompt is empty.")
       return
     }
-    startCorrection()
+
+    if let checkpoint, checkpoint.original == draft {
+      review = checkpoint
+      errorMessage = nil
+      deliveryFailureEffect = nil
+      phase = .reviewing
+      focusReview(checkpoint)
+      return
+    }
+
+    if checkpoint?.hasHumanEdits == true, replacementConfirmedDraft != draft {
+      showsCheckpointReplacementConfirmation = true
+      requestFocus(keyboard: .primaryAction, accessibility: .discardAlert)
+      announce(
+        "Replace edited correction? Checking this changed source will replace the human-edited correction checkpoint."
+      )
+      return
+    }
+
+    prepareCorrection()
+  }
+
+  func confirmCheckpointReplacement() {
+    guard showsCheckpointReplacementConfirmation, phase == .composing else { return }
+    showsCheckpointReplacementConfirmation = false
+    replacementConfirmedDraft = draft
+    prepareCorrection()
+  }
+
+  func keepCheckpoint() {
+    showsCheckpointReplacementConfirmation = false
+    requestFocus(keyboard: .draftEditor, accessibility: .composerHeading)
   }
 
   func approve() {
+    guard let action = primaryDeliveryAction else { return }
+    performDelivery(action)
+  }
+
+  func performDelivery(_ action: PromptDeliveryAction) {
     guard phase == .reviewing,
       let session,
       let review,
-      !review.corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      !review.corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      availableDeliveryActions.contains(action)
     else {
-      if phase == .reviewing {
+      if phase == .reviewing,
+        self.review?.corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
+      {
         errorMessage = BexError.emptyInput.localizedDescription
       }
       return
@@ -143,8 +365,11 @@ final class PromptGateViewModel: ObservableObject {
     let correction = review.corrected
     let client = session.knownClient ?? selectedClient
     let sessionGeneration = generation
+    deliveryFailureEffect = nil
     phase = .delivering
     errorMessage = nil
+    announce("Delivering the correction to \(session.target.destinationLabel).")
+    showsDiscardConfirmation = false
 
     let workID = UUID()
     currentWorkID = workID
@@ -161,8 +386,11 @@ final class PromptGateViewModel: ObservableObject {
 
         if session.hookRequestID != nil {
           guard status.permitsReceipt else {
-            throw BexError.promptDeliveryFailed(
-              "Bex could not authorize this corrected prompt."
+            throw PromptDeliveryFailure(
+              effect: .none,
+              underlyingError: BexError.promptDeliveryFailed(
+                "Bex could not authorize this corrected prompt."
+              )
             )
           }
           let context = session.target.hookContext
@@ -176,65 +404,538 @@ final class PromptGateViewModel: ObservableObject {
         }
 
         if let requestID = session.hookRequestID {
-          try await hookResponder.complete(
-            requestID: requestID,
-            outcome: .approved,
-            awaitAcknowledgement: true
-          )
+          do {
+            try await hookResponder.complete(
+              requestID: requestID,
+              outcome: .approved,
+              awaitAcknowledgement: true
+            )
+          } catch {
+            throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
+          }
         }
         try Task.checkCancellation()
         guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
           throw CancellationError()
         }
 
-        let pressReturn = deliveryMode == .sendAfterApproval
-          && session.target.supportsAutomaticSubmit
-        _ = try await targetService.deliver(
+        let outcome = try await targetService.deliver(
           correction,
           to: session.target,
-          pressReturn: pressReturn
+          action: action
         )
         activeReceiptID = nil
         finishWork(workID)
+        announce(successAnnouncement(for: outcome, target: session.target))
         closeCurrentSession()
       } catch is CancellationError {
         if let issuedReceipt {
           try? await approvalStore.revoke(id: issuedReceipt)
         }
+        guard !self.isClosing else { return }
         if self.isCurrent(sessionID: session.id, generation: sessionGeneration),
           phase != .invalidated
         {
           activeReceiptID = nil
           phase = .reviewing
           finishWork(workID)
+          focusReview(review)
         }
       } catch {
         if let issuedReceipt {
           try? await approvalStore.revoke(id: issuedReceipt)
         }
+        guard !self.isClosing else { return }
         guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
           self.finishWork(workID)
           return
         }
         activeReceiptID = nil
+        let failure =
+          error as? PromptDeliveryFailure
+          ?? PromptDeliveryFailure(effect: .none, underlyingError: error)
+        deliveryFailureEffect = failure.effect
         phase = .reviewing
-        errorMessage = self.message(for: error)
+        errorMessage = recoveryMessage(for: failure, action: action, target: session.target)
+        requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
+        announce(errorMessage ?? "Delivery failed.")
         finishWork(workID)
       }
     }
   }
 
+  func finishAfterPartialDelivery() {
+    guard phase == .reviewing,
+      let effect = deliveryFailureEffect,
+      !effect.isFullRetrySafe
+    else { return }
+    closeCurrentSession()
+  }
+
   func backToEdit() {
-    guard phase == .reviewing, let review else { return }
+    guard phase == .reviewing, !hasTerminalDeliveryFailure, let review else { return }
+    checkpoint = review
     draft = review.original
     self.review = nil
     errorMessage = nil
+    deliveryFailureEffect = nil
     phase = .composing
+    requestFocus(keyboard: .draftEditor, accessibility: .composerHeading)
+    announce("Back to the prompt editor. The correction is checkpointed.")
   }
 
   func cancel() {
+    guard session != nil, phase != .closed, phase != .delivering else { return }
+    if hasTerminalDeliveryFailure {
+      finishAfterPartialDelivery()
+      return
+    }
+    if hasUndeliveredHumanEdits {
+      showsDiscardConfirmation = true
+      requestFocus(keyboard: .primaryAction, accessibility: .discardAlert)
+      announce(
+        "Discard your correction edits? The AI correction will remain available only if you keep editing."
+      )
+      return
+    }
+    discardCurrentSession()
+  }
+
+  func confirmDiscard() {
+    guard showsDiscardConfirmation, phase != .delivering, !hasTerminalDeliveryFailure else {
+      return
+    }
+    showsDiscardConfirmation = false
+    discardCurrentSession()
+  }
+
+  func keepEditing() {
+    showsDiscardConfirmation = false
+    if phase == .reviewing, let review {
+      focusReview(review)
+    } else {
+      requestFocus(keyboard: .draftEditor, accessibility: .composerHeading)
+    }
+  }
+
+  func invalidateHookRequest(id: UUID) {
+    guard session?.hookRequestID == id, phase != .closed else { return }
+    retireCurrentTask()
+    let receiptID = activeReceiptID
+    activeReceiptID = nil
+    generation = UUID()
+    phase = .invalidated
+    errorMessage =
+      "This hook request is no longer active. The original prompt remained blocked; invoke the client action again."
+    currentWorkID = nil
+    currentTask = nil
+    requestFocus(keyboard: .recoveryAction, accessibility: .statusHeading)
+    announce(errorMessage ?? "The hook request is no longer active.")
+    if let receiptID {
+      Task { try? await approvalStore.revoke(id: receiptID) }
+    }
+  }
+
+  func waitForCurrentWork() async {
+    while currentTask != nil || !retiredTasks.isEmpty {
+      if let task = currentTask {
+        await task.value
+      }
+      let retiredCount = retiredTasks.count
+      for task in retiredTasks.prefix(retiredCount) {
+        await task.value
+      }
+      retiredTasks.removeFirst(min(retiredCount, retiredTasks.count))
+    }
+  }
+
+  func updateCorrected(_ value: String) {
+    guard phase == .reviewing, var review else { return }
+    let previouslyHadChanges = review.hasChanges
+    review.updateCorrected(value)
+    self.review = review
+    errorMessage =
+      value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? BexError.emptyInput.localizedDescription
+      : nil
+    if review.hasChanges != previouslyHadChanges {
+      let accessibilityFocus: PromptGateAccessibilityFocus =
+        review.hasChanges
+        ? .changesHeading
+        : .noChangesHeading
+      requestFocus(keyboard: .correctedEditor, accessibility: accessibilityFocus)
+    }
+  }
+
+  func setSelectedClient(_ client: PromptClient) {
+    guard !clientIsLocked, phase == .composing || phase == .reviewing else { return }
+    selectedClient = client
+    Task { await preferences.setPreferredPromptClient(client) }
+  }
+
+  func openSettings() {
+    openSettingsCallback()
+  }
+
+  func refreshConfigurationAfterSettings() async {
     guard let session, phase != .closed else { return }
+    let sessionID = session.id
+    let sessionGeneration = generation
+    let provider = await preferences.selectedProvider()
+    let model = await preferences.selectedModel(for: provider)
+    let preferredClient = await preferences.preferredPromptClient()
+    let mode = await preferences.promptDeliveryMode()
+    let policy = await preferences.outboundConfirmationPolicy()
+    let destination: OutboundDestination?
+    let destinationErrorMessage: String?
+    do {
+      destination = try await preferences.outboundDestination()
+      destinationErrorMessage = nil
+    } catch {
+      destination = nil
+      destinationErrorMessage = error.localizedDescription
+    }
+    let acceptedDisclosure =
+      if let destination {
+        await preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+      } else {
+        false
+      }
+    let setup =
+      if let destination {
+        await providerIsSetUp(for: destination)
+      } else {
+        false
+      }
+    let refreshedClient = session.knownClient ?? preferredClient
+    let clientStatus = await hookManager.status(for: refreshedClient)
+    guard isCurrent(sessionID: sessionID, generation: sessionGeneration) else { return }
+
+    let destinationChanged = configuredDestination != destination
+    let wasAccessibilityTrusted = isAccessibilityTrusted
+    selectedProvider = destination?.provider ?? provider
+    selectedModel = destination?.model ?? model
+    configuredDestination = destination
+    selectedClient = refreshedClient
+    deliveryMode = mode
+    confirmationPolicy = policy
+    hasAcceptedDestinationDisclosure = acceptedDisclosure
+    providerIsSetUp = setup
+    selectedClientStatus = clientStatus
+    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if destinationChanged {
+      confirmedOutboundDraft = nil
+      confirmedOutboundDestination = nil
+      pendingCorrection = nil
+    }
+    if let destinationErrorMessage {
+      if phase == .onboarding {
+        phase = .composing
+      }
+      errorMessage = destinationErrorMessage
+      requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
+    } else if destinationChanged, phase == .onboarding,
+      !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      let destination
+    {
+      let pending = PendingCorrection(
+        sessionID: session.id,
+        generation: sessionGeneration,
+        original: draft,
+        destination: destination,
+        protectedText: PromptTechnicalSpanProtector().protect(draft),
+        forcesConfirmation: true
+      )
+      pendingCorrection = pending
+      gateCorrection(pending)
+    }
+    if wasAccessibilityTrusted != isAccessibilityTrusted {
+      updateAccessibilityStatus(wasTrusted: wasAccessibilityTrusted)
+    }
+  }
+
+  func deliveryActionLabel(_ action: PromptDeliveryAction) -> String {
+    guard let session else { return "Deliver Correction" }
+    let targetLabel = session.target.label(for: action)
+    return session.hookRequestID == nil ? targetLabel : "Acknowledge & \(targetLabel)"
+  }
+
+  func deliveryEffectDescription(for action: PromptDeliveryAction) -> String {
+    guard let target = session?.target else { return "" }
+    switch action {
+    case .copyCorrection:
+      return "Copies the correction to the Clipboard. Nothing is pasted or submitted."
+    case .pasteInDestination:
+      return "Pastes the correction in \(target.applicationName). Bex will not press Return."
+    case .pasteAndSubmit:
+      return
+        "Pastes the correction in \(target.applicationName), verifies it, then presses Return once."
+    }
+  }
+
+  private var hasUndeliveredHumanEdits: Bool {
+    let hasHumanEdits = review?.hasHumanEdits == true || checkpoint?.hasHumanEdits == true
+    let hasMeaningfulDeliveryEffect = deliveryFailureEffect.map { $0 != .none } ?? false
+    return hasHumanEdits && !hasMeaningfulDeliveryEffect
+  }
+
+  private func providerIsSetUp(for destination: OutboundDestination) async -> Bool {
+    if destination.provider == .ollama {
+      return true
+    }
+    return (try? await keychain.hasSetup(for: destination.provider)) ?? false
+  }
+
+  private func loadSession(sessionID: UUID, generation: UUID, workID: UUID) async {
+    let provider = await preferences.selectedProvider()
+    let model = await preferences.selectedModel(for: provider)
+    let preferredClient = await preferences.preferredPromptClient()
+    let mode = await preferences.promptDeliveryMode()
+    let policy = await preferences.outboundConfirmationPolicy()
+    let destination: OutboundDestination?
+    let destinationErrorMessage: String?
+    do {
+      destination = try await preferences.outboundDestination()
+      destinationErrorMessage = nil
+    } catch {
+      destination = nil
+      destinationErrorMessage = error.localizedDescription
+    }
+    let acceptedDisclosure =
+      if let destination {
+        await preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+      } else {
+        false
+      }
+    let setup =
+      if let destination {
+        await providerIsSetUp(for: destination)
+      } else {
+        false
+      }
+    guard isCurrent(sessionID: sessionID, generation: generation), let session else {
+      finishWork(workID)
+      return
+    }
+
+    selectedProvider = destination?.provider ?? provider
+    selectedModel = destination?.model ?? model
+    configuredDestination = destination
+    selectedClient = session.knownClient ?? preferredClient
+    deliveryMode = mode
+    confirmationPolicy = policy
+    hasAcceptedDestinationDisclosure = acceptedDisclosure
+    providerIsSetUp = setup
+    selectedClientStatus = await hookManager.status(for: selectedClient)
+    guard isCurrent(sessionID: sessionID, generation: generation) else {
+      finishWork(workID)
+      return
+    }
+    isLoadingSession = false
+    finishWork(workID)
+
+    if let destinationErrorMessage {
+      phase = .composing
+      errorMessage = destinationErrorMessage
+      requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
+    } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+      phase = .composing
+      requestFocus(keyboard: .draftEditor, accessibility: .composerHeading)
+    } else if let destination {
+      prepareCorrection(using: destination)
+    }
+  }
+
+  private func prepareCorrection(
+    using frozenDestination: OutboundDestination? = nil,
+    forcesConfirmation: Bool = false
+  ) {
+    guard let session else { return }
+    let original = draft
+    guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      phase = .composing
+      errorMessage = BexError.emptyInput.localizedDescription
+      return
+    }
+
+    let sessionGeneration = generation
+    retireCurrentTask()
+    let workID = UUID()
+    currentWorkID = workID
+    currentTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let destination =
+          if let frozenDestination {
+            frozenDestination
+          } else {
+            try await preferences.outboundDestination()
+          }
+        let policy = await preferences.outboundConfirmationPolicy()
+        let acceptedDisclosure = await preferences.hasAcceptedCurrentOutboundDisclosure(
+          for: destination
+        )
+        let setup = await providerIsSetUp(for: destination)
+        guard self.currentWorkID == workID,
+          self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+          self.draft == original
+        else {
+          self.finishWork(workID)
+          return
+        }
+
+        selectedProvider = destination.provider
+        selectedModel = destination.model
+        configuredDestination = destination
+        confirmationPolicy = policy
+        hasAcceptedDestinationDisclosure = acceptedDisclosure
+        providerIsSetUp = setup
+        let pending = PendingCorrection(
+          sessionID: session.id,
+          generation: sessionGeneration,
+          original: original,
+          destination: destination,
+          protectedText: PromptTechnicalSpanProtector().protect(original),
+          forcesConfirmation: forcesConfirmation
+        )
+        pendingCorrection = pending
+        finishWork(workID)
+        gateCorrection(pending)
+      } catch {
+        guard self.currentWorkID == workID,
+          self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+          self.draft == original
+        else {
+          self.finishWork(workID)
+          return
+        }
+        configuredDestination = nil
+        pendingCorrection = nil
+        providerIsSetUp = false
+        phase = .composing
+        errorMessage = error.localizedDescription
+        finishWork(workID)
+        requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
+      }
+    }
+  }
+
+  private func gateCorrection(_ pending: PendingCorrection) {
+    guard let session,
+      pending.sessionID == session.id,
+      pending.generation == generation,
+      pending.original == draft,
+      pending.destination == configuredDestination
+    else {
+      return
+    }
+
+    guard providerIsSetUp else {
+      phase = .composing
+      errorMessage =
+        "Set up \(pending.destination.provider.displayName) in Settings, then return to Fix & Send."
+      requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
+      announce(errorMessage ?? "Correction provider setup is required.")
+      return
+    }
+
+    let requiresConfirmation =
+      pending.forcesConfirmation
+      || confirmationPolicy.requiresConfirmation(
+        for: session.source.outboundConfirmationContext,
+        hasAcceptedDisclosure: hasAcceptedDestinationDisclosure
+      )
+    if requiresConfirmation,
+      confirmedOutboundDraft != pending.original
+        || confirmedOutboundDestination != pending.destination
+    {
+      phase = .onboarding
+      errorMessage = nil
+      requestFocus(keyboard: .primaryAction, accessibility: .disclosureHeading)
+      announce(
+        "Review the outbound payload for \(pending.destination.disclosureTarget), model \(pending.destination.model). \(protectedSpanDisclosure)"
+      )
+      return
+    }
+    startCorrection(pending)
+  }
+
+  private func startCorrection(_ pending: PendingCorrection) {
+    guard let session,
+      pending.sessionID == session.id,
+      pending.generation == generation,
+      pending.original == draft,
+      pending.destination == configuredDestination
+    else {
+      return
+    }
+
+    let destination = pending.destination
+    let sessionGeneration = pending.generation
+    phase = .checking
+    errorMessage = nil
+    deliveryFailureEffect = nil
+    review = nil
+    announce("Checking the prompt with \(destination.provider.displayName).")
+
+    let workID = UUID()
+    currentWorkID = workID
+    currentTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let result = try await promptGrammar.checkPrompt(
+          protectedText: pending.protectedText,
+          destination: destination
+        )
+        try Task.checkCancellation()
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+          phase == .checking
+        else {
+          self.finishWork(workID)
+          return
+        }
+        let completedReview = PromptGateReview(
+          original: pending.original,
+          corrected: result.corrected,
+          explanation: result.explanation
+        )
+        checkpoint = nil
+        replacementConfirmedDraft = nil
+        review = completedReview
+        phase = .reviewing
+        finishWork(workID)
+        focusReview(completedReview)
+      } catch is CancellationError {
+        self.finishWork(workID)
+      } catch {
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+          self.finishWork(workID)
+          return
+        }
+        phase = .composing
+        errorMessage = message(for: error)
+        finishWork(workID)
+        requestFocus(keyboard: .draftEditor, accessibility: .errorHeading)
+        announce(errorMessage ?? "Prompt check failed.")
+      }
+    }
+  }
+
+  private func focusReview(_ review: PromptGateReview) {
+    let accessibilityFocus: PromptGateAccessibilityFocus =
+      review.hasChanges
+      ? .changesHeading
+      : .noChangesHeading
+    requestFocus(keyboard: .correctedEditor, accessibility: accessibilityFocus)
+    let heading = review.hasChanges ? "Changes ready." : "No Changes."
+    announce("\(heading) \(AccessibleDiffSummary.make(from: review.diff))")
+  }
+
+  private func discardCurrentSession() {
+    guard let session, phase != .closed, !isClosing else { return }
+    isClosing = true
     currentTask?.cancel()
+    generation = UUID()
     let receiptID = activeReceiptID
     activeReceiptID = nil
     let sessionGeneration = generation
@@ -263,132 +964,74 @@ final class PromptGateViewModel: ObservableObject {
     }
   }
 
-  func invalidateHookRequest(id: UUID) {
-    guard session?.hookRequestID == id, phase != .closed else { return }
-    currentTask?.cancel()
-    let receiptID = activeReceiptID
-    activeReceiptID = nil
-    generation = UUID()
-    phase = .invalidated
-    errorMessage = "Bex could not review this prompt. The original was blocked."
-    currentWorkID = nil
-    currentTask = nil
-    if let receiptID {
-      Task { try? await approvalStore.revoke(id: receiptID) }
-    }
-  }
-
-  func waitForCurrentWork() async {
-    while let task = currentTask {
-      await task.value
-      await Task.yield()
-    }
-  }
-
-  func updateCorrected(_ value: String) {
-    guard phase == .reviewing, var review else { return }
-    review.updateCorrected(value)
-    self.review = review
-    errorMessage = value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? BexError.emptyInput.localizedDescription
-      : nil
-  }
-
-  func setSelectedClient(_ client: PromptClient) {
-    guard !clientIsLocked, phase == .composing || phase == .reviewing else { return }
-    selectedClient = client
-    Task { await preferences.setPreferredPromptClient(client) }
-  }
-
-  func openSettings() {
-    openSettingsCallback()
-  }
-
-  private func loadSession(sessionID: UUID, generation: UUID, workID: UUID) async {
-    let provider = await preferences.selectedProvider()
-    let model = await preferences.selectedModel(for: provider)
-    let preferredClient = await preferences.preferredPromptClient()
-    let mode = await preferences.promptDeliveryMode()
-    let disclosureAccepted = await preferences.promptGateDisclosureAccepted()
-    let setup = (try? await keychain.hasSetup(for: provider)) ?? false
-    guard isCurrent(sessionID: sessionID, generation: generation), let session else {
-      finishWork(workID)
-      return
-    }
-
-    selectedProvider = provider
-    selectedModel = model
-    selectedClient = session.knownClient ?? preferredClient
-    deliveryMode = mode
-    providerIsSetUp = setup
-    selectedClientStatus = await hookManager.status(for: selectedClient)
-    guard isCurrent(sessionID: sessionID, generation: generation) else {
-      finishWork(workID)
-      return
-    }
-    finishWork(workID)
-
-    if !disclosureAccepted {
-      phase = .onboarding
-    } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-      phase = .composing
+  private func updateAccessibilityStatus(wasTrusted: Bool) {
+    if isAccessibilityTrusted {
+      accessibilityStatusMessage =
+        wasTrusted
+        ? "Accessibility is enabled."
+        : "Accessibility is enabled. Invoke Fix & Send again to capture the focused field."
     } else {
-      startCorrection()
+      accessibilityStatusMessage =
+        "Accessibility has not been granted. After granting it in System Settings, return to the target and invoke Fix & Send again."
     }
   }
 
-  private func startCorrection() {
-    guard let session else { return }
-    let original = draft
-    guard !original.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      phase = .composing
-      errorMessage = BexError.emptyInput.localizedDescription
+  private func recoveryMessage(
+    for failure: PromptDeliveryFailure,
+    action: PromptDeliveryAction,
+    target: PromptTarget
+  ) -> String {
+    let detail = failure.errorDescription ?? "Delivery failed."
+    switch failure.effect {
+    case .none:
       return
+        "\(detail) Nothing was delivered. It is safe to try \(target.label(for: action)) again."
+    case .copied:
+      return
+        "The correction is on the Clipboard, but it was not pasted into \(target.applicationName). Paste it manually. Bex will not repeat the delivery."
+    case .pastedNotSubmitted:
+      return
+        "The correction is already in \(target.applicationName), but it was not submitted. Press Return there to submit it. Bex will not paste it again."
+    case .submitted:
+      return
+        "\(target.applicationName) may already have submitted the correction. Check the destination before continuing; Bex will not retry."
+    case .unknown:
+      return
+        "Bex cannot determine how much reached \(target.applicationName). Check the destination and Clipboard before continuing; automatic retry is disabled."
     }
+  }
 
-    let provider = selectedProvider
-    let model = selectedModel
-    let sessionGeneration = generation
-    phase = .checking
-    errorMessage = nil
-    review = nil
+  private func retireCurrentTask() {
+    guard let task = currentTask else { return }
+    task.cancel()
+    retiredTasks.append(task)
+    currentTask = nil
+  }
 
-    let workID = UUID()
-    currentWorkID = workID
-    currentTask = Task { @MainActor [weak self] in
-      guard let self else { return }
-      do {
-        let result = try await promptGrammar.checkPrompt(
-          text: original,
-          provider: provider,
-          model: model
-        )
-        try Task.checkCancellation()
-        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
-          phase == .checking
-        else {
-          self.finishWork(workID)
-          return
-        }
-        review = PromptGateReview(
-          original: original,
-          corrected: result.corrected,
-          explanation: result.explanation
-        )
-        phase = .reviewing
-        finishWork(workID)
-      } catch is CancellationError {
-        self.finishWork(workID)
-      } catch {
-        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
-          self.finishWork(workID)
-          return
-        }
-        phase = .composing
-        errorMessage = self.message(for: error)
-        finishWork(workID)
-      }
+  private func successAnnouncement(
+    for outcome: PromptDeliveryOutcome,
+    target: PromptTarget
+  ) -> String {
+    switch outcome {
+    case .copied:
+      "Correction copied to the Clipboard."
+    case .pasted:
+      "Correction pasted in \(target.applicationName). Return was not pressed."
+    case .submitted:
+      "Correction pasted and submitted in \(target.applicationName)."
     }
+  }
+
+  private func requestFocus(
+    keyboard: PromptGateKeyboardFocus?,
+    accessibility: PromptGateAccessibilityFocus?
+  ) {
+    focusRequest = PromptGateFocusRequest(keyboard: keyboard, accessibility: accessibility)
+  }
+
+  private func announce(_ message: String) {
+    accessibilityAnnouncementHistory.append(message)
+    accessibilityAnnouncement = message
   }
 
   private func isCurrent(sessionID: UUID, generation: UUID) -> Bool {
@@ -411,7 +1054,18 @@ final class PromptGateViewModel: ObservableObject {
     self.session = nil
     draft = ""
     review = nil
+    checkpoint = nil
+    confirmedOutboundDraft = nil
+    confirmedOutboundDestination = nil
+    configuredDestination = nil
+    pendingCorrection = nil
+    replacementConfirmedDraft = nil
+    isClosing = false
+    isLoadingSession = false
+    deliveryFailureEffect = nil
     errorMessage = nil
+    showsDiscardConfirmation = false
+    showsCheckpointReplacementConfirmation = false
     phase = .closed
     closePanel()
   }

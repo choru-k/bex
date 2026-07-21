@@ -56,6 +56,17 @@ struct PromptTechnicalSpanProtector: Sendable {
     }
   }
 
+  static let userFacingProtectedSpanKinds = [
+    "fenced and inline code",
+    "templates",
+    "tags",
+    "URLs",
+    "file paths",
+    "command-line flags",
+    "variables",
+    "mentions",
+  ]
+
   private static let templatePatterns = [
     #"\$\{.*?\}"#,
     #"\{\{.*?\}\}"#,

@@ -23,10 +23,57 @@ enum PromptDeliveryMode: String, Codable, CaseIterable, Identifiable, Sendable {
   }
 }
 
+enum PromptDeliveryAction: String, CaseIterable, Equatable, Hashable, Sendable {
+  case copyCorrection
+  case pasteInDestination
+  case pasteAndSubmit
+}
+
+enum PromptDeliveryEffect: Equatable, Sendable {
+  case none
+  case copied
+  case pastedNotSubmitted
+  case submitted
+  case unknown
+
+  var isFullRetrySafe: Bool {
+    self == .none
+  }
+}
+
+struct PromptDeliveryFailure: LocalizedError, Sendable {
+  let effect: PromptDeliveryEffect
+  let underlyingError: any Error
+
+  var isFullRetrySafe: Bool {
+    effect.isFullRetrySafe
+  }
+
+  var errorDescription: String? {
+    if effect != .none,
+      let error = underlyingError as? BexError,
+      case .promptDeliveryFailed(let detail) = error
+    {
+      return detail
+    }
+    return underlyingError.localizedDescription
+  }
+}
+
 enum PromptDeliveryOutcome: Equatable, Sendable {
   case copied
   case pasted
   case submitted
+}
+
+extension PromptDeliveryOutcome {
+  var effect: PromptDeliveryEffect {
+    switch self {
+    case .copied: .copied
+    case .pasted: .pastedNotSubmitted
+    case .submitted: .submitted
+    }
+  }
 }
 
 enum PromptTargetKind: String, Codable, Sendable {
@@ -72,6 +119,34 @@ struct PromptTarget: Identifiable, Codable, Equatable, Sendable {
   var supportsAutomaticSubmit: Bool { kind == .capturedField }
 }
 
+extension PromptTarget {
+  var availableDeliveryActions: [PromptDeliveryAction] {
+    switch kind {
+    case .copyOnly:
+      [.copyCorrection]
+    case .composerPaste:
+      hookContext == nil ? [.copyCorrection, .pasteInDestination] : [.pasteInDestination]
+    case .capturedField:
+      [.pasteInDestination, .pasteAndSubmit]
+    }
+  }
+
+  func label(for action: PromptDeliveryAction) -> String {
+    switch action {
+    case .copyCorrection:
+      "Copy Correction"
+    case .pasteInDestination:
+      "Paste in \(applicationName)"
+    case .pasteAndSubmit:
+      "Paste & Send in \(applicationName)"
+    }
+  }
+
+  var destinationLabel: String {
+    kind == .copyOnly ? "Clipboard" : applicationName
+  }
+}
+
 struct PromptCapture: Equatable, Sendable {
   let draft: String
   let target: PromptTarget
@@ -111,17 +186,40 @@ struct PromptGateSession: Identifiable, Equatable, Sendable {
   }
 }
 
+extension PromptGateSession.Source {
+  var outboundConfirmationContext: OutboundConfirmationContext {
+    switch self {
+    case .capturedField:
+      .manualCapturedField
+    case .composer:
+      .ambiguousManual
+    case .hook:
+      .hook
+    }
+  }
+}
+
 struct PromptGateReview: Equatable, Sendable {
   let original: String
+  let aiCorrected: String
   var corrected: String
   let explanation: String
   private(set) var diff: [DiffSegment]
 
   init(original: String, corrected: String, explanation: String) {
     self.original = original
+    aiCorrected = corrected
     self.corrected = corrected
     self.explanation = explanation
     diff = WordDiff.compute(original: original, corrected: corrected)
+  }
+
+  var hasHumanEdits: Bool {
+    corrected != aiCorrected
+  }
+
+  var hasChanges: Bool {
+    diff.contains { $0.kind != .unchanged }
   }
 
   mutating func updateCorrected(_ value: String) {
@@ -138,6 +236,38 @@ enum PromptGatePhase: Equatable, Sendable {
   case reviewing
   case delivering
   case invalidated
+}
+
+enum PromptGateKeyboardFocus: Equatable, Hashable, Sendable {
+  case primaryAction
+  case draftEditor
+  case correctedEditor
+  case recoveryAction
+}
+
+enum PromptGateAccessibilityFocus: Equatable, Hashable, Sendable {
+  case disclosureHeading
+  case composerHeading
+  case changesHeading
+  case noChangesHeading
+  case errorHeading
+  case statusHeading
+  case discardAlert
+}
+
+struct PromptGateFocusRequest: Equatable, Sendable {
+  let id: UUID
+  let keyboard: PromptGateKeyboardFocus?
+  let accessibility: PromptGateAccessibilityFocus?
+
+  init(
+    keyboard: PromptGateKeyboardFocus?,
+    accessibility: PromptGateAccessibilityFocus?
+  ) {
+    id = UUID()
+    self.keyboard = keyboard
+    self.accessibility = accessibility
+  }
 }
 
 enum HookInstallationStatus: Equatable, Sendable {

@@ -1,25 +1,5 @@
 import Foundation
 
-enum OllamaURL {
-  static func normalize(_ value: String) throws -> String {
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard var components = URLComponents(string: trimmed),
-      let scheme = components.scheme?.lowercased(),
-      scheme == "http" || scheme == "https",
-      components.host?.isEmpty == false
-    else {
-      throw BexError.invalidOllamaURL
-    }
-    components.scheme = scheme
-    guard var normalized = components.url?.absoluteString else {
-      throw BexError.invalidOllamaURL
-    }
-    while normalized.hasSuffix("/") {
-      normalized.removeLast()
-    }
-    return normalized
-  }
-}
 
 struct ProviderClientFactory: Sendable {
   let preferences: PreferencesStore
@@ -36,11 +16,13 @@ struct ProviderClientFactory: Sendable {
     self.transport = transport
   }
 
-  func makeClient(for provider: LLMProvider) async throws -> any LLMProviderClient {
-    switch provider {
+  func makeClient(
+    for destination: OutboundDestination
+  ) async throws -> any LLMProviderClient {
+    switch destination.provider {
     case .openAI:
       return OpenAIClient(
-        apiKey: try await requiredAPIKey(for: provider),
+        apiKey: try await requiredAPIKey(for: destination.provider),
         transport: transport,
         timeout: 30
       )
@@ -48,19 +30,21 @@ struct ProviderClientFactory: Sendable {
       return OpenAICodexClient(keychain: keychain, transport: transport, timeout: 30)
     case .claude:
       return ClaudeClient(
-        apiKey: try await requiredAPIKey(for: provider),
+        apiKey: try await requiredAPIKey(for: destination.provider),
         transport: transport,
         timeout: 30
       )
     case .gemini:
       return GeminiClient(
-        apiKey: try await requiredAPIKey(for: provider),
+        apiKey: try await requiredAPIKey(for: destination.provider),
         transport: transport,
         timeout: 30
       )
     case .ollama:
-      let baseURL = try OllamaURL.normalize(await preferences.ollamaURL())
-      return OllamaClient(baseURL: baseURL, transport: transport, timeout: 60)
+      guard let endpoint = destination.ollamaEndpoint else {
+        throw BexError.invalidOllamaURL
+      }
+      return OllamaClient(baseURL: endpoint, transport: transport, timeout: 60)
     }
   }
 
@@ -83,18 +67,17 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
 
   func check(
     text: String,
-    provider: LLMProvider,
-    model: String,
+    destination: OutboundDestination,
     profilePrompt: String?
   ) async throws -> GrammarResult {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw BexError.emptyInput
     }
-    let client = try await factory.makeClient(for: provider)
-    let effort = await factory.preferences.selectedEffort(for: provider)
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
     return try await client.check(
       text: text,
-      model: resolvedModel(model, provider: provider),
+      model: destination.model,
       systemPrompt: GrammarPrompts.buildSystemPrompt(profilePrompt: profilePrompt),
       effort: effort
     )
@@ -102,23 +85,32 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
 
   func checkPrompt(
     text: String,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> GrammarResult {
-    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+    let protectedText = PromptTechnicalSpanProtector().protect(text)
+    return try await checkPrompt(
+      protectedText: protectedText,
+      destination: destination
+    )
+  }
+
+  func checkPrompt(
+    protectedText: PromptTechnicalSpanProtector.ProtectedText,
+    destination: OutboundDestination
+  ) async throws -> GrammarResult {
+    guard !protectedText.masked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw BexError.emptyInput
     }
-    let protected = PromptTechnicalSpanProtector().protect(text)
-    let client = try await factory.makeClient(for: provider)
-    let effort = await factory.preferences.selectedEffort(for: provider)
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
     let result = try await client.check(
-      text: protected.masked,
-      model: resolvedModel(model, provider: provider),
+      text: protectedText.masked,
+      model: destination.model,
       systemPrompt: GrammarPrompts.promptSafeSystem,
       effort: effort
     )
     return GrammarResult(
-      corrected: try protected.restore(result.corrected),
+      corrected: try protectedText.restore(result.corrected),
       explanation: result.explanation
     )
   }
@@ -126,17 +118,16 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
   func rewrite(
     text: String,
     intent: RewriteIntent,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> String {
     guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw BexError.emptyInput
     }
-    let client = try await factory.makeClient(for: provider)
-    let effort = await factory.preferences.selectedEffort(for: provider)
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
     let output = try await client.generate(
       text: text,
-      model: resolvedModel(model, provider: provider),
+      model: destination.model,
       systemPrompt: GrammarPrompts.rewriteSystemPrompt(intent: intent),
       effort: effort
     ).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -146,15 +137,14 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
 
   func generateProfile(
     context: ProfileContext,
-    provider: LLMProvider,
-    model: String
+    destination: OutboundDestination
   ) async throws -> String {
     let message = try GrammarPrompts.profileMessage(context: context)
-    let client = try await factory.makeClient(for: provider)
-    let effort = await factory.preferences.selectedEffort(for: provider)
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
     let output = try await client.generate(
       text: message,
-      model: resolvedModel(model, provider: provider),
+      model: destination.model,
       systemPrompt: GrammarPrompts.profileGeneration,
       effort: effort
     ).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -163,13 +153,19 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
   }
 
   func fetchModels(for provider: LLMProvider) async throws -> [ModelOption] {
-    let client = try await factory.makeClient(for: provider)
+    let model = await factory.preferences.selectedModel(for: provider)
+    let endpoint: String?
+    if provider == .ollama {
+      endpoint = await factory.preferences.ollamaURL()
+    } else {
+      endpoint = nil
+    }
+    let destination = try OutboundDestination(
+      provider: provider,
+      model: model,
+      ollamaEndpoint: endpoint
+    )
+    let client = try await factory.makeClient(for: destination)
     return try await client.fetchModels()
-  }
-
-  private func resolvedModel(_ model: String, provider: LLMProvider) -> String {
-    model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      ? provider.defaultModel
-      : model
   }
 }

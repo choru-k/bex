@@ -19,7 +19,9 @@ final class PromptGrammarServiceTests: XCTestCase {
     XCTAssertEqual(try protected.restore(protected.masked), text)
   }
 
-  func testProtectorHandlesAdjacentSpansAndRejectsDuplicateMissingReorderedOrInjectedSentinels() throws {
+  func testProtectorHandlesAdjacentSpansAndRejectsDuplicateMissingReorderedOrInjectedSentinels()
+    throws
+  {
     let protected = PromptTechnicalSpanProtector(identifier: "TEST").protect(
       "Use `/tmp/a`{{value}} and --force."
     )
@@ -53,30 +55,70 @@ final class PromptGrammarServiceTests: XCTestCase {
   }
 
   func testPromptGrammarServiceReturnsNoOpAndEditedResults() async throws {
+    let destination = try OutboundDestination(provider: .openAI, model: "")
     let unchangedService = try await makeService(corrected: "This is fine.")
     let unchanged = try await unchangedService.checkPrompt(
       text: "This is fine.",
-      provider: .openAI,
-      model: ""
+      destination: destination
     )
     XCTAssertEqual(unchanged.corrected, "This is fine.")
 
     let editedService = try await makeService(corrected: "This is better.")
     let edited = try await editedService.checkPrompt(
       text: "This are better.",
-      provider: .openAI,
-      model: ""
+      destination: destination
     )
     XCTAssertEqual(edited.corrected, "This is better.")
   }
 
+  func testPromptGrammarServiceSendsProvidedProtectedPayloadExactlyOnceAndRestoresIt() async throws
+  {
+    let source = "Review `/tmp/a.swift` because this are wrong."
+    let protectedText = PromptTechnicalSpanProtector(identifier: "FROZEN").protect(source)
+    let correctedMasked = protectedText.masked.replacingOccurrences(of: " are ", with: " is ")
+    let contentData = try JSONSerialization.data(
+      withJSONObject: ["corrected": correctedMasked, "explanation": "Checked"]
+    )
+    let content = try XCTUnwrap(String(data: contentData, encoding: .utf8))
+    let response = try JSONSerialization.data(
+      withJSONObject: ["choices": [["message": ["content": content]]]]
+    )
+    let suite = "com.bex.tests.prompt-grammar-frozen.\(UUID().uuidString)"
+    let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+    let preferences = PreferencesStore(defaults: defaults)
+    let keychain = KeychainStore(service: suite, inMemory: true)
+    let transport = RecordingTransport(stubs: [.init(data: response, status: 200)])
+    try await keychain.saveAPIKey("secret", for: .openAI)
+    let service = GrammarService(
+      factory: ProviderClientFactory(
+        preferences: preferences,
+        keychain: keychain,
+        transport: transport
+      )
+    )
+    let destination = try OutboundDestination(provider: .openAI, model: "")
+
+    let result = try await service.checkPrompt(
+      protectedText: protectedText,
+      destination: destination
+    )
+
+    let requests = await transport.recordedRequests()
+    let request = try XCTUnwrap(requests.first)
+    let body = try XCTUnwrap(request.httpBody)
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+    let messages = try XCTUnwrap(object["messages"] as? [[String: String]])
+    XCTAssertEqual(messages.last?["content"], protectedText.masked)
+    XCTAssertEqual(result.corrected, "Review `/tmp/a.swift` because this is wrong.")
+  }
+
   func testPromptGrammarServiceFailsClosedWhenTechnicalSentinelIsMissingOrInjected() async throws {
+    let destination = try OutboundDestination(provider: .openAI, model: "")
     let missing = try await makeService(corrected: "Please inspect the file.")
     await XCTAssertThrowsErrorAsync(
       try await missing.checkPrompt(
         text: "Please inspect /tmp/a.swift.",
-        provider: .openAI,
-        model: ""
+        destination: destination
       )
     )
 
@@ -84,8 +126,7 @@ final class PromptGrammarServiceTests: XCTestCase {
     await XCTAssertThrowsErrorAsync(
       try await injected.checkPrompt(
         text: "Text",
-        provider: .openAI,
-        model: ""
+        destination: destination
       )
     )
   }
