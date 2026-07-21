@@ -150,6 +150,84 @@ struct SettingsView: View {
         }
       }
 
+      Section("Prompt Gate") {
+        LabeledContent("Shortcut", value: "⌘⇧P")
+
+        Picker("After approval", selection: promptDeliveryBinding) {
+          ForEach(PromptDeliveryMode.allCases) { mode in
+            Text(mode.displayName).tag(mode)
+          }
+        }
+        .accessibilityIdentifier("settings-prompt-delivery")
+
+        HStack {
+          Label(
+            viewModel.accessibilityTrusted
+              ? "Accessibility enabled"
+              : "Accessibility not enabled",
+            systemImage: viewModel.accessibilityTrusted
+              ? "checkmark.circle.fill"
+              : "exclamationmark.triangle"
+          )
+          Spacer()
+          Button("Request Access") { viewModel.requestAccessibility() }
+            .accessibilityIdentifier("settings-prompt-accessibility")
+          Button("Test Access") { viewModel.testAccessibility() }
+            .accessibilityIdentifier("settings-prompt-accessibility-test")
+        }
+
+        Text("Automatic Return is limited to captured standard text fields after Bex revalidates and observes the exact correction. Terminal and unsupported composers are paste-only; without Accessibility, Bex copies for manual replacement.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Text("Cloud correction sends the original draft to the selected provider. Ollama processes it locally.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        ForEach(PromptClient.allCases) { client in
+          VStack(alignment: .leading, spacing: 5) {
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(client.displayName).font(.headline)
+                Text(viewModel.hookStatusLabel(for: client))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+              if viewModel.promptOperationClient == client {
+                ProgressView().controlSize(.small)
+              }
+              Button(viewModel.hookActionLabel(for: client)) {
+                viewModel.performHookAction(for: client)
+              }
+              .disabled(viewModel.promptOperationClient != nil)
+              .accessibilityIdentifier("settings-prompt-hook-\(client.rawValue)")
+            }
+            Text(viewModel.hookConfigPath(for: client))
+              .font(.caption2.monospaced())
+              .foregroundStyle(.secondary)
+              .textSelection(.enabled)
+            if client == .codex {
+              Text("After installation, open /hooks in Codex and explicitly trust the Bex handler.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+          }
+        }
+
+        Text("Hook hosts can fail open if they terminate the helper before its one-hour timeout. Bex returns a valid block for every recoverable helper error and marks an integration active only after a heartbeat.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        if let error = viewModel.promptGateError {
+          Text(error)
+            .font(.caption)
+            .foregroundStyle(.red)
+            .textSelection(.enabled)
+            .accessibilityIdentifier("settings-prompt-error")
+        }
+      }
+
       Section("Appearance") {
         Picker("Appearance", selection: appearanceBinding) {
           ForEach(AppearancePreference.allCases, id: \.self) { appearance in
@@ -204,6 +282,13 @@ struct SettingsView: View {
     Binding(
       get: { viewModel.ollamaURL },
       set: { viewModel.updateOllamaURL($0) }
+    )
+  }
+
+  private var promptDeliveryBinding: Binding<PromptDeliveryMode> {
+    Binding(
+      get: { viewModel.promptDeliveryMode },
+      set: { viewModel.selectPromptDeliveryMode($0) }
     )
   }
 

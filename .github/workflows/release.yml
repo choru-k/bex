@@ -81,6 +81,32 @@ jobs:
             -exportPath build/export \
             -exportOptionsPlist Config/ExportOptions.plist
 
+      - name: Verify exported signatures
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP="build/export/Bex.app"
+          HELPER="$APP/Contents/Helpers/bex-hook"
+
+          test -x "$HELPER"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign --verify --strict --verbose=2 "$HELPER"
+
+          check_identity() {
+            ARTIFACT="$1"
+            EXPECTED_IDENTIFIER="$2"
+            DETAILS="$(codesign --display --verbose=4 "$ARTIFACT" 2>&1)"
+            REQUIREMENT="$(codesign --display --requirements - "$ARTIFACT" 2>&1)"
+            printf '%s\n' "$DETAILS" | grep -F "Identifier=$EXPECTED_IDENTIFIER"
+            printf '%s\n' "$DETAILS" | grep -F "TeamIdentifier=$APPLE_TEAM_ID"
+            printf '%s\n' "$REQUIREMENT" | grep -F "identifier \"$EXPECTED_IDENTIFIER\""
+            printf '%s\n' "$REQUIREMENT" \
+              | grep -E "certificate leaf\\[subject\\.OU\\] = \\\"?$APPLE_TEAM_ID\\\"?"
+          }
+
+          check_identity "$APP" "com.bex.desktop"
+          check_identity "$HELPER" "bex-hook"
+
       - name: Submit for notarization
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}

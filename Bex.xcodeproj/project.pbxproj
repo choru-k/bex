@@ -15,6 +15,12 @@
 		A00000000000000000000056 /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000066 /* CryptoKit.framework */; };
 		A00000000000000000000057 /* Carbon.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000067 /* Carbon.framework */; };
 		A00000000000000000000058 /* OSLog.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000068 /* OSLog.framework */; };
+		A00000000000000000000059 /* ApplicationServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000069 /* ApplicationServices.framework */; };
+		A0000000000000000000005A /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000061 /* AppKit.framework */; };
+		A0000000000000000000005B /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000063 /* Foundation.framework */; };
+		A0000000000000000000005C /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000065 /* Network.framework */; };
+		A0000000000000000000005D /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000066 /* CryptoKit.framework */; };
+		A0000000000000000000005E /* bex-hook in Embed Helpers */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* bex-hook */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,12 +38,20 @@
 			remoteGlobalIDString = A00000000000000000000011;
 			remoteInfo = Bex;
 		};
+		A00000000000000000000035 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000014;
+			remoteInfo = "bex-hook";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		A00000000000000000000021 /* Bex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Bex.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000022 /* BexTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BexTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000023 /* BexUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BexUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000024 /* bex-hook */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "bex-hook"; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000061 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
 		A00000000000000000000062 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		A00000000000000000000063 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
@@ -46,6 +60,7 @@
 		A00000000000000000000066 /* CryptoKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CryptoKit.framework; path = System/Library/Frameworks/CryptoKit.framework; sourceTree = SDKROOT; };
 		A00000000000000000000067 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		A00000000000000000000068 /* OSLog.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OSLog.framework; path = System/Library/Frameworks/OSLog.framework; sourceTree = SDKROOT; };
+		A00000000000000000000069 /* ApplicationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ApplicationServices.framework; path = System/Library/Frameworks/ApplicationServices.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -64,6 +79,16 @@
 			path = BexUITests;
 			sourceTree = "<group>";
 		};
+		A00000000000000000000044 /* BexHookShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BexHookShared;
+			sourceTree = "<group>";
+		};
+		A00000000000000000000045 /* BexHook */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BexHook;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +104,7 @@
 				A00000000000000000000056 /* CryptoKit.framework in Frameworks */,
 				A00000000000000000000057 /* Carbon.framework in Frameworks */,
 				A00000000000000000000058 /* OSLog.framework in Frameworks */,
+				A00000000000000000000059 /* ApplicationServices.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +122,17 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A00000000000000000000074 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A0000000000000000000005A /* AppKit.framework in Frameworks */,
+				A0000000000000000000005B /* Foundation.framework in Frameworks */,
+				A0000000000000000000005C /* Network.framework in Frameworks */,
+				A0000000000000000000005D /* CryptoKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -105,6 +142,8 @@
 				A00000000000000000000041 /* Bex */,
 				A00000000000000000000042 /* BexTests */,
 				A00000000000000000000043 /* BexUITests */,
+				A00000000000000000000044 /* BexHookShared */,
+				A00000000000000000000045 /* BexHook */,
 				A00000000000000000000004 /* Frameworks */,
 				A00000000000000000000003 /* Products */,
 			);
@@ -116,6 +155,7 @@
 				A00000000000000000000021 /* Bex.app */,
 				A00000000000000000000022 /* BexTests.xctest */,
 				A00000000000000000000023 /* BexUITests.xctest */,
+				A00000000000000000000024 /* bex-hook */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -131,6 +171,7 @@
 				A00000000000000000000066 /* CryptoKit.framework */,
 				A00000000000000000000067 /* Carbon.framework */,
 				A00000000000000000000068 /* OSLog.framework */,
+				A00000000000000000000069 /* ApplicationServices.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -145,13 +186,16 @@
 				A00000000000000000000081 /* Sources */,
 				A00000000000000000000071 /* Frameworks */,
 				A00000000000000000000091 /* Resources */,
+				A00000000000000000000094 /* Embed Helpers */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				A00000000000000000000036 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A00000000000000000000041 /* Bex */,
+				A00000000000000000000044 /* BexHookShared */,
 			);
 			name = Bex;
 			packageProductDependencies = (
@@ -206,6 +250,28 @@
 			productReference = A00000000000000000000023 /* BexUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		A00000000000000000000014 /* bex-hook */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000104 /* Build configuration list for PBXNativeTarget "bex-hook" */;
+			buildPhases = (
+				A00000000000000000000084 /* Sources */,
+				A00000000000000000000074 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				A00000000000000000000044 /* BexHookShared */,
+				A00000000000000000000045 /* BexHook */,
+			);
+			name = "bex-hook";
+			packageProductDependencies = (
+			);
+			productName = "bex-hook";
+			productReference = A00000000000000000000024 /* bex-hook */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -227,6 +293,9 @@
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = A00000000000000000000011;
 					};
+					A00000000000000000000014 = {
+						CreatedOnToolsVersion = 26.6;
+					};
 				};
 			};
 			buildConfigurationList = A00000000000000000000100 /* Build configuration list for PBXProject "Bex" */;
@@ -246,6 +315,7 @@
 				A00000000000000000000011 /* Bex */,
 				A00000000000000000000012 /* BexTests */,
 				A00000000000000000000013 /* BexUITests */,
+				A00000000000000000000014 /* bex-hook */,
 			);
 		};
 /* End PBXProject section */
@@ -274,6 +344,20 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		A00000000000000000000094 /* Embed Helpers */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Helpers;
+			dstSubfolderSpec = 1;
+			files = (
+				A0000000000000000000005E /* bex-hook in Embed Helpers */,
+			);
+			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		A00000000000000000000081 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -296,6 +380,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A00000000000000000000084 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -308,6 +399,11 @@
 			isa = PBXTargetDependency;
 			target = A00000000000000000000011 /* Bex */;
 			targetProxy = A00000000000000000000032 /* PBXContainerItemProxy */;
+		};
+		A00000000000000000000036 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000014 /* bex-hook */;
+			targetProxy = A00000000000000000000035 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -544,6 +640,45 @@
 			};
 			name = Release;
 		};
+		A00000000000000000000151 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ESURPGU29C;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.4.0;
+				PRODUCT_NAME = "bex-hook";
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A00000000000000000000152 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEAD_CODE_STRIPPING = YES;
+				DEVELOPMENT_TEAM = ESURPGU29C;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.4.0;
+				PRODUCT_NAME = "bex-hook";
+				SKIP_INSTALL = YES;
+				STRIP_INSTALLED_PRODUCT = YES;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -579,6 +714,15 @@
 			buildConfigurations = (
 				A00000000000000000000141 /* Debug */,
 				A00000000000000000000142 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000104 /* Build configuration list for PBXNativeTarget "bex-hook" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000151 /* Debug */,
+				A00000000000000000000152 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

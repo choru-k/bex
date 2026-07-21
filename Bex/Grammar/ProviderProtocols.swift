@@ -56,3 +56,11 @@ protocol GrammarServicing: Sendable {
   ) async throws -> String
   func fetchModels(for provider: LLMProvider) async throws -> [ModelOption]
 }
+
+protocol PromptGrammarServicing: Sendable {
+  func checkPrompt(
+    text: String,
+    provider: LLMProvider,
+    model: String
+  ) async throws -> GrammarResult
+}

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import OSLog
 
 @MainActor
@@ -42,11 +43,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let openQuickCheck =
           arguments.contains("--open-quick-check")
           || environment["BEX_UI_TEST_OPEN_QUICK_CHECK"] == "1"
+        let openPromptGate =
+          arguments.contains("--open-prompt-gate")
+          || environment["BEX_UI_TEST_OPEN_PROMPT_GATE"] == "1"
         Task { [weak self] in
           let services = await AppServices.uiTesting(
             seedCredential: !missingCredential
           )
-          self?.finishLaunching(with: services, openQuickCheck: openQuickCheck)
+          self?.finishLaunching(
+            with: services,
+            openQuickCheck: openQuickCheck,
+            openPromptGate: openPromptGate
+          )
         }
         return
       }
@@ -56,42 +64,81 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
 
     WindowCoordinator.applyAppearance(PreferencesStore.standardAppearance())
-    finishLaunching()
+    finishLaunching(with: AppServices.production())
   }
 
-  private func finishLaunching(with services: AppServices? = nil, openQuickCheck: Bool = false) {
-    if let services {
-      installCoordinator(services: services)
-    }
-    if services != nil {
-      installMainMenu()
-    }
+  private func finishLaunching(
+    with services: AppServices,
+    openQuickCheck: Bool = false,
+    openPromptGate: Bool = false
+  ) {
+    let coordinator = installCoordinator(services: services)
+    installMainMenu()
     installStatusItem()
-    let globalHotKey = GlobalHotKey { [weak self] in
-      self?.openQuickCheck()
-    }
+    #if DEBUG
+      installUITestingCommands()
+    #endif
+
+    let globalHotKey = GlobalHotKey()
     self.globalHotKey = globalHotKey
     do {
-      try globalHotKey.register()
+      try globalHotKey.register(
+        Shortcut(id: 1, keyCode: UInt32(kVK_ANSI_G), modifiers: UInt32(cmdKey | shiftKey))
+      ) { [weak self] in
+        self?.openQuickCheck()
+      }
     } catch {
-      showHotKeyConflict()
+      showHotKeyConflict(
+        "⌘⇧G is already in use. Open Quick Check from the Bex menu."
+      )
     }
-    if openQuickCheck {
-      windowCoordinator?.showQuickCheck()
+    do {
+      try globalHotKey.register(
+        Shortcut(id: 2, keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey | shiftKey))
+      ) { [weak self] in
+        self?.openPromptGate()
+      }
+    } catch {
+      showHotKeyConflict(
+        "⌘⇧P is already in use. The Fix & Send shortcut is unavailable."
+      )
     }
-    signposter.emitEvent("TrayReady")
-    if let launchInterval {
-      signposter.endInterval("ApplicationLaunch", launchInterval)
-      self.launchInterval = nil
+
+    Task { [weak self, weak coordinator] in
+      await services.promptGateIPC.setHandlers(
+        onRequest: { [weak coordinator] request in
+          await MainActor.run {
+            coordinator?.showPromptGate(hookRequest: request) ?? false
+          }
+        },
+        onInvalidation: { [weak coordinator] requestID in
+          await MainActor.run {
+            coordinator?.invalidatePromptGate(requestID: requestID)
+          }
+        }
+      )
+      try? await services.promptGateIPC.start()
+      if let hookManager = services.hookManager as? HookInstallationManager {
+        try? await hookManager.refreshInstalledHelper()
+      }
+      await MainActor.run {
+        if openQuickCheck {
+          coordinator?.showQuickCheck()
+        }
+        if openPromptGate {
+          coordinator?.showPromptGate()
+        }
+        self?.announceTrayReady()
+      }
     }
   }
 
   private func coordinator() -> WindowCoordinator {
     installMainMenu()
-    if let windowCoordinator {
-      return windowCoordinator
+    guard let windowCoordinator else {
+      preconditionFailure("Bex services must be composed before opening a window.")
     }
-    return installCoordinator(services: AppServices.production())
+    return windowCoordinator
   }
 
   @discardableResult
@@ -104,7 +151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationWillTerminate(_ notification: Notification) {
-    globalHotKey?.unregister()
+    globalHotKey?.unregisterAll()
+    #if DEBUG
+      DistributedNotificationCenter.default().removeObserver(self)
+    #endif
+    if let promptGateIPC = services?.promptGateIPC {
+      Task { await promptGateIPC.stop() }
+    }
   }
 
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
@@ -217,21 +270,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return item
   }
 
-  private func showHotKeyConflict() {
+  private func showHotKeyConflict(_ title: String) {
     guard let statusMenu else { return }
-    let message = NSMenuItem(
-      title: "⌘⇧G is already in use. Open Quick Check from the Bex menu.",
-      action: nil,
-      keyEquivalent: ""
-    )
+    let message = NSMenuItem(title: title, action: nil, keyEquivalent: "")
     message.isEnabled = false
     statusMenu.insertItem(message, at: 0)
     statusMenu.insertItem(.separator(), at: 1)
   }
 
+  #if DEBUG
+    private func installUITestingCommands() {
+      guard ProcessInfo.processInfo.environment["BEX_UI_TESTING"] == "1" else { return }
+      let center = DistributedNotificationCenter.default()
+      center.addObserver(
+        self,
+        selector: #selector(openQuickCheckForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.open-quick-check"),
+        object: nil
+      )
+      center.addObserver(
+        self,
+        selector: #selector(openPromptGateForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.open-prompt-gate"),
+        object: nil
+      )
+    }
+
+    @objc private func openQuickCheckForUITesting(_ notification: Notification) {
+      openQuickCheck()
+    }
+
+    @objc private func openPromptGateForUITesting(_ notification: Notification) {
+      openPromptGate()
+    }
+  #endif
+
+  private func announceTrayReady() {
+    signposter.emitEvent("TrayReady")
+    if let launchInterval {
+      signposter.endInterval("ApplicationLaunch", launchInterval)
+      self.launchInterval = nil
+    }
+  }
+
   @objc private func openQuickCheck() {
     let interval = WindowCoordinator.beginQuickCheckOpenInterval()
     coordinator().showQuickCheck(signpostInterval: interval)
+  }
+
+  @objc private func openPromptGate() {
+    coordinator().showPromptGate()
   }
 
   @objc private func openHistory() {

@@ -74,7 +74,7 @@ struct ProviderClientFactory: Sendable {
   }
 }
 
-actor GrammarService: GrammarServicing {
+actor GrammarService: GrammarServicing, PromptGrammarServicing {
   private let factory: ProviderClientFactory
 
   init(factory: ProviderClientFactory) {
@@ -97,6 +97,29 @@ actor GrammarService: GrammarServicing {
       model: resolvedModel(model, provider: provider),
       systemPrompt: GrammarPrompts.buildSystemPrompt(profilePrompt: profilePrompt),
       effort: effort
+    )
+  }
+
+  func checkPrompt(
+    text: String,
+    provider: LLMProvider,
+    model: String
+  ) async throws -> GrammarResult {
+    guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+      throw BexError.emptyInput
+    }
+    let protected = PromptTechnicalSpanProtector().protect(text)
+    let client = try await factory.makeClient(for: provider)
+    let effort = await factory.preferences.selectedEffort(for: provider)
+    let result = try await client.check(
+      text: protected.masked,
+      model: resolvedModel(model, provider: provider),
+      systemPrompt: GrammarPrompts.promptSafeSystem,
+      effort: effort
+    )
+    return GrammarResult(
+      corrected: try protected.restore(result.corrected),
+      explanation: result.explanation
     )
   }
 

@@ -15,6 +15,11 @@ public enum BexError: LocalizedError, Equatable, Sendable {
   case invalidResponse
   case storageFailure(String)
   case cancellation
+  case unsafePromptCorrection
+  case accessibilityPermissionRequired
+  case unsupportedPromptTarget
+  case stalePromptTarget
+  case promptDeliveryFailed(String)
 
   public var errorDescription: String? {
     switch self {
@@ -55,6 +60,18 @@ public enum BexError: LocalizedError, Equatable, Sendable {
       "The provider returned an invalid response. Try again."
     case .storageFailure(let message):
       message
+    case .unsafePromptCorrection:
+      "Bex could not verify that technical text was preserved. Nothing was sent."
+    case .accessibilityPermissionRequired:
+      "Allow Bex in Privacy & Security > Accessibility. Nothing was sent."
+    case .unsupportedPromptTarget:
+      "Bex could not find a supported prompt target. Nothing was sent."
+    case .stalePromptTarget:
+      "The original prompt field changed. Nothing was sent."
+    case .promptDeliveryFailed(let detail):
+      detail.hasSuffix("Nothing was sent.")
+        ? detail
+        : "\(detail.trimmingCharacters(in: .whitespacesAndNewlines)) Nothing was sent."
     case .cancellation:
       nil
     }

@@ -1,6 +1,14 @@
 import Carbon
 import Foundation
 
+private let bexHotKeySignature: OSType = 0x4245_5847  // BEXG
+
+struct Shortcut: Equatable, Sendable {
+  let id: UInt32
+  let keyCode: UInt32
+  let modifiers: UInt32
+}
+
 private let globalHotKeyEventHandler: EventHandlerUPP = { _, event, userData in
   guard let event, let userData else { return OSStatus(eventNotHandledErr) }
   var hotKeyID = EventHotKeyID()
@@ -13,33 +21,78 @@ private let globalHotKeyEventHandler: EventHandlerUPP = { _, event, userData in
     nil,
     &hotKeyID
   )
-  guard status == noErr, hotKeyID.id == 1 else {
+  guard status == noErr, hotKeyID.signature == bexHotKeySignature else {
     return OSStatus(eventNotHandledErr)
   }
   let owner = Unmanaged<GlobalHotKey>.fromOpaque(userData).takeUnretainedValue()
-  Task { @MainActor in owner.invoke() }
+  Task { @MainActor in owner.handle(hotKeyID.id) }
   return noErr
 }
 
 @MainActor
 final class GlobalHotKey {
-  private static let signature: OSType = 0x4245_5847  // BEXG
 
-  private let action: @MainActor () -> Void
-  private var hotKeyReference: EventHotKeyRef?
-  private var eventHandlerReference: EventHandlerRef?
-
-  init(action: @escaping @MainActor () -> Void) {
-    self.action = action
+  private struct Registration {
+    let reference: EventHotKeyRef
+    let action: @MainActor () -> Void
   }
 
-  func register() throws {
+  private var registrations: [UInt32: Registration] = [:]
+  private var eventHandlerReference: EventHandlerRef?
+
+  func register(_ shortcut: Shortcut, action: @escaping @MainActor () -> Void) throws {
+    guard registrations[shortcut.id] == nil else {
+      throw HotKeyRegistrationError.duplicateID
+    }
+    try installEventHandlerIfNeeded()
+
+    var reference: EventHotKeyRef?
+    let hotKeyID = EventHotKeyID(signature: bexHotKeySignature, id: shortcut.id)
+    let status = RegisterEventHotKey(
+      shortcut.keyCode,
+      shortcut.modifiers,
+      hotKeyID,
+      GetEventDispatcherTarget(),
+      0,
+      &reference
+    )
+    guard status == noErr, let reference else {
+      if registrations.isEmpty {
+        removeEventHandler()
+      }
+      throw HotKeyRegistrationError.failed
+    }
+    registrations[shortcut.id] = Registration(reference: reference, action: action)
+  }
+
+  func unregister(id: UInt32) {
+    guard let registration = registrations.removeValue(forKey: id) else { return }
+    UnregisterEventHotKey(registration.reference)
+    if registrations.isEmpty {
+      removeEventHandler()
+    }
+  }
+
+  func unregisterAll() {
+    for registration in registrations.values {
+      UnregisterEventHotKey(registration.reference)
+    }
+    registrations.removeAll()
+    removeEventHandler()
+  }
+
+  func handle(_ id: UInt32) {
+    registrations[id]?.action()
+  }
+
+  private func installEventHandlerIfNeeded() throws {
+    guard eventHandlerReference == nil else { return }
     var eventType = EventTypeSpec(
       eventClass: OSType(kEventClassKeyboard),
       eventKind: UInt32(kEventHotKeyPressed)
     )
     let context = Unmanaged.passUnretained(self).toOpaque()
-    let installStatus = InstallEventHandler(
+    let status = InstallEventHandler(
       GetEventDispatcherTarget(),
       globalHotKeyEventHandler,
       1,
@@ -47,44 +100,21 @@ final class GlobalHotKey {
       context,
       &eventHandlerReference
     )
-    guard installStatus == noErr else {
-      throw HotKeyRegistrationError.failed
-    }
-
-    let hotKeyID = EventHotKeyID(signature: Self.signature, id: 1)
-    let registerStatus = RegisterEventHotKey(
-      UInt32(kVK_ANSI_G),
-      UInt32(cmdKey | shiftKey),
-      hotKeyID,
-      GetEventDispatcherTarget(),
-      0,
-      &hotKeyReference
-    )
-    guard registerStatus == noErr else {
-      if let eventHandlerReference {
-        RemoveEventHandler(eventHandlerReference)
-        self.eventHandlerReference = nil
-      }
+    guard status == noErr else {
+      eventHandlerReference = nil
       throw HotKeyRegistrationError.failed
     }
   }
 
-  func unregister() {
-    if let hotKeyReference {
-      UnregisterEventHotKey(hotKeyReference)
-      self.hotKeyReference = nil
-    }
+  private func removeEventHandler() {
     if let eventHandlerReference {
       RemoveEventHandler(eventHandlerReference)
       self.eventHandlerReference = nil
     }
   }
-
-  fileprivate func invoke() {
-    action()
-  }
 }
 
-private enum HotKeyRegistrationError: Error {
+enum HotKeyRegistrationError: Error {
+  case duplicateID
   case failed
 }

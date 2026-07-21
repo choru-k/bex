@@ -21,16 +21,25 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var oauthInProgress = false
   @Published private(set) var manualCallbackRequired = false
   @Published var callbackURL = ""
+  @Published private(set) var promptDeliveryMode: PromptDeliveryMode = .sendAfterApproval
+  @Published private(set) var accessibilityTrusted = false
+  @Published private(set) var hookStatuses: [PromptClient: HookInstallationStatus] = [:]
+  @Published private(set) var hookConfigPaths: [PromptClient: String] = [:]
+  @Published private(set) var promptGateError: String?
+  @Published private(set) var promptOperationClient: PromptClient?
 
   private let preferences: PreferencesStore
   private let keychain: KeychainStore
   private let grammar: any GrammarServicing
   private let codexOAuth: CodexOAuthService
+  private let promptTarget: any PromptTargetServicing
+  private let hookManager: any HookInstallationManaging
   private let applyAppearance: @MainActor (AppearancePreference) -> Void
 
   private var modelTask: Task<Void, Never>?
   private var ollamaTask: Task<Void, Never>?
   private var oauthTask: Task<Void, Never>?
+  private var promptTask: Task<Void, Never>?
   private var isLoaded = false
   private var isNormalizingOllamaURL = false
 
@@ -39,12 +48,16 @@ final class SettingsViewModel: ObservableObject {
     keychain: KeychainStore,
     grammar: any GrammarServicing,
     codexOAuth: CodexOAuthService,
+    promptTarget: any PromptTargetServicing = PromptTargetService(),
+    hookManager: any HookInstallationManaging = HookInstallationManager(),
     applyAppearance: @escaping @MainActor (AppearancePreference) -> Void
   ) {
     self.preferences = preferences
     self.keychain = keychain
     self.grammar = grammar
     self.codexOAuth = codexOAuth
+    self.promptTarget = promptTarget
+    self.hookManager = hookManager
     self.applyAppearance = applyAppearance
   }
 
@@ -66,6 +79,7 @@ final class SettingsViewModel: ObservableObject {
     await refreshCredentialState()
     await refreshCodexState()
     await reloadModels()
+    await loadPromptGate()
   }
 
   func selectProvider(_ provider: LLMProvider) {
@@ -256,10 +270,113 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
+  func selectPromptDeliveryMode(_ mode: PromptDeliveryMode) {
+    promptDeliveryMode = mode
+    Task { [preferences] in
+      await preferences.setPromptDeliveryMode(mode)
+    }
+  }
+
+  func requestAccessibility() {
+    accessibilityTrusted = promptTarget.requestAccessibilityTrust()
+  }
+
+  func testAccessibility() {
+    accessibilityTrusted = promptTarget.isAccessibilityTrusted
+    promptGateError = accessibilityTrusted
+      ? nil
+      : BexError.accessibilityPermissionRequired.localizedDescription
+  }
+
+  func installHook(_ client: PromptClient) {
+    runHookOperation(client: client, install: true)
+  }
+
+  func uninstallHook(_ client: PromptClient) {
+    runHookOperation(client: client, install: false)
+  }
+
+  func hookStatusLabel(for client: PromptClient) -> String {
+    switch hookStatuses[client] ?? .notInstalled {
+    case .notInstalled:
+      "Not installed"
+    case .awaitingCodexTrust:
+      "Installed — approve Bex in /hooks"
+    case .installedUnconfirmed:
+      "Installed — waiting for first prompt"
+    case .active(let lastSeen):
+      "Active · last seen \(lastSeen.formatted(.relative(presentation: .named)))"
+    case .needsRepair(let detail):
+      "Needs repair: \(detail)"
+    case .unavailable(let detail):
+      "Unavailable: \(detail)"
+    }
+  }
+
+  func hookConfigPath(for client: PromptClient) -> String {
+    hookConfigPaths[client] ?? "Managed by Bex"
+  }
+
+  func hookActionLabel(for client: PromptClient) -> String {
+    switch hookStatuses[client] ?? .notInstalled {
+    case .notInstalled, .unavailable:
+      "Install"
+    case .needsRepair:
+      "Repair"
+    case .awaitingCodexTrust, .installedUnconfirmed, .active:
+      "Uninstall"
+    }
+  }
+
+  func performHookAction(for client: PromptClient) {
+    switch hookStatuses[client] ?? .notInstalled {
+    case .awaitingCodexTrust, .installedUnconfirmed, .active:
+      uninstallHook(client)
+    case .notInstalled, .needsRepair, .unavailable:
+      installHook(client)
+    }
+  }
+
+  private func loadPromptGate() async {
+    promptDeliveryMode = await preferences.promptDeliveryMode()
+    accessibilityTrusted = promptTarget.isAccessibilityTrusted
+    if let manager = hookManager as? HookInstallationManager {
+      for client in PromptClient.allCases {
+        hookConfigPaths[client] = await manager.configuredPath(for: client).path
+      }
+    }
+    for client in PromptClient.allCases {
+      hookStatuses[client] = await hookManager.status(for: client)
+    }
+  }
+
+  private func runHookOperation(client: PromptClient, install: Bool) {
+    guard promptOperationClient == nil else { return }
+    promptOperationClient = client
+    promptGateError = nil
+    promptTask?.cancel()
+    promptTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        if install {
+          try await hookManager.install(client)
+        } else {
+          try await hookManager.uninstall(client)
+        }
+        hookStatuses[client] = await hookManager.status(for: client)
+      } catch {
+        promptGateError = error.localizedDescription
+        hookStatuses[client] = await hookManager.status(for: client)
+      }
+      promptOperationClient = nil
+    }
+  }
+
   func close() {
     modelTask?.cancel()
     ollamaTask?.cancel()
     oauthTask?.cancel()
+    promptTask?.cancel()
     Task { [codexOAuth] in
       await codexOAuth.cancel()
     }
@@ -269,6 +386,7 @@ final class SettingsViewModel: ObservableObject {
     await modelTask?.value
     await ollamaTask?.value
     await oauthTask?.value
+    await promptTask?.value
   }
 
   private func reloadModels() async {

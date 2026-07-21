@@ -10,6 +10,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
   private var quickCheckPanelController: QuickCheckPanelController?
   private var quickCheckViewModel: QuickCheckViewModel?
+  private var promptGatePanelController: PromptGatePanelController?
+  private var promptGateViewModel: PromptGateViewModel?
   private var historyWindowController: NSWindowController?
   private var profilesWindowController: NSWindowController?
   private var settingsWindowController: NSWindowController?
@@ -78,6 +80,49 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     quickCheckPanelController?.closePanel()
   }
 
+  func showPromptGate() {
+    if let promptGateViewModel, promptGateViewModel.phase != .closed {
+      promptGatePanelController?.show()
+      return
+    }
+    do {
+      let capture = try services.promptTarget.captureFrontmostTarget()
+      let session = PromptGateSession(
+        initialDraft: capture.draft,
+        target: capture.target,
+        source: capture.source
+      )
+      showPromptGate(session: session)
+    } catch {
+      let alert = NSAlert(error: error)
+      NSApp.activate(ignoringOtherApps: true)
+      alert.runModal()
+    }
+  }
+
+  func showPromptGate(hookRequest: HookReviewRequest) -> Bool {
+    do {
+      let target = try services.promptTarget.target(for: hookRequest)
+      let session = PromptGateSession(
+        initialDraft: hookRequest.prompt,
+        target: target,
+        knownClient: hookRequest.client,
+        source: .hook(requestID: hookRequest.requestID)
+      )
+      return showPromptGate(session: session)
+    } catch {
+      return false
+    }
+  }
+
+  func invalidatePromptGate(requestID: UUID) {
+    promptGateViewModel?.invalidateHookRequest(id: requestID)
+  }
+
+  func closePromptGate() {
+    promptGatePanelController?.orderOut()
+  }
+
   func showHistory() {
     closeQuickCheck()
     if historyWindowController == nil {
@@ -122,6 +167,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         keychain: services.keychain,
         grammar: services.grammar,
         codexOAuth: services.codexOAuth,
+        promptTarget: services.promptTarget,
+        hookManager: services.hookManager,
         applyAppearance: { [weak self] appearance in
           self?.applyAppearance(appearance)
         }
@@ -166,6 +213,32 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     } else if window === settingsWindowController?.window {
       settingsWindowController = nil
     }
+  }
+
+  @discardableResult
+  private func showPromptGate(session: PromptGateSession) -> Bool {
+    if promptGatePanelController == nil {
+      let viewModel = PromptGateViewModel(
+        preferences: services.preferences,
+        keychain: services.keychain,
+        promptGrammar: services.promptGrammar,
+        targetService: services.promptTarget,
+        approvalStore: services.approvalStore,
+        hookManager: services.hookManager,
+        hookResponder: services.promptGateIPC,
+        onClose: { [weak self] in self?.closePromptGate() },
+        onOpenSettings: { [weak self] in self?.showSettings() }
+      )
+      promptGateViewModel = viewModel
+      promptGatePanelController = PromptGatePanelController(
+        rootView: AnyView(PromptGateView(viewModel: viewModel)),
+        cancelAction: { [weak viewModel] in viewModel?.cancel() }
+      )
+    }
+    guard let promptGateViewModel else { return false }
+    let began = promptGateViewModel.begin(session)
+    promptGatePanelController?.show()
+    return began
   }
 
   private func makeWindowController<Content: View>(
