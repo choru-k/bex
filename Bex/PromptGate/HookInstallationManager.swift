@@ -897,7 +897,7 @@ actor HookInstallationManager: HookInstallationManaging {
       descriptor: descriptor,
       trustGuidance: trustGuidance(for: descriptor.client),
       limitations: limitations(for: descriptor.client),
-      signer: "bex-hook · ESURPGU29C",
+      signer: Self.helperSignerDescription(embeddedHelperURL),
       currentText: currentConfig.flatMap { String(data: $0, encoding: .utf8) },
       proposedText: proposedConfig.flatMap { String(data: $0, encoding: .utf8) },
       actions: actions
@@ -1298,14 +1298,92 @@ actor HookInstallationManager: HookInstallationManaging {
       throw BexError.storageFailure("The embedded Bex hook signature is invalid.")
     }
     var information: CFDictionary?
-    guard SecCodeCopySigningInformation(staticCode, [], &information) == errSecSuccess,
-      let dictionary = information as? [String: Any],
-      dictionary[kSecCodeInfoIdentifier as String] as? String == HookProtocolConstants.helperName,
-      dictionary[kSecCodeInfoTeamIdentifier as String] as? String == "ESURPGU29C"
+    guard SecCodeCopySigningInformation(
+      staticCode,
+      SecCSFlags(rawValue: kSecCSSigningInformation),
+      &information
+    ) == errSecSuccess,
+      let dictionary = information as? [String: Any]
     else {
       throw BexError.storageFailure("The embedded hook signer identity does not match Bex.")
     }
+    let identifier = dictionary[kSecCodeInfoIdentifier as String] as? String
+    let teamID = dictionary[kSecCodeInfoTeamIdentifier as String] as? String
+    if identifier == HookProtocolConstants.helperName, teamID == "ESURPGU29C" {
+      return
+    }
+
+    #if DEBUG
+      guard isBundledAdHocDebugHelper(url, helperInformation: dictionary) else {
+        throw BexError.storageFailure("The embedded hook signer identity does not match Bex.")
+      }
+    #else
+      throw BexError.storageFailure("The embedded hook signer identity does not match Bex.")
+    #endif
   }
+
+  private static func helperSignerDescription(_ url: URL) -> String {
+    var staticCode: SecStaticCode?
+    var information: CFDictionary?
+    guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+      let staticCode,
+      SecCodeCopySigningInformation(
+        staticCode,
+        SecCSFlags(rawValue: kSecCSSigningInformation),
+        &information
+      ) == errSecSuccess,
+      let dictionary = information as? [String: Any]
+    else {
+      return HookProtocolConstants.helperName
+    }
+    if let teamID = dictionary[kSecCodeInfoTeamIdentifier as String] as? String {
+      return "\(HookProtocolConstants.helperName) · \(teamID)"
+    }
+    #if DEBUG
+      return "\(HookProtocolConstants.helperName) · local debug signature"
+    #else
+      return HookProtocolConstants.helperName
+    #endif
+  }
+
+  #if DEBUG
+    private static func isBundledAdHocDebugHelper(
+      _ url: URL,
+      helperInformation: [String: Any]
+    ) -> Bool {
+      guard let identifier = helperInformation[kSecCodeInfoIdentifier as String] as? String,
+        identifier == HookProtocolConstants.helperName
+          || identifier.hasPrefix("\(HookProtocolConstants.helperName)-"),
+        helperInformation[kSecCodeInfoTeamIdentifier as String] == nil,
+        Bundle.main.bundleIdentifier == "com.bex.desktop",
+        url.standardizedFileURL.path
+          == Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers/\(HookProtocolConstants.helperName)")
+            .standardizedFileURL.path
+      else {
+        return false
+      }
+      var processCode: SecCode?
+      guard SecCodeCopySelf([], &processCode) == errSecSuccess, let processCode else {
+        return false
+      }
+      var processStaticCode: SecStaticCode?
+      guard
+        SecCodeCopyStaticCode(processCode, [], &processStaticCode) == errSecSuccess,
+        let processStaticCode
+      else {
+        return false
+      }
+      var processInformation: CFDictionary?
+      return SecCodeCopySigningInformation(
+        processStaticCode,
+        SecCSFlags(rawValue: kSecCSSigningInformation),
+        &processInformation
+      )
+        == errSecSuccess
+        && (processInformation as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] == nil
+    }
+  #endif
 
   private func readRoot(at url: URL) throws -> [String: Any] {
     try decodeRoot(Data(contentsOf: url))

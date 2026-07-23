@@ -5,3 +5,4 @@ DerivedData.noindex/
 *.xcuserstate
 **/xcuserdata/
 plan/
+*.profraw

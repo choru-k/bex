@@ -262,6 +262,14 @@ final class PromptGateIPCServerTests: XCTestCase {
 }
 
 final class HookInstallationManagerTests: XCTestCase {
+  func testBundledDebugHelperPassesSignaturePolicy() throws {
+    let helper = Bundle.main.bundleURL.appendingPathComponent(
+      "Contents/Helpers/\(HookProtocolConstants.helperName)"
+    )
+    XCTAssertTrue(FileManager.default.fileExists(atPath: helper.path))
+    try HookInstallationManager.verifyHelperSignature(helper)
+  }
+
   func testInstallIsIdempotentPreservesUnrelatedConfigModeAndRestoresExactBaseline() async throws {
     let fixture = try InstallerFixture()
     let path = await fixture.manager.configuredPath(for: .claudeCode)
