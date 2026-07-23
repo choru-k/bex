@@ -630,6 +630,20 @@ final class BexUITests: XCTestCase {
     )
   }
 
+  func testHookRequestCanSkipPerPromptOutboundConfirmation() throws {
+    continueAfterFailure = false
+    let hook = launchScenario("hook-skips-outbound-confirmation")
+    defer { hook.terminate() }
+
+    let corrected = awaitPromptCorrection(
+      in: hook,
+      expected: "Make this UI test prompt concise."
+    )
+
+    XCTAssertEqual(corrected.value as? String, "Make this UI test prompt concise.")
+    XCTAssertFalse(hook.buttons["prompt-gate-confirm-outbound"].exists)
+  }
+
   func testNamedDirtyEditorAndSetupResumeScenariosLaunchExpectedWork() {
     continueAfterFailure = false
 

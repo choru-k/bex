@@ -15,6 +15,7 @@ final class UITestScenarioContractTests: XCTestCase {
         "permission-denied",
         "permission-trusted",
         "hook-provided-client",
+        "hook-skips-outbound-confirmation",
         "hotkey-conflict",
         "quick-check-grammar-in-flight",
         "prompt-delivery-in-flight",
@@ -124,6 +125,11 @@ final class UITestScenarioContractTests: XCTestCase {
       UITestScenario.hookProvidedClient.configuration.preferences.preferredPromptClient,
       .codex
     )
+    let directHook = UITestScenario.hookSkipsOutboundConfirmation.configuration
+    XCTAssertEqual(directHook.preferences.preferredPromptClient, .codex)
+    XCTAssertEqual(directHook.preferences.acceptedOutboundDisclosureProvider, .openAI)
+    XCTAssertEqual(directHook.preferences.confirmsHookOutboundPayloads, false)
+    XCTAssertEqual(directHook.launchDestination, .hookPromptGate)
     XCTAssertEqual(
       UITestScenario.hotKeyConflict.configuration.hotKeyRegistration,
       .conflict

@@ -12,6 +12,7 @@
     case permissionDenied = "permission-denied"
     case permissionTrusted = "permission-trusted"
     case hookProvidedClient = "hook-provided-client"
+    case hookSkipsOutboundConfirmation = "hook-skips-outbound-confirmation"
     case hotKeyConflict = "hotkey-conflict"
     case quickCheckGrammarInFlight = "quick-check-grammar-in-flight"
     case promptDeliveryInFlight = "prompt-delivery-in-flight"
@@ -77,6 +78,16 @@
         configuration.launchDestination = .settings
       case .hookProvidedClient:
         configuration.preferences.preferredPromptClient = .codex
+        configuration.hook = .init(
+          client: .codex,
+          prompt: "Make this UI test prompt concise.",
+          status: .active(lastSeen: UITestFixtureConfiguration.fixtureDate)
+        )
+        configuration.launchDestination = .hookPromptGate
+      case .hookSkipsOutboundConfirmation:
+        configuration.preferences.preferredPromptClient = .codex
+        configuration.preferences.acceptedOutboundDisclosureProvider = .openAI
+        configuration.preferences.confirmsHookOutboundPayloads = false
         configuration.hook = .init(
           client: .codex,
           prompt: "Make this UI test prompt concise.",
@@ -185,6 +196,7 @@
     var preferredPromptClient: PromptClient?
     var promptDeliveryMode: PromptDeliveryMode?
     var acceptedOutboundDisclosureProvider: LLMProvider?
+    var confirmsHookOutboundPayloads: Bool?
   }
 
   struct UITestTargetSeed: Equatable, Sendable {
@@ -357,6 +369,9 @@
       }
       if let mode = preferences.promptDeliveryMode {
         await store.setPromptDeliveryMode(mode)
+      }
+      if let confirms = preferences.confirmsHookOutboundPayloads {
+        await store.setConfirmsHookOutboundPayloads(confirms)
       }
       if let provider = preferences.acceptedOutboundDisclosureProvider {
         let endpoint: String?

@@ -641,6 +641,19 @@ struct SettingsView: View {
 
   private var integrationsCategory: some View {
     Form {
+      Section("Hook prompt privacy") {
+        Toggle(
+          "Confirm each hook payload before sending",
+          isOn: hookOutboundConfirmationBinding
+        )
+        .accessibilityIdentifier("settings-hook-outbound-confirmation")
+        Text(
+          "When off, installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Ambiguous manual Fix & Send captures still require confirmation."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+
       Section("Claude Code and Codex") {
         ForEach(PromptClient.focusedPickerClients) { client in
           VStack(alignment: .leading, spacing: 5) {
@@ -856,6 +869,13 @@ struct SettingsView: View {
     Binding(
       get: { viewModel.promptDeliveryMode },
       set: { viewModel.selectPromptDeliveryMode($0) }
+    )
+  }
+
+  private var hookOutboundConfirmationBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.confirmsHookOutboundPayloads },
+      set: { viewModel.setConfirmsHookOutboundPayloads($0) }
     )
   }
 

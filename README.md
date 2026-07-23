@@ -77,6 +77,8 @@ Integrations are optional. The focused-app **⌘⇧P** flow works without them. 
 4. For Codex, open `/hooks` and explicitly trust the Bex handler. Claude Code `/hooks` is inspection-only and needs no separate approval. OMP uses its reviewed native prompt gate and needs no marketplace extension.
 5. Keep Bex running and submit a test prompt. Bex reports **Active** only after a matching post-install heartbeat.
 
+By default, Bex asks you to confirm each hook prompt before sending it to the configured provider. To skip that per-prompt screen, turn off **Settings → Integrations → Confirm each hook payload before sending**. The first disclosure for each provider still requires approval, and ambiguous manual **Fix & Send** captures remain gated.
+
 Bex resolves these exact host-owned targets:
 
 - Claude Code: `${CLAUDE_CONFIG_DIR}/settings.json` when that variable is inherited by Bex, otherwise `~/.claude/settings.json`

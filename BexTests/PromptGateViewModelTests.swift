@@ -41,6 +41,25 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(hook.viewModel.phase, .onboarding)
   }
 
+  func testAcceptedHookDisclosureCanSkipPerPromptConfirmation() async throws {
+    let grammar = RecordingPromptGrammar()
+    let fixture = try await Fixture(
+      acceptedDisclosure: true,
+      confirmsHookOutboundPayloads: false,
+      grammar: grammar
+    )
+
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.hookSession(requestID: UUID(), text: "This are original.")
+      ))
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
+    let calls = await grammar.recordedCalls()
+    XCTAssertEqual(calls.map(\.text), ["This are original."])
+  }
+
   func testConsentNamesProviderAndModelAndShowsMaskedPayloadWithoutWritingStyle() async throws {
     let fixture = try await Fixture(
       acceptedDisclosure: false
@@ -792,6 +811,7 @@ private final class Fixture {
   init(
     acceptedDisclosure: Bool = true,
     accessibilityTrusted: Bool = true,
+    confirmsHookOutboundPayloads: Bool = true,
     providerSetUp: Bool = true,
     grammar: any PromptGrammarServicing = RecordingPromptGrammar()
   ) async throws {
@@ -803,6 +823,7 @@ private final class Fixture {
       let destination = try await preferences.outboundDestination()
       await preferences.acceptCurrentOutboundDisclosure(for: destination)
     }
+    await preferences.setConfirmsHookOutboundPayloads(confirmsHookOutboundPayloads)
     let keychain = KeychainStore(service: suite, inMemory: true)
     if providerSetUp {
       try await keychain.saveAPIKey("secret", for: .openAI)

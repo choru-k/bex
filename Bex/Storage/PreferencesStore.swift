@@ -14,13 +14,18 @@ enum OutboundConfirmationContext: Equatable, Sendable {
 }
 
 extension OutboundConfirmationContext {
-  func requiresConfirmation(hasAcceptedDisclosure: Bool) -> Bool {
+  func requiresConfirmation(
+    hasAcceptedDisclosure: Bool,
+    confirmsHookOutboundPayloads: Bool = true
+  ) -> Bool {
     guard hasAcceptedDisclosure else { return true }
     switch self {
     case .quickCheckExternal, .manualCapturedField:
       return false
-    case .ambiguousManual, .hook:
+    case .ambiguousManual:
       return true
+    case .hook:
+      return confirmsHookOutboundPayloads
     }
   }
 }
@@ -40,6 +45,7 @@ actor PreferencesStore {
     static let quickCheckKeyChord = "shortcut.quickCheck"
     static let fixAndSendKeyChord = "shortcut.fixAndSend"
     static let welcomeCompletedVersion = "welcome.completedVersion"
+    static let confirmsHookOutboundPayloads = "promptGate.confirmsHookOutboundPayloads"
 
     static func outboundDisclosureVersion(for destination: OutboundDestination) -> String {
       guard destination.provider == .ollama, let endpoint = destination.ollamaEndpoint else {
@@ -248,6 +254,17 @@ actor PreferencesStore {
 
   func setPromptDeliveryMode(_ mode: PromptDeliveryMode) {
     defaults.set(mode.rawValue, forKey: Key.promptDeliveryMode)
+  }
+
+  func confirmsHookOutboundPayloads() -> Bool {
+    guard defaults.object(forKey: Key.confirmsHookOutboundPayloads) != nil else {
+      return true
+    }
+    return defaults.bool(forKey: Key.confirmsHookOutboundPayloads)
+  }
+
+  func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
+    defaults.set(confirms, forKey: Key.confirmsHookOutboundPayloads)
   }
 
   func outboundDisclosureVersion(for destination: OutboundDestination) -> Int {

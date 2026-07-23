@@ -54,6 +54,7 @@ final class PromptGateViewModel: ObservableObject {
   private var configuredDestination: OutboundDestination?
   private var replacementConfirmedDraft: String?
   private var hasAcceptedDestinationDisclosure = false
+  private var confirmsHookOutboundPayloads = true
   private var isClosing = false
   private var pendingCorrection: PendingCorrection?
 
@@ -598,6 +599,7 @@ final class PromptGateViewModel: ObservableObject {
     let model = await preferences.selectedModel(for: provider)
     let preferredClient = await preferences.preferredPromptClient()
     let mode = await preferences.promptDeliveryMode()
+    let hookOutboundConfirmation = await preferences.confirmsHookOutboundPayloads()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
     do {
@@ -631,6 +633,7 @@ final class PromptGateViewModel: ObservableObject {
     selectedClient = refreshedClient
     deliveryMode = mode
     hasAcceptedDestinationDisclosure = acceptedDisclosure
+    confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
     selectedClientStatus = clientStatus
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
@@ -702,6 +705,7 @@ final class PromptGateViewModel: ObservableObject {
     let model = await preferences.selectedModel(for: provider)
     let preferredClient = await preferences.preferredPromptClient()
     let mode = await preferences.promptDeliveryMode()
+    let hookOutboundConfirmation = await preferences.confirmsHookOutboundPayloads()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
     do {
@@ -734,6 +738,7 @@ final class PromptGateViewModel: ObservableObject {
     selectedClient = session.knownClient ?? preferredClient
     deliveryMode = mode
     hasAcceptedDestinationDisclosure = acceptedDisclosure
+    confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
     selectedClientStatus = await hookManager.status(for: selectedClient)
     guard isCurrent(sessionID: sessionID, generation: generation) else {
@@ -849,7 +854,8 @@ final class PromptGateViewModel: ObservableObject {
     let requiresConfirmation =
       pending.forcesConfirmation
       || session.source.outboundConfirmationContext.requiresConfirmation(
-        hasAcceptedDisclosure: hasAcceptedDestinationDisclosure
+        hasAcceptedDisclosure: hasAcceptedDestinationDisclosure,
+        confirmsHookOutboundPayloads: confirmsHookOutboundPayloads
       )
     if requiresConfirmation,
       confirmedOutboundDraft != pending.original

@@ -53,6 +53,7 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var manualCallbackRequired = false
   @Published var callbackURL = ""
   @Published private(set) var promptDeliveryMode: PromptDeliveryMode = .sendAfterApproval
+  @Published private(set) var confirmsHookOutboundPayloads = true
   @Published private(set) var accessibilityTrusted = false
   @Published private(set) var hookStatuses: [PromptClient: HookInstallationStatus] = [:]
   @Published private(set) var hookConfigPaths: [PromptClient: String] = [:]
@@ -217,6 +218,7 @@ final class SettingsViewModel: ObservableObject {
     async let selectedProvider = preferences.selectedProvider()
     async let savedAppearance = preferences.appearance()
     async let savedPromptDeliveryMode = preferences.promptDeliveryMode()
+    async let savedHookOutboundConfirmation = preferences.confirmsHookOutboundPayloads()
     async let savedDraftRetention = preferences.draftRetentionChoice()
     async let savedHistoryRetention = preferences.historyRetentionChoice()
     async let savedQuickCheckChord = preferences.quickCheckKeyChord()
@@ -228,6 +230,7 @@ final class SettingsViewModel: ObservableObject {
     ollamaURL = await preferences.ollamaURL()
     appearance = await savedAppearance
     promptDeliveryMode = await savedPromptDeliveryMode
+    confirmsHookOutboundPayloads = await savedHookOutboundConfirmation
     draftRetentionChoice = await savedDraftRetention
     historyRetentionChoice = await savedHistoryRetention
     quickCheckKeyChord = await savedQuickCheckChord
@@ -431,6 +434,13 @@ final class SettingsViewModel: ObservableObject {
     promptDeliveryMode = mode
     enqueuePreferenceUpdate { [preferences] in
       await preferences.setPromptDeliveryMode(mode)
+    }
+  }
+
+  func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
+    confirmsHookOutboundPayloads = confirms
+    enqueuePreferenceUpdate { [preferences] in
+      await preferences.setConfirmsHookOutboundPayloads(confirms)
     }
   }
 

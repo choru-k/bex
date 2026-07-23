@@ -18,6 +18,20 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertEqual(draft, "")
   }
 
+  func testHookOutboundConfirmationDefaultsOnAndPersistsOptOut() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+
+    let preferences = fixture.store
+    let confirmsByDefault = await preferences.confirmsHookOutboundPayloads()
+    XCTAssertTrue(confirmsByDefault)
+
+    await preferences.setConfirmsHookOutboundPayloads(false)
+
+    let confirmsAfterOptOut = await preferences.confirmsHookOutboundPayloads()
+    XCTAssertFalse(confirmsAfterOptOut)
+  }
+
   func testDraftRetentionDisableStopsWritesWithoutDeletingSavedDraft() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }
@@ -99,7 +113,21 @@ final class PreferencesContractTests: XCTestCase {
       )
     )
     XCTAssertTrue(
-      OutboundConfirmationContext.hook.requiresConfirmation(hasAcceptedDisclosure: true)
+      OutboundConfirmationContext.hook.requiresConfirmation(
+        hasAcceptedDisclosure: true
+      )
+    )
+    XCTAssertFalse(
+      OutboundConfirmationContext.hook.requiresConfirmation(
+        hasAcceptedDisclosure: true,
+        confirmsHookOutboundPayloads: false
+      )
+    )
+    XCTAssertTrue(
+      OutboundConfirmationContext.hook.requiresConfirmation(
+        hasAcceptedDisclosure: false,
+        confirmsHookOutboundPayloads: false
+      )
     )
     XCTAssertTrue(
       OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
