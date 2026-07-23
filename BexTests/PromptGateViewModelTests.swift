@@ -12,36 +12,19 @@ private struct PromptGrammarCall: Equatable, Sendable {
 
 @MainActor
 final class PromptGateViewModelTests: XCTestCase {
-  func testConsentMatrixUsesSourcePolicyAndDestinationScopedDisclosure() async throws {
-    let skippedCaptured = try await Fixture(
-      policy: .skipUnambiguousManual,
-      acceptedDisclosure: true
-    )
+  func testConsentMatrixUsesSourceAndDestinationScopedDisclosure() async throws {
+    let captured = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(
-      skippedCaptured.viewModel.begin(
-        skippedCaptured.capturedSession(text: "This are original.")
+      captured.viewModel.begin(
+        captured.capturedSession(text: "This are original.")
       ))
-    XCTAssertEqual(skippedCaptured.viewModel.phase, .onboarding)
-    XCTAssertTrue(skippedCaptured.viewModel.isLoadingSession)
-    await skippedCaptured.viewModel.waitForCurrentWork()
-    XCTAssertFalse(skippedCaptured.viewModel.isLoadingSession)
-    XCTAssertEqual(skippedCaptured.viewModel.phase, .reviewing)
+    XCTAssertEqual(captured.viewModel.phase, .onboarding)
+    XCTAssertTrue(captured.viewModel.isLoadingSession)
+    await captured.viewModel.waitForCurrentWork()
+    XCTAssertFalse(captured.viewModel.isLoadingSession)
+    XCTAssertEqual(captured.viewModel.phase, .reviewing)
 
-    let confirmedCaptured = try await Fixture(
-      policy: .alwaysConfirm,
-      acceptedDisclosure: true
-    )
-    XCTAssertTrue(
-      confirmedCaptured.viewModel.begin(
-        confirmedCaptured.capturedSession(text: "This are original.")
-      ))
-    await confirmedCaptured.viewModel.waitForCurrentWork()
-    XCTAssertEqual(confirmedCaptured.viewModel.phase, .onboarding)
-
-    let ambiguousManual = try await Fixture(
-      policy: .skipUnambiguousManual,
-      acceptedDisclosure: true
-    )
+    let ambiguousManual = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(
       ambiguousManual.viewModel.begin(
         ambiguousManual.composerSession(text: "This are original.")
@@ -49,10 +32,7 @@ final class PromptGateViewModelTests: XCTestCase {
     await ambiguousManual.viewModel.waitForCurrentWork()
     XCTAssertEqual(ambiguousManual.viewModel.phase, .onboarding)
 
-    let hook = try await Fixture(
-      policy: .skipUnambiguousManual,
-      acceptedDisclosure: true
-    )
+    let hook = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(
       hook.viewModel.begin(
         hook.hookSession(requestID: UUID(), text: "This are original.")
@@ -63,7 +43,6 @@ final class PromptGateViewModelTests: XCTestCase {
 
   func testConsentNamesProviderAndModelAndShowsMaskedPayloadWithoutWritingStyle() async throws {
     let fixture = try await Fixture(
-      policy: .skipUnambiguousManual,
       acceptedDisclosure: false
     )
     let source = "Explain `swift test` to the teammate. Project alpha is ordinary prose."
@@ -104,7 +83,6 @@ final class PromptGateViewModelTests: XCTestCase {
 
   func testComposerConfirmsOnlyAfterDraftExistsAndEveryChangedRequest() async throws {
     let fixture = try await Fixture(
-      policy: .skipUnambiguousManual,
       acceptedDisclosure: true
     )
     XCTAssertTrue(fixture.viewModel.begin(fixture.composerSession(text: "")))
@@ -241,8 +219,7 @@ final class PromptGateViewModelTests: XCTestCase {
   func testFocusAndAnnouncementsFollowConsentCheckingAndReviewMatrix() async throws {
     let grammar = SuspendedPromptGrammar()
     let fixture = try await Fixture(
-      policy: .alwaysConfirm,
-      acceptedDisclosure: true,
+      acceptedDisclosure: false,
       grammar: grammar
     )
     XCTAssertTrue(
@@ -521,39 +498,38 @@ final class PromptGateViewModelTests: XCTestCase {
   func testConfigurationRefreshPreservesSessionAndDoesNotStartCorrection() async throws {
     let grammar = RecordingPromptGrammar()
     let fixture = try await Fixture(
-      policy: .alwaysConfirm,
       acceptedDisclosure: true,
       grammar: grammar
     )
     let source = "Preserve this manual draft."
     XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: source)))
     await fixture.viewModel.waitForCurrentWork()
-    XCTAssertEqual(fixture.viewModel.phase, .onboarding)
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
+    let callsBeforeRefresh = await grammar.recordedCalls()
+    XCTAssertEqual(callsBeforeRefresh.map(\.text), [source])
 
     await fixture.preferences.setSelectedProvider(.claude)
     await fixture.preferences.setSelectedModel("claude-refreshed-model", for: .claude)
-    await fixture.preferences.setOutboundConfirmationPolicy(.skipUnambiguousManual)
     let refreshedDestination = try await fixture.preferences.outboundDestination()
     await fixture.preferences.acceptCurrentOutboundDisclosure(for: refreshedDestination)
     fixture.target.isAccessibilityTrusted = false
 
     await fixture.viewModel.refreshConfigurationAfterSettings()
 
-    XCTAssertEqual(fixture.viewModel.phase, .composing)
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
     XCTAssertEqual(fixture.viewModel.draft, source)
     XCTAssertEqual(fixture.viewModel.selectedProvider, .claude)
     XCTAssertEqual(fixture.viewModel.selectedModel, "claude-refreshed-model")
     XCTAssertFalse(fixture.viewModel.providerIsSetUp)
     XCTAssertTrue(fixture.viewModel.providerDisclosureIsAccepted)
     XCTAssertFalse(fixture.viewModel.isAccessibilityTrusted)
-    let calls = await grammar.recordedCalls()
-    XCTAssertTrue(calls.isEmpty)
+    let callsAfterRefresh = await grammar.recordedCalls()
+    XCTAssertEqual(callsAfterRefresh, callsBeforeRefresh)
   }
 
-  func testExistingSessionRefreshesChangedConfirmationPolicyBeforeRecheck() async throws {
+  func testExistingAcceptedManualSessionRecheckProceedsDirectly() async throws {
     let grammar = RecordingPromptGrammar()
     let fixture = try await Fixture(
-      policy: .skipUnambiguousManual,
       acceptedDisclosure: true,
       grammar: grammar
     )
@@ -565,21 +541,19 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(fixture.viewModel.phase, .reviewing)
 
     fixture.viewModel.backToEdit()
-    await fixture.preferences.setOutboundConfirmationPolicy(.alwaysConfirm)
     fixture.viewModel.draft = "This are changed."
     fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
 
-    XCTAssertEqual(fixture.viewModel.phase, .onboarding)
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
     let calls = await grammar.recordedCalls()
-    XCTAssertEqual(calls.map(\.text), ["This are original."])
+    XCTAssertEqual(calls.map(\.text), ["This are original.", "This are changed."])
   }
 
   func testConsentPreviewPayloadIsExactTransportPayloadAndProtectedSpansRestore() async throws {
     let grammar = RecordingPromptGrammar()
     let fixture = try await Fixture(
-      policy: .alwaysConfirm,
-      acceptedDisclosure: true,
+      acceptedDisclosure: false,
       grammar: grammar
     )
     let source = "Review `/tmp/a.swift` because this are wrong."
@@ -816,7 +790,6 @@ private final class Fixture {
   private let suite: String
 
   init(
-    policy: OutboundConfirmationPolicy = .skipUnambiguousManual,
     acceptedDisclosure: Bool = true,
     accessibilityTrusted: Bool = true,
     providerSetUp: Bool = true,
@@ -826,7 +799,6 @@ private final class Fixture {
     preferences = PreferencesStore(defaults: UserDefaults(suiteName: suite)!)
     await preferences.setSelectedProvider(.openAI)
     await preferences.setSelectedModel("gpt-test-model", for: .openAI)
-    await preferences.setOutboundConfirmationPolicy(policy)
     if acceptedDisclosure {
       let destination = try await preferences.outboundDestination()
       await preferences.acceptCurrentOutboundDisclosure(for: destination)

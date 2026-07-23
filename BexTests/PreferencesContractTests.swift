@@ -10,10 +10,8 @@ final class PreferencesContractTests: XCTestCase {
     let preferences = fixture.store
     let draftChoice = await preferences.draftRetentionChoice()
     let historyChoice = await preferences.historyRetentionChoice()
-    let confirmationPolicy = await preferences.outboundConfirmationPolicy()
     XCTAssertEqual(draftChoice, .undecided)
     XCTAssertEqual(historyChoice, .undecided)
-    XCTAssertEqual(confirmationPolicy, .alwaysConfirm)
 
     await preferences.setQuickDraft("must not persist")
     let draft = await preferences.quickDraft()
@@ -77,35 +75,35 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertFalse(initialClaude)
 
     await preferences.acceptCurrentOutboundDisclosure(for: openAI)
-    await preferences.setOutboundConfirmationPolicy(.skipUnambiguousManual)
 
     let acceptedOpenAI = await preferences.hasAcceptedCurrentOutboundDisclosure(for: openAI)
     let acceptedClaude = await preferences.hasAcceptedCurrentOutboundDisclosure(for: claude)
-    let policy = await preferences.outboundConfirmationPolicy()
     XCTAssertTrue(acceptedOpenAI)
     XCTAssertFalse(acceptedClaude)
-    XCTAssertEqual(policy, .skipUnambiguousManual)
   }
 
   func testOutboundConfirmationMatrixKeepsAmbiguousAndHookFlowsGated() {
-    let skip = OutboundConfirmationPolicy.skipUnambiguousManual
     XCTAssertFalse(
-      skip.requiresConfirmation(for: .quickCheckExternal, hasAcceptedDisclosure: true)
-    )
-    XCTAssertFalse(
-      skip.requiresConfirmation(for: .manualCapturedField, hasAcceptedDisclosure: true)
-    )
-    XCTAssertTrue(
-      skip.requiresConfirmation(for: .ambiguousManual, hasAcceptedDisclosure: true)
-    )
-    XCTAssertTrue(skip.requiresConfirmation(for: .hook, hasAcceptedDisclosure: true))
-    XCTAssertTrue(
-      skip.requiresConfirmation(for: .quickCheckExternal, hasAcceptedDisclosure: false)
-    )
-    XCTAssertTrue(
-      OutboundConfirmationPolicy.alwaysConfirm.requiresConfirmation(
-        for: .quickCheckExternal,
+      OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
         hasAcceptedDisclosure: true
+      )
+    )
+    XCTAssertFalse(
+      OutboundConfirmationContext.manualCapturedField.requiresConfirmation(
+        hasAcceptedDisclosure: true
+      )
+    )
+    XCTAssertTrue(
+      OutboundConfirmationContext.ambiguousManual.requiresConfirmation(
+        hasAcceptedDisclosure: true
+      )
+    )
+    XCTAssertTrue(
+      OutboundConfirmationContext.hook.requiresConfirmation(hasAcceptedDisclosure: true)
+    )
+    XCTAssertTrue(
+      OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
+        hasAcceptedDisclosure: false
       )
     )
   }

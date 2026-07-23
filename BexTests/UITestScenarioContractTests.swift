@@ -91,7 +91,6 @@ final class UITestScenarioContractTests: XCTestCase {
     let consent = UITestScenario.freshConsent.configuration
     XCTAssertEqual(consent.preferences.draftRetentionChoice, .undecided)
     XCTAssertEqual(consent.preferences.historyRetentionChoice, .undecided)
-    XCTAssertEqual(consent.preferences.outboundConfirmationPolicy, .alwaysConfirm)
     XCTAssertEqual(consent.target.source, "A fresh consent UI test draft.")
 
     let freshQuickCheck = UITestScenario.freshQuickCheck.configuration
@@ -99,7 +98,6 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(freshQuickCheck.preferences.selectedModel, LLMProvider.claude.defaultModel)
     XCTAssertEqual(freshQuickCheck.preferences.draftRetentionChoice, .undecided)
     XCTAssertEqual(freshQuickCheck.preferences.historyRetentionChoice, .undecided)
-    XCTAssertEqual(freshQuickCheck.preferences.outboundConfirmationPolicy, .alwaysConfirm)
     XCTAssertEqual(
       freshQuickCheck.preferences.activeProfileID,
       UITestFixtureConfiguration.populatedProfiles.first?.id
@@ -111,7 +109,6 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(configured.preferences.selectedProvider, .claude)
     XCTAssertEqual(configured.preferences.selectedModel, LLMProvider.claude.defaultModel)
     XCTAssertEqual(configured.preferences.selectedEffort, .high)
-    XCTAssertEqual(configured.preferences.outboundConfirmationPolicy, .skipUnambiguousManual)
     XCTAssertEqual(configured.preferences.acceptedOutboundDisclosureProvider, .claude)
     XCTAssertEqual(configured.credentialProvider, .claude)
 
@@ -167,7 +164,6 @@ final class UITestScenarioContractTests: XCTestCase {
     let effort = await fixture.preferences.selectedEffort(for: .claude)
     let draftRetention = await fixture.preferences.draftRetentionChoice()
     let historyRetention = await fixture.preferences.historyRetentionChoice()
-    let confirmationPolicy = await fixture.preferences.outboundConfirmationPolicy()
     let destination = try await fixture.preferences.outboundDestination()
     let outboundDisclosure =
       await fixture.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
@@ -176,7 +172,6 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(effort, .high)
     XCTAssertEqual(draftRetention, .enabled)
     XCTAssertEqual(historyRetention, .enabled)
-    XCTAssertEqual(confirmationPolicy, .skipUnambiguousManual)
     XCTAssertTrue(outboundDisclosure)
 
     try await UITestScenario.dirtyEditorResume.configuration.seed(

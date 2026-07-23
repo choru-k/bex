@@ -589,17 +589,11 @@ struct SettingsView: View {
           }
           .accessibilityIdentifier("settings-prompt-delivery")
 
-          Picker("Before sending text", selection: outboundConfirmationBinding) {
-            ForEach(OutboundConfirmationPolicy.allCases, id: \.self) { policy in
-              Text(outboundConfirmationTitle(policy)).tag(policy)
-            }
-          }
-          .accessibilityIdentifier("settings-outbound-confirmation")
 
           Text(viewModel.providerDisclosure)
             .font(.caption)
             .foregroundStyle(.secondary)
-          Text("Bex always asks for confirmation for ambiguous captures and app-hook requests. Skipping confirmation applies only to unambiguous actions you invoke manually after the provider disclosure is accepted.")
+          Text("Bex asks once before sending to each provider destination, and always for ambiguous captures or app-hook requests. Manual Quick Check and Fix & Send actions proceed directly afterward.")
             .font(.caption)
             .foregroundStyle(.secondary)
         }
@@ -879,12 +873,6 @@ struct SettingsView: View {
     )
   }
 
-  private var outboundConfirmationBinding: Binding<OutboundConfirmationPolicy> {
-    Binding(
-      get: { viewModel.outboundConfirmationPolicy },
-      set: { viewModel.selectOutboundConfirmationPolicy($0) }
-    )
-  }
 
   private func retentionTitle(_ choice: RetentionChoice) -> String {
     switch choice {
@@ -894,12 +882,6 @@ struct SettingsView: View {
     }
   }
 
-  private func outboundConfirmationTitle(_ policy: OutboundConfirmationPolicy) -> String {
-    switch policy {
-    case .alwaysConfirm: "Always Confirm"
-    case .skipUnambiguousManual: "Skip for Unambiguous Manual Actions"
-    }
-  }
 
   private var appearanceBinding: Binding<AppearancePreference> {
     Binding(

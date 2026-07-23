@@ -53,7 +53,6 @@ final class PromptGateViewModel: ObservableObject {
   private var confirmedOutboundDestination: OutboundDestination?
   private var configuredDestination: OutboundDestination?
   private var replacementConfirmedDraft: String?
-  private var confirmationPolicy: OutboundConfirmationPolicy = .alwaysConfirm
   private var hasAcceptedDestinationDisclosure = false
   private var isClosing = false
   private var pendingCorrection: PendingCorrection?
@@ -120,7 +119,8 @@ final class PromptGateViewModel: ObservableObject {
 
   var protectedSpanDisclosure: String {
     let kinds = PromptTechnicalSpanProtector.userFacingProtectedSpanKinds.joined(separator: ", ")
-    let provider = (pendingCorrection?.destination ?? configuredDestination)?.provider
+    let provider =
+      (pendingCorrection?.destination ?? configuredDestination)?.provider
       ?? selectedProvider
     return
       "Before the request, Bex replaces recognized \(kinds) with placeholders and restores those recognized spans locally after correction. Unmatched prose and unrecognized sensitive text remain visible to \(provider.displayName)."
@@ -131,7 +131,8 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   var confirmationActionLabel: String {
-    let provider = (pendingCorrection?.destination ?? configuredDestination)?.provider
+    let provider =
+      (pendingCorrection?.destination ?? configuredDestination)?.provider
       ?? selectedProvider
     return provider == .ollama
       ? "Check with Ollama"
@@ -380,11 +381,12 @@ final class PromptGateViewModel: ObservableObject {
       var issuedReceipt: UUID?
       do {
         let context = session.target.hookContext
-        let status = if let integrationID = context?.integrationID {
-          await hookManager.status(for: integrationID)
-        } else {
-          await hookManager.status(for: client)
-        }
+        let status =
+          if let integrationID = context?.integrationID {
+            await hookManager.status(for: integrationID)
+          } else {
+            await hookManager.status(for: client)
+          }
         guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
           self.finishWork(workID)
           return
@@ -596,7 +598,6 @@ final class PromptGateViewModel: ObservableObject {
     let model = await preferences.selectedModel(for: provider)
     let preferredClient = await preferences.preferredPromptClient()
     let mode = await preferences.promptDeliveryMode()
-    let policy = await preferences.outboundConfirmationPolicy()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
     do {
@@ -629,7 +630,6 @@ final class PromptGateViewModel: ObservableObject {
     configuredDestination = destination
     selectedClient = refreshedClient
     deliveryMode = mode
-    confirmationPolicy = policy
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     providerIsSetUp = setup
     selectedClientStatus = clientStatus
@@ -702,7 +702,6 @@ final class PromptGateViewModel: ObservableObject {
     let model = await preferences.selectedModel(for: provider)
     let preferredClient = await preferences.preferredPromptClient()
     let mode = await preferences.promptDeliveryMode()
-    let policy = await preferences.outboundConfirmationPolicy()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
     do {
@@ -734,7 +733,6 @@ final class PromptGateViewModel: ObservableObject {
     configuredDestination = destination
     selectedClient = session.knownClient ?? preferredClient
     deliveryMode = mode
-    confirmationPolicy = policy
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     providerIsSetUp = setup
     selectedClientStatus = await hookManager.status(for: selectedClient)
@@ -782,7 +780,6 @@ final class PromptGateViewModel: ObservableObject {
           } else {
             try await preferences.outboundDestination()
           }
-        let policy = await preferences.outboundConfirmationPolicy()
         let acceptedDisclosure = await preferences.hasAcceptedCurrentOutboundDisclosure(
           for: destination
         )
@@ -798,7 +795,6 @@ final class PromptGateViewModel: ObservableObject {
         selectedProvider = destination.provider
         selectedModel = destination.model
         configuredDestination = destination
-        confirmationPolicy = policy
         hasAcceptedDestinationDisclosure = acceptedDisclosure
         providerIsSetUp = setup
         let pending = PendingCorrection(
@@ -852,8 +848,7 @@ final class PromptGateViewModel: ObservableObject {
 
     let requiresConfirmation =
       pending.forcesConfirmation
-      || confirmationPolicy.requiresConfirmation(
-        for: session.source.outboundConfirmationContext,
+      || session.source.outboundConfirmationContext.requiresConfirmation(
         hasAcceptedDisclosure: hasAcceptedDestinationDisclosure
       )
     if requiresConfirmation,

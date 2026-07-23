@@ -142,7 +142,7 @@ final class SettingsNavigationTests: XCTestCase {
     XCTAssertEqual(persistedAfterSuccess, replacement)
   }
 
-  func testRetentionPolicyBindingsAndDestructiveIntentsRemainIndependent() async {
+  func testRetentionBindingsAndDestructiveIntentsRemainIndependent() async {
     let fixture = SettingsFixture()
     defer { fixture.remove() }
     var deletedDraftCount = 0
@@ -155,20 +155,16 @@ final class SettingsNavigationTests: XCTestCase {
 
     viewModel.selectDraftRetentionChoice(.enabled)
     viewModel.selectHistoryRetentionChoice(.disabled)
-    viewModel.selectOutboundConfirmationPolicy(.skipUnambiguousManual)
     viewModel.deleteSavedDraft()
     viewModel.clearHistory()
     await viewModel.waitForCurrentWork()
 
     XCTAssertEqual(viewModel.draftRetentionChoice, .enabled)
     XCTAssertEqual(viewModel.historyRetentionChoice, .disabled)
-    XCTAssertEqual(viewModel.outboundConfirmationPolicy, .skipUnambiguousManual)
     let storedDraftRetention = await fixture.preferences.draftRetentionChoice()
     let storedHistoryRetention = await fixture.preferences.historyRetentionChoice()
-    let storedConfirmationPolicy = await fixture.preferences.outboundConfirmationPolicy()
     XCTAssertEqual(storedDraftRetention, .enabled)
     XCTAssertEqual(storedHistoryRetention, .disabled)
-    XCTAssertEqual(storedConfirmationPolicy, .skipUnambiguousManual)
     XCTAssertEqual(deletedDraftCount, 1)
     XCTAssertEqual(clearedHistoryCount, 1)
     XCTAssertFalse(viewModel.isClearingHistory)
@@ -449,8 +445,6 @@ private struct SettingsOfflineTransport: HTTPTransport {
 
 private struct SettingsGrammarStub: GrammarServicing {
   let connectionSucceeds: Bool
-
-  
 
   func check(
     text: String,

@@ -11,7 +11,6 @@ private struct WritingStyleGenerationCall: Equatable, Sendable {
 }
 
 private actor WritingStylesGrammarStub: GrammarServicing {
-  
 
   private var generationDelay: UInt64 = 0
   private var generationCalls: [WritingStyleGenerationCall] = []
@@ -126,7 +125,6 @@ final class WritingStylesViewModelTests: XCTestCase {
       .error("Fill in at least one Writing Style context field.")
     )
 
-    await fixture.preferences.setOutboundConfirmationPolicy(.skipUnambiguousManual)
     let destination = try await fixture.preferences.outboundDestination()
     await fixture.preferences.acceptCurrentOutboundDisclosure(for: destination)
     viewModel.wizardContext.audience = "engineering leaders"
@@ -147,7 +145,8 @@ final class WritingStylesViewModelTests: XCTestCase {
     )
   }
 
-  func testFreshAlwaysConfirmFreezesExactLabeledPayloadAndCancelSendsNothing() async throws {
+  func testFreshDestinationDisclosureFreezesExactLabeledPayloadAndCancelSendsNothing() async throws
+  {
     let fixture = makeFixture()
     defer { fixture.cleanUp() }
     let viewModel = fixture.makeViewModel()
@@ -205,7 +204,6 @@ final class WritingStylesViewModelTests: XCTestCase {
     defer { fixture.cleanUp() }
     await fixture.preferences.setSelectedProvider(.claude)
     await fixture.preferences.setSelectedModel("claude-profile-test", for: .claude)
-    await fixture.preferences.setOutboundConfirmationPolicy(.alwaysConfirm)
     let claudeDestination = try await fixture.preferences.outboundDestination()
     let viewModel = fixture.makeViewModel()
     defer { viewModel.close() }

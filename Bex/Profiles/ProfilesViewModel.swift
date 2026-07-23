@@ -86,11 +86,12 @@ final class ProfilesViewModel: ObservableObject {
 
   var hasUnsavedChanges: Bool {
     guard let editorSnapshot else { return false }
-    return editorSnapshot != WritingStyleEditorSnapshot(
-      name: name,
-      prompt: prompt,
-      isDefault: isDefault
-    )
+    return editorSnapshot
+      != WritingStyleEditorSnapshot(
+        name: name,
+        prompt: prompt,
+        isDefault: isDefault
+      )
   }
 
   var contentState: WritingStylesContentState {
@@ -293,7 +294,6 @@ final class ProfilesViewModel: ObservableObject {
       guard let self else { return }
       do {
         let destination = try await preferences.outboundDestination()
-        let policy = await preferences.outboundConfirmationPolicy()
         let accepted = await preferences.hasAcceptedCurrentOutboundDisclosure(
           for: destination
         )
@@ -310,8 +310,7 @@ final class ProfilesViewModel: ObservableObject {
           context: context,
           destination: destination
         )
-        if policy.requiresConfirmation(
-          for: .quickCheckExternal,
+        if OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
           hasAcceptedDisclosure: accepted
         ) {
           pendingGeneration = request
@@ -392,7 +391,7 @@ final class ProfilesViewModel: ObservableObject {
     case .bexStandard:
       clearEditor()
       userVisibleError = nil
-    case let .profile(id):
+    case .profile(let id):
       guard let profile = profiles.first(where: { $0.id == id }) else {
         clearEditor()
         userVisibleError = nil

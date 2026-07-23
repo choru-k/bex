@@ -43,7 +43,6 @@
       case .freshConsent:
         configuration.preferences.draftRetentionChoice = .undecided
         configuration.preferences.historyRetentionChoice = .undecided
-        configuration.preferences.outboundConfirmationPolicy = .alwaysConfirm
         configuration.target.source = "A fresh consent UI test draft."
         configuration.launchDestination = .promptGate
       case .freshQuickCheck:
@@ -52,7 +51,6 @@
         configuration.preferences.selectedEffort = .high
         configuration.preferences.draftRetentionChoice = .undecided
         configuration.preferences.historyRetentionChoice = .undecided
-        configuration.preferences.outboundConfirmationPolicy = .alwaysConfirm
         configuration.profiles = UITestFixtureConfiguration.populatedProfiles
         configuration.preferences.activeProfileID =
           UITestFixtureConfiguration.populatedProfiles.first?.id
@@ -66,7 +64,6 @@
         configuration.preferences.selectedEffort = .high
         configuration.preferences.draftRetentionChoice = .enabled
         configuration.preferences.historyRetentionChoice = .enabled
-        configuration.preferences.outboundConfirmationPolicy = .skipUnambiguousManual
         configuration.preferences.acceptedOutboundDisclosureProvider = .claude
         configuration.credentialProvider = .claude
         configuration.launchDestination = .settings
@@ -95,7 +92,6 @@
         configuration.preferences.draftRetentionChoice = .enabled
         configuration.preferences.historyRetentionChoice = .enabled
         configuration.preferences.quickDraft = "this are a test"
-        configuration.preferences.outboundConfirmationPolicy = .skipUnambiguousManual
         configuration.preferences.acceptedOutboundDisclosureProvider = .claude
         configuration.credentialProvider = .claude
         configuration.grammarBehavior = .holdFirstCheckThenFailSubsequent
@@ -188,7 +184,6 @@
     var quickDraft: String?
     var preferredPromptClient: PromptClient?
     var promptDeliveryMode: PromptDeliveryMode?
-    var outboundConfirmationPolicy: OutboundConfirmationPolicy?
     var acceptedOutboundDisclosureProvider: LLMProvider?
   }
 
@@ -282,7 +277,6 @@
       ),
     ]
 
-
     var preservesStoredState = false
     var preferences = UITestPreferenceSeed()
     var profiles: [Profile]?
@@ -363,9 +357,6 @@
       }
       if let mode = preferences.promptDeliveryMode {
         await store.setPromptDeliveryMode(mode)
-      }
-      if let policy = preferences.outboundConfirmationPolicy {
-        await store.setOutboundConfirmationPolicy(policy)
       }
       if let provider = preferences.acceptedOutboundDisclosureProvider {
         let endpoint: String?
@@ -468,7 +459,6 @@
     init(behavior: UITestGrammarBehavior) {
       self.behavior = behavior
     }
-
 
     func releaseCheck() async {
       await checkGate.release()
@@ -780,7 +770,7 @@
         descriptor = fixedDescriptor(for: .claudeCode)
       case .codex:
         descriptor = fixedDescriptor(for: .codex)
-      case let .ohMyPi(executable, profile, workingDirectory):
+      case .ohMyPi(let executable, let profile, let workingDirectory):
         let normalizedProfile = profile?.isEmpty == false ? profile! : "default"
         descriptor =
           descriptors.first(where: {
@@ -926,7 +916,7 @@
       guard let transcriptURL else { return }
       let existing =
         (try? Data(contentsOf: transcriptURL))
-          .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+        .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
       try? FileManager.default.createDirectory(
         at: transcriptURL.deletingLastPathComponent(),
         withIntermediateDirectories: true

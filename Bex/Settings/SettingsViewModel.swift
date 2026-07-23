@@ -68,8 +68,6 @@ final class SettingsViewModel: ObservableObject {
   @Published var ompWorkingDirectory = FileManager.default.homeDirectoryForCurrentUser.path
   @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
-  @Published private(set) var outboundConfirmationPolicy: OutboundConfirmationPolicy =
-    .alwaysConfirm
   @Published private(set) var quickCheckKeyChord: KeyChord = .defaultQuickCheck
   @Published private(set) var fixAndSendKeyChord: KeyChord = .defaultFixAndSend
   @Published private(set) var shortcutErrors: [BexShortcut: String] = [:]
@@ -221,7 +219,6 @@ final class SettingsViewModel: ObservableObject {
     async let savedPromptDeliveryMode = preferences.promptDeliveryMode()
     async let savedDraftRetention = preferences.draftRetentionChoice()
     async let savedHistoryRetention = preferences.historyRetentionChoice()
-    async let savedConfirmationPolicy = preferences.outboundConfirmationPolicy()
     async let savedQuickCheckChord = preferences.quickCheckKeyChord()
     async let savedFixAndSendChord = preferences.fixAndSendKeyChord()
 
@@ -233,7 +230,6 @@ final class SettingsViewModel: ObservableObject {
     promptDeliveryMode = await savedPromptDeliveryMode
     draftRetentionChoice = await savedDraftRetention
     historyRetentionChoice = await savedHistoryRetention
-    outboundConfirmationPolicy = await savedConfirmationPolicy
     quickCheckKeyChord = await savedQuickCheckChord
     fixAndSendKeyChord = await savedFixAndSendChord
     isLoaded = true
@@ -449,13 +445,6 @@ final class SettingsViewModel: ObservableObject {
     historyRetentionChoice = choice
     enqueuePreferenceUpdate { [preferences] in
       await preferences.setHistoryRetentionChoice(choice)
-    }
-  }
-
-  func selectOutboundConfirmationPolicy(_ policy: OutboundConfirmationPolicy) {
-    outboundConfirmationPolicy = policy
-    enqueuePreferenceUpdate { [preferences] in
-      await preferences.setOutboundConfirmationPolicy(policy)
     }
   }
 
@@ -761,7 +750,6 @@ final class SettingsViewModel: ObservableObject {
       }
     }
   }
-
 
   private func prepareIntegration(target: HookIntegrationTarget) {
     guard !integrationApplyInProgress, pendingInstallationReview == nil else { return }

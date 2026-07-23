@@ -6,11 +6,6 @@ enum RetentionChoice: String, Codable, CaseIterable, Sendable {
   case disabled
 }
 
-enum OutboundConfirmationPolicy: String, Codable, CaseIterable, Sendable {
-  case alwaysConfirm
-  case skipUnambiguousManual
-}
-
 enum OutboundConfirmationContext: Equatable, Sendable {
   case quickCheckExternal
   case manualCapturedField
@@ -18,15 +13,12 @@ enum OutboundConfirmationContext: Equatable, Sendable {
   case hook
 }
 
-extension OutboundConfirmationPolicy {
-  func requiresConfirmation(
-    for context: OutboundConfirmationContext,
-    hasAcceptedDisclosure: Bool
-  ) -> Bool {
+extension OutboundConfirmationContext {
+  func requiresConfirmation(hasAcceptedDisclosure: Bool) -> Bool {
     guard hasAcceptedDisclosure else { return true }
-    switch context {
+    switch self {
     case .quickCheckExternal, .manualCapturedField:
-      return self == .alwaysConfirm
+      return false
     case .ambiguousManual, .hook:
       return true
     }
@@ -45,11 +37,9 @@ actor PreferencesStore {
     static let promptLastClient = "promptGate.lastClient"
     static let draftRetentionChoice = "storage.quickDraft.choice"
     static let historyRetentionChoice = "storage.history.choice"
-    static let outboundConfirmationPolicy = "outbound.confirmationPolicy"
     static let quickCheckKeyChord = "shortcut.quickCheck"
     static let fixAndSendKeyChord = "shortcut.fixAndSend"
     static let welcomeCompletedVersion = "welcome.completedVersion"
-
 
     static func outboundDisclosureVersion(for destination: OutboundDestination) -> String {
       guard destination.provider == .ollama, let endpoint = destination.ollamaEndpoint else {
@@ -58,7 +48,6 @@ actor PreferencesStore {
       let encodedEndpoint = Data(endpoint.utf8).base64EncodedString()
       return "outbound.disclosureVersion.ollama.endpoint.\(encodedEndpoint)"
     }
-
 
     static func selectedModel(for provider: LLMProvider) -> String {
       "selectedModel.\(provider.rawValue)"
@@ -261,21 +250,6 @@ actor PreferencesStore {
     defaults.set(mode.rawValue, forKey: Key.promptDeliveryMode)
   }
 
-
-  func outboundConfirmationPolicy() -> OutboundConfirmationPolicy {
-    guard
-      let rawValue = defaults.string(forKey: Key.outboundConfirmationPolicy),
-      let policy = OutboundConfirmationPolicy(rawValue: rawValue)
-    else {
-      return .alwaysConfirm
-    }
-    return policy
-  }
-
-  func setOutboundConfirmationPolicy(_ policy: OutboundConfirmationPolicy) {
-    defaults.set(policy.rawValue, forKey: Key.outboundConfirmationPolicy)
-  }
-
   func outboundDisclosureVersion(for destination: OutboundDestination) -> Int {
     defaults.integer(forKey: Key.outboundDisclosureVersion(for: destination))
   }
@@ -339,7 +313,6 @@ actor PreferencesStore {
     }
     return choice
   }
-
 
   private func uuid(forKey key: String) -> UUID? {
     defaults.string(forKey: key).flatMap(UUID.init(uuidString:))

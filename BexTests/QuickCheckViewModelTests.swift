@@ -282,8 +282,8 @@ final class QuickCheckViewModelTests: XCTestCase {
     XCTAssertEqual(fixture.viewModel.input, "must not resurrect")
   }
 
-  func testAlwaysConfirmShowsFrozenFullOutboundSummaryWithFullWritingStyleGuidance() async throws {
-    let fixture = try await makeFixture(confirmationPolicy: .alwaysConfirm)
+  func testFirstDestinationDisclosureShowsFrozenFullOutboundSummary() async throws {
+    let fixture = try await makeFixture(acceptedDisclosure: false)
     defer { fixture.removeFiles() }
     let style = Profile(
       id: UUID(),
@@ -331,24 +331,13 @@ final class QuickCheckViewModelTests: XCTestCase {
 
     fixture.viewModel.rewrite(.formal)
     await fixture.viewModel.waitForCurrentWork()
-    XCTAssertEqual(
-      fixture.viewModel.outboundSummary,
-      QuickCheckOutboundSummary(
-        action: "Apply More Formal",
-        provider: "OpenAI",
-        model: LLMProvider.openAI.defaultModel,
-        writingStyle: nil,
-        fullDraft: "this is a test",
-        disclosure: "The full corrected draft shown here will be sent to OpenAI."
-      )
-    )
+    XCTAssertNil(fixture.viewModel.outboundSummary)
+    let rewriteCount = await fixture.grammar.recordedRewriteCount()
+    XCTAssertEqual(rewriteCount, 1)
   }
 
-  func testSkipUnambiguousManualUsesDestinationScopedDisclosureAcceptance() async throws {
-    let accepted = try await makeFixture(
-      confirmationPolicy: .skipUnambiguousManual,
-      acceptedDisclosure: true
-    )
+  func testManualActionsUseDestinationScopedDisclosureAcceptance() async throws {
+    let accepted = try await makeFixture(acceptedDisclosure: true)
     defer { accepted.removeFiles() }
     await accepted.viewModel.loadContext()
     accepted.viewModel.input = "this are accepted"
@@ -358,10 +347,7 @@ final class QuickCheckViewModelTests: XCTestCase {
     let acceptedCalls = await accepted.grammar.recordedChecks()
     XCTAssertEqual(acceptedCalls.count, 1)
 
-    let unaccepted = try await makeFixture(
-      confirmationPolicy: .skipUnambiguousManual,
-      acceptedDisclosure: false
-    )
+    let unaccepted = try await makeFixture(acceptedDisclosure: false)
     defer { unaccepted.removeFiles() }
     await unaccepted.viewModel.loadContext()
     unaccepted.viewModel.input = "this are unaccepted"
@@ -372,10 +358,9 @@ final class QuickCheckViewModelTests: XCTestCase {
     XCTAssertTrue(unacceptedCalls.isEmpty)
   }
 
-  func testLoopbackOllamaAlwaysConfirms() async throws {
+  func testLoopbackOllamaRequiresFirstDisclosure() async throws {
     let fixture = try await makeFixture(
       provider: .ollama,
-      confirmationPolicy: .alwaysConfirm,
       acceptedDisclosure: false
     )
     defer { fixture.removeFiles() }
@@ -394,10 +379,9 @@ final class QuickCheckViewModelTests: XCTestCase {
     )
   }
 
-  func testRemoteOllamaUsesExternalConfirmationPolicy() async throws {
+  func testRemoteOllamaRequiresFirstDisclosure() async throws {
     let fixture = try await makeFixture(
       provider: .ollama,
-      confirmationPolicy: .alwaysConfirm,
       acceptedDisclosure: false,
       ollamaURL: "https://ollama.example.test"
     )
@@ -420,7 +404,6 @@ final class QuickCheckViewModelTests: XCTestCase {
   func testOllamaRequestFreezesRefreshedEndpointAcrossConfirmation() async throws {
     let fixture = try await makeFixture(
       provider: .ollama,
-      confirmationPolicy: .alwaysConfirm,
       acceptedDisclosure: false
     )
     defer { fixture.removeFiles() }
@@ -706,7 +689,6 @@ final class QuickCheckViewModelTests: XCTestCase {
     provider: LLMProvider = .openAI,
     draftRetention: RetentionChoice = .enabled,
     historyRetention: RetentionChoice = .enabled,
-    confirmationPolicy: OutboundConfirmationPolicy = .skipUnambiguousManual,
     acceptedDisclosure: Bool = true,
     ollamaURL: String? = nil
   ) async throws -> QuickCheckFixture {
@@ -719,7 +701,6 @@ final class QuickCheckViewModelTests: XCTestCase {
     }
     await preferences.setDraftRetentionChoice(draftRetention)
     await preferences.setHistoryRetentionChoice(historyRetention)
-    await preferences.setOutboundConfirmationPolicy(confirmationPolicy)
     if acceptedDisclosure {
       let destination = try await preferences.outboundDestination()
       await preferences.acceptCurrentOutboundDisclosure(for: destination)

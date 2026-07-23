@@ -451,7 +451,6 @@ final class QuickCheckViewModel: ObservableObject {
     outboundGateTask = Task { [weak self, preferences] in
       do {
         let destination = try await preferences.outboundDestination()
-        let policy = await preferences.outboundConfirmationPolicy()
         let accepted = await preferences.hasAcceptedCurrentOutboundDisclosure(
           for: destination
         )
@@ -461,8 +460,7 @@ final class QuickCheckViewModel: ObservableObject {
         self.model = destination.model
         self.currentDestination = destination
         let configuredOutbound = payload.configured(for: destination)
-        if policy.requiresConfirmation(
-          for: .quickCheckExternal,
+        if OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
           hasAcceptedDisclosure: accepted
         ) {
           self.isPreparingOutbound = false
