@@ -410,6 +410,41 @@ final class HookInstallationManagerTests: XCTestCase {
     XCTAssertTrue(try hookHandlers(remaining).isEmpty)
   }
 
+  func testStatusAllowsUnrelatedConfigChangesButRejectsOwnedHookChanges() async throws {
+    let fixture = try InstallerFixture()
+    let descriptor = try await fixture.manager.resolve(.claudeCode)
+    let installReview = try await fixture.manager.prepare(.install, for: descriptor)
+    _ = try await fixture.manager.apply(reviewID: installReview.id)
+
+    var root = try readRoot(descriptor.configurationURL)
+    root["addedLater"] = ["preserve": true]
+    var changed = try JSONSerialization.data(
+      withJSONObject: root,
+      options: [.prettyPrinted, .sortedKeys]
+    )
+    changed.append(0x0A)
+    try changed.write(to: descriptor.configurationURL)
+
+    let usableStatus = await fixture.manager.status(for: descriptor.id)
+    XCTAssertTrue(usableStatus.permitsReceipt)
+    XCTAssertEqual(usableStatus, .installedUnconfirmed)
+
+    var hooks = try XCTUnwrap(root["hooks"] as? [String: Any])
+    hooks["UserPromptSubmit"] = []
+    root["hooks"] = hooks
+    var missingOwnedHook = try JSONSerialization.data(
+      withJSONObject: root,
+      options: [.prettyPrinted, .sortedKeys]
+    )
+    missingOwnedHook.append(0x0A)
+    try missingOwnedHook.write(to: descriptor.configurationURL)
+
+    guard case let .needsRepair(detail) = await fixture.manager.status(for: descriptor.id) else {
+      return XCTFail("Expected missing owned hook to require repair")
+    }
+    XCTAssertTrue(detail.contains("Bex-owned hook fragment"))
+  }
+
   func testInstallerRefusesMalformedShapesWithoutChangingBytes() async throws {
     for invalid in [
       Data("[]".utf8),

@@ -392,10 +392,23 @@ actor HookInstallationManager: HookInstallationManaging {
     guard let entry = manifest.entries[integrationID] else {
       return .needsRepair("The Bex ownership manifest does not contain this integration.")
     }
-    guard let configuration = try? Data(contentsOf: descriptor.configurationURL),
-      Self.digest(configuration) == entry.postInstallDigest
-    else {
-      return .needsRepair("The installed integration artifact no longer matches the reviewed bytes.")
+    guard let configuration = try? Data(contentsOf: descriptor.configurationURL) else {
+      return .needsRepair("The installed integration artifact is missing.")
+    }
+    if descriptor.client == .ohMyPi {
+      guard Self.digest(configuration) == entry.postInstallDigest else {
+        return .needsRepair("The installed integration artifact no longer matches the reviewed bytes.")
+      }
+    } else {
+      guard let root = try? decodeRoot(configuration),
+        containsBexHandler(
+          in: root,
+          client: descriptor.client,
+          helperURL: descriptor.helperURL
+        )
+      else {
+        return .needsRepair("The Bex-owned hook fragment is missing or changed.")
+      }
     }
     guard let helper = try? Data(contentsOf: descriptor.helperURL),
       Self.digest(helper) == entry.helperDigest,
