@@ -322,8 +322,8 @@ struct HookBlockOutput: Equatable, Sendable {
     switch client {
     case .claudeCode:
       object = [
-        "continue": false,
-        "stopReason": reason,
+        "decision": "block",
+        "reason": reason,
       ]
     case .codex:
       object = [

@@ -952,9 +952,9 @@ final class HookHelperOutputTests: XCTestCase {
     let claudeObject = try XCTUnwrap(
       JSONSerialization.jsonObject(with: claude) as? [String: Any]
     )
-    XCTAssertEqual(claudeObject["continue"] as? Bool, false)
+    XCTAssertEqual(claudeObject["decision"] as? String, "block")
     XCTAssertEqual(
-      claudeObject["stopReason"] as? String,
+      claudeObject["reason"] as? String,
       "Bex could not review this prompt. The original was blocked.")
 
     let codex = try runHelper(helper, client: "codex", input: Data("not-json".utf8))
