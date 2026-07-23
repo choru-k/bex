@@ -305,6 +305,92 @@ final class HookInstallationManagerTests: XCTestCase {
     XCTAssertEqual(restoredMode.intValue, 0o640)
   }
 
+  func testReviewedInstallSupportsSymlinkedConfigurationAndPreservesLinkOnUninstall()
+    async throws
+  {
+    let fixture = try InstallerFixture()
+    let configuredPath = await fixture.manager.configuredPath(for: .claudeCode)
+    let targetDirectory = fixture.root.appendingPathComponent("dotfiles")
+    let target = targetDirectory.appendingPathComponent("settings-company.json")
+    let baseline = Data("{\"unrelated\":true}\n".utf8)
+    try FileManager.default.createDirectory(
+      at: configuredPath.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: targetDirectory,
+      withIntermediateDirectories: true
+    )
+    try baseline.write(to: target)
+    try FileManager.default.createSymbolicLink(at: configuredPath, withDestinationURL: target)
+
+    let descriptor = try await fixture.manager.resolve(.claudeCode)
+    XCTAssertEqual(descriptor.configurationURL.path, target.path)
+    let installReview = try await fixture.manager.prepare(.install, for: descriptor)
+    XCTAssertTrue(installReview.actions.contains { $0.path == target.path })
+    _ = try await fixture.manager.apply(reviewID: installReview.id)
+
+    XCTAssertEqual(
+      try FileManager.default.destinationOfSymbolicLink(atPath: configuredPath.path),
+      target.path
+    )
+    XCTAssertEqual(try hookHandlers(readRoot(target)).count, 1)
+
+    let installedDescriptors = await fixture.manager.installedDescriptors()
+    let installedDescriptor = try XCTUnwrap(
+      installedDescriptors.first(where: { $0.client == .claudeCode })
+    )
+    let uninstallReview = try await fixture.manager.prepare(.uninstall, for: installedDescriptor)
+    _ = try await fixture.manager.apply(reviewID: uninstallReview.id)
+
+    XCTAssertEqual(
+      try FileManager.default.destinationOfSymbolicLink(atPath: configuredPath.path),
+      target.path
+    )
+    XCTAssertEqual(try Data(contentsOf: target), baseline)
+  }
+
+  func testApplyRejectsRetargetedConfigurationSymlink() async throws {
+    let fixture = try InstallerFixture()
+    let configuredPath = await fixture.manager.configuredPath(for: .claudeCode)
+    let targetDirectory = fixture.root.appendingPathComponent("dotfiles")
+    let originalTarget = targetDirectory.appendingPathComponent("original.json")
+    let replacementTarget = targetDirectory.appendingPathComponent("replacement.json")
+    let baseline = Data("{\"unrelated\":true}\n".utf8)
+    try FileManager.default.createDirectory(
+      at: configuredPath.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+      at: targetDirectory,
+      withIntermediateDirectories: true
+    )
+    try baseline.write(to: originalTarget)
+    try baseline.write(to: replacementTarget)
+    try FileManager.default.createSymbolicLink(
+      at: configuredPath,
+      withDestinationURL: originalTarget
+    )
+    let descriptor = try await fixture.manager.resolve(.claudeCode)
+    let review = try await fixture.manager.prepare(.install, for: descriptor)
+
+    try FileManager.default.removeItem(at: configuredPath)
+    try FileManager.default.createSymbolicLink(
+      at: configuredPath,
+      withDestinationURL: replacementTarget
+    )
+
+    do {
+      _ = try await fixture.manager.apply(reviewID: review.id)
+      XCTFail("Expected changed symlink rejection")
+    } catch {
+      XCTAssertTrue(error.localizedDescription.contains("symlink changed after review"))
+    }
+    XCTAssertEqual(try Data(contentsOf: originalTarget), baseline)
+    XCTAssertEqual(try Data(contentsOf: replacementTarget), baseline)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: descriptor.helperURL.path))
+  }
+
   func testUninstallAfterLaterEditsRemovesOnlyBexHandler() async throws {
     let fixture = try InstallerFixture()
     try await fixture.manager.install(.codex)

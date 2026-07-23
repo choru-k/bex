@@ -80,6 +80,7 @@ actor HookInstallationManager: HookInstallationManaging {
     let writes: [PreparedWrite]
     let ancestorIdentities: [PathIdentity]
     let targetIdentities: [String: PathIdentity]
+    let configurationAliasIdentity: PathIdentity?
   }
 
   private struct OMPCapabilityResponse: Decodable {
@@ -186,17 +187,17 @@ actor HookInstallationManager: HookInstallationManaging {
 
   func install(_ client: PromptClient) async throws {
     try refreshHelper()
-    let url = configuredPath(for: client)
+    let url = try resolvedConfigurationURL(for: client)
     try fileManager.createDirectory(
       at: url.deletingLastPathComponent(),
       withIntermediateDirectories: true,
       attributes: [.posixPermissions: 0o700]
     )
-    try mutateConfig(client: client, install: true)
+    try mutateConfig(client: client, install: true, at: url)
   }
 
   func uninstall(_ client: PromptClient) async throws {
-    let url = configuredPath(for: client)
+    let url = try resolvedConfigurationURL(for: client)
     if let entry = manifestEntry(for: client),
       let current = try? Data(contentsOf: url),
       Self.digest(current) == entry.postInstallDigest
@@ -212,7 +213,7 @@ actor HookInstallationManager: HookInstallationManaging {
         )
       }
     } else if fileManager.fileExists(atPath: url.path) {
-      try mutateConfig(client: client, install: false)
+      try mutateConfig(client: client, install: false, at: url)
     }
     removeManifestEntry(for: client)
 
@@ -232,7 +233,7 @@ actor HookInstallationManager: HookInstallationManaging {
         profile: "default",
         executableURL: nil,
         workingDirectory: nil,
-        configurationURL: configuredPath(for: .claudeCode),
+        configurationURL: try resolvedConfigurationURL(for: .claudeCode),
         gateURL: nil,
         helperURL: helper,
         capabilityVersion: nil,
@@ -245,7 +246,7 @@ actor HookInstallationManager: HookInstallationManaging {
         profile: "default",
         executableURL: nil,
         workingDirectory: nil,
-        configurationURL: configuredPath(for: .codex),
+        configurationURL: try resolvedConfigurationURL(for: .codex),
         gateURL: nil,
         helperURL: helper,
         capabilityVersion: nil,
@@ -447,8 +448,7 @@ actor HookInstallationManager: HookInstallationManaging {
     "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
   }
 
-  private func mutateConfig(client: PromptClient, install: Bool) throws {
-    let url = configuredPath(for: client)
+  private func mutateConfig(client: PromptClient, install: Bool, at url: URL) throws {
     for attempt in 0..<2 {
       let existed = fileManager.fileExists(atPath: url.path)
       let before = existed ? try Data(contentsOf: url) : Data("{}".utf8)
@@ -721,6 +721,7 @@ actor HookInstallationManager: HookInstallationManaging {
     let helperDigest = Self.digest(helperData)
     var manifest = try loadManifest()
     let existingEntry = manifest.entries[descriptor.id]
+    let configurationAliasIdentity = try configurationAliasIdentity(for: descriptor)
     let resolvedHelperURL = try contentAddressedHelperURL()
     let acceptsLegacyUninstall =
       operation == .uninstall
@@ -913,7 +914,8 @@ actor HookInstallationManager: HookInstallationManaging {
       review: review,
       writes: writes,
       ancestorIdentities: ancestorIdentities,
-      targetIdentities: targetIdentities
+      targetIdentities: targetIdentities,
+      configurationAliasIdentity: configurationAliasIdentity
     )
   }
 
@@ -921,6 +923,7 @@ actor HookInstallationManager: HookInstallationManaging {
     _ transaction: PreparedTransaction
   ) throws -> HookInstallationResult {
     try validateIdentities(transaction.ancestorIdentities)
+    try validateConfigurationAliasIdentity(transaction.configurationAliasIdentity)
     for write in transaction.writes {
       try validateNoSymlinkAncestors(write.url)
       try validateTargetIdentity(
@@ -943,6 +946,7 @@ actor HookInstallationManager: HookInstallationManaging {
       for (writeIndex, write) in transaction.writes.enumerated() {
         try transactionFaultInjector(writeIndex, committed.last?.write.url)
         try validateIdentities(runtimeAncestorIdentities)
+        try validateConfigurationAliasIdentity(transaction.configurationAliasIdentity)
         try validateNoSymlinkAncestors(write.url)
         try validateTargetIdentity(
           for: write,
@@ -1154,6 +1158,76 @@ actor HookInstallationManager: HookInstallationManaging {
       )
     }
     return actions
+  }
+
+  private func resolvedConfigurationURL(for client: PromptClient) throws -> URL {
+    let configuredURL = configuredPath(for: client)
+    var metadata = stat()
+    guard lstat(configuredURL.path, &metadata) == 0 else {
+      if errno == ENOENT { return configuredURL }
+      throw BexError.storageFailure(
+        "Bex could not inspect integration path identity: \(configuredURL.path)"
+      )
+    }
+    switch metadata.st_mode & S_IFMT {
+    case S_IFREG:
+      return configuredURL
+    case S_IFLNK:
+      guard let resolvedPath = realpath(configuredURL.path, nil) else {
+        throw BexError.storageFailure(
+          "Integration configuration symlink does not resolve to a regular file: \(configuredURL.path)"
+        )
+      }
+      defer { free(resolvedPath) }
+      let resolvedURL = URL(fileURLWithPath: String(cString: resolvedPath))
+      guard try pathIdentity(at: resolvedURL, expectedDirectory: false) != nil else {
+        throw BexError.storageFailure(
+          "Integration configuration symlink does not resolve to a regular file: \(configuredURL.path)"
+        )
+      }
+      return resolvedURL
+    default:
+      throw BexError.storageFailure(
+        "Integration path has an unexpected type: \(configuredURL.path)"
+      )
+    }
+  }
+
+  private func configurationAliasIdentity(
+    for descriptor: HookIntegrationDescriptor
+  ) throws -> PathIdentity? {
+    guard descriptor.client == .claudeCode || descriptor.client == .codex else { return nil }
+    let configuredURL = configuredPath(for: descriptor.client)
+    let resolvedURL = try resolvedConfigurationURL(for: descriptor.client)
+    guard resolvedURL.path == descriptor.configurationURL.path else {
+      throw BexError.storageFailure(
+        "The integration configuration symlink changed; resolve the integration again."
+      )
+    }
+    return try symlinkIdentity(at: configuredURL)
+  }
+
+  private func symlinkIdentity(at url: URL) throws -> PathIdentity? {
+    var metadata = stat()
+    guard lstat(url.path, &metadata) == 0 else {
+      if errno == ENOENT { return nil }
+      throw BexError.storageFailure("Bex could not inspect integration symlink: \(url.path)")
+    }
+    guard metadata.st_mode & S_IFMT == S_IFLNK else { return nil }
+    return PathIdentity(
+      url: url,
+      device: UInt64(metadata.st_dev),
+      inode: UInt64(metadata.st_ino)
+    )
+  }
+
+  private func validateConfigurationAliasIdentity(_ expected: PathIdentity?) throws {
+    guard let expected else { return }
+    guard try symlinkIdentity(at: expected.url) == expected else {
+      throw BexError.storageFailure(
+        "Nothing changed because the integration configuration symlink changed after review."
+      )
+    }
   }
 
   private func pathIdentity(
