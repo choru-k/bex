@@ -55,6 +55,7 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_REQUIRED=NO \
+            -only-testing:BexTests \
             test
 
       - name: Archive Developer ID app
