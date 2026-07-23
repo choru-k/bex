@@ -53,6 +53,11 @@ struct BexHookMain {
         throw HookIPCError.invalidResponse
       }
 
+      if client == .claudeCode, ClaudePromptSource.isBackgroundTaskNotification(input) {
+        try? writeHeartbeat(client: client, integrationID: input.integrationID)
+        return
+      }
+
       let approvalStore = PromptApprovalStore()
       if try await approvalStore.consume(
         client: client,
@@ -81,6 +86,9 @@ struct BexHookMain {
       let ipc = PromptGateIPCClient()
       let response = try await ipc.submit(request)
       switch response.outcome {
+      case .bypassed:
+        try? writeHeartbeat(client: client, integrationID: input.integrationID)
+        return
       case .approved:
         guard let token = response.acknowledgmentToken else {
           throw HookIPCError.invalidResponse
@@ -263,7 +271,8 @@ struct BexHookMain {
     integrationID: String?
   ) throws {
     let directory = FileManager.default.homeDirectoryForCurrentUser
-      .appendingPathComponent("Library/Application Support/Bex/PromptGate/heartbeats", isDirectory: true)
+      .appendingPathComponent(
+        "Library/Application Support/Bex/PromptGate/heartbeats", isDirectory: true)
     try FileManager.default.createDirectory(
       at: directory,
       withIntermediateDirectories: true,

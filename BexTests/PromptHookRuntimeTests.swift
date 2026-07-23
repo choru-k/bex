@@ -117,6 +117,113 @@ final class PromptApprovalStoreTests: XCTestCase {
   }
 }
 
+final class ClaudePromptSourceTests: XCTestCase {
+  func testOnlyLatestSystemTaskNotificationBypassesReview() throws {
+    let transcriptURL = temporaryDirectory("claude-transcript")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let notification = """
+      <task-notification>
+      <task-id>agent-123</task-id>
+      <status>completed</status>
+      <summary>Agent finished</summary>
+      </task-notification>
+      """
+    let input = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: notification,
+      sessionID: "session-123",
+      cwd: "/tmp/project",
+      promptID: "prompt-123",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+
+    try transcriptEntry(
+      prompt: notification,
+      sessionID: input.sessionID,
+      promptID: try XCTUnwrap(input.promptID),
+      promptSource: "system",
+      origin: "task-notification"
+    ).write(to: transcriptURL)
+    XCTAssertTrue(ClaudePromptSource.isBackgroundTaskNotification(input))
+
+    var transcript = try Data(contentsOf: transcriptURL)
+    transcript.append(0x0A)
+    transcript.append(
+      try transcriptEntry(
+        prompt: notification,
+        sessionID: input.sessionID,
+        promptID: try XCTUnwrap(input.promptID),
+        promptSource: "typed",
+        origin: "human"
+      )
+    )
+    try transcript.write(to: transcriptURL)
+    XCTAssertFalse(ClaudePromptSource.isBackgroundTaskNotification(input))
+  }
+
+  func testTaskNotificationRequiresExactTranscriptIdentity() throws {
+    let transcriptURL = temporaryDirectory("claude-transcript-identity")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let notification = """
+      <task-notification>
+      <task-id>agent-456</task-id>
+      </task-notification>
+      """
+    try transcriptEntry(
+      prompt: notification,
+      sessionID: "different-session",
+      promptID: "different-prompt",
+      promptSource: "system",
+      origin: "task-notification"
+    ).write(to: transcriptURL)
+
+    let input = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: notification,
+      sessionID: "session-456",
+      cwd: "/tmp/project",
+      promptID: "prompt-456",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+    XCTAssertFalse(ClaudePromptSource.isBackgroundTaskNotification(input))
+  }
+
+  private func transcriptEntry(
+    prompt: String,
+    sessionID: String,
+    promptID: String,
+    promptSource: String,
+    origin: String
+  ) throws -> Data {
+    try JSONSerialization.data(
+      withJSONObject: [
+        "type": "user",
+        "sessionId": sessionID,
+        "promptId": promptID,
+        "promptSource": promptSource,
+        "origin": ["kind": origin],
+        "message": [
+          "role": "user",
+          "content": prompt,
+        ],
+      ],
+      options: [.sortedKeys]
+    )
+  }
+}
+
 final class PromptGateIPCServerTests: XCTestCase {
   func testAuthenticatedReviewApprovalAndAcknowledgementRoundTrip() async throws {
     let rendezvous = temporaryDirectory("ipc")
@@ -154,6 +261,36 @@ final class PromptGateIPCServerTests: XCTestCase {
     try await completionTask.value
     let recordedRequest = await recorder.request()
     XCTAssertEqual(recordedRequest?.prompt, "Original prompt")
+  }
+
+  func testBypassCompletesWithoutBlockingAcknowledgment() async throws {
+    let rendezvous = temporaryDirectory("ipc-bypass")
+      .appendingPathComponent(HookProtocolConstants.rendezvousFileName)
+    let server = PromptGateIPCServer(rendezvousURL: rendezvous, deadlineSeconds: 5)
+    let recorder = IPCRequestRecorder()
+    await server.setHandlers(
+      onRequest: { request in
+        await recorder.record(request)
+        return true
+      },
+      onInvalidation: { _ in }
+    )
+    try await server.start()
+    defer { Task { await server.stop() } }
+
+    let client = PromptGateIPCClient(rendezvousURL: rendezvous)
+    let request = makeHookRequest()
+    let responseTask = Task { try await client.submit(request) }
+    await recorder.waitForRequest()
+
+    try await server.complete(
+      requestID: request.requestID,
+      outcome: .bypassed,
+      awaitAcknowledgement: false
+    )
+    let response = try await responseTask.value
+    XCTAssertEqual(response.outcome, .bypassed)
+    XCTAssertNil(response.acknowledgmentToken)
   }
 
   func testOMPApprovalBindsPromptAndDeliveryAcknowledgmentToIntegration() async throws {
@@ -206,7 +343,6 @@ final class PromptGateIPCServerTests: XCTestCase {
     try await completionTask.value
   }
 
-
   func testIPCRejectsWrongAuthenticationAndSecondConcurrentReview() async throws {
     let rendezvous = temporaryDirectory("ipc-rejection")
       .appendingPathComponent(HookProtocolConstants.rendezvousFileName)
@@ -245,11 +381,12 @@ final class PromptGateIPCServerTests: XCTestCase {
       serverPID: badRendezvous.serverPID,
       createdAt: badRendezvous.createdAt
     )
-    let body = try JSONEncoder().encode(HookReviewEnvelope(
-      version: HookProtocolConstants.version,
-      authenticationToken: badRendezvous.authenticationToken,
-      request: makeHookRequest()
-    ))
+    let body = try JSONEncoder().encode(
+      HookReviewEnvelope(
+        version: HookProtocolConstants.version,
+        authenticationToken: badRendezvous.authenticationToken,
+        request: makeHookRequest()
+      ))
     var request = URLRequest(
       url: URL(string: "http://127.0.0.1:\(badRendezvous.port)\(HookProtocolConstants.reviewPath)")!
     )
@@ -273,7 +410,8 @@ final class HookInstallationManagerTests: XCTestCase {
   func testInstallIsIdempotentPreservesUnrelatedConfigModeAndRestoresExactBaseline() async throws {
     let fixture = try InstallerFixture()
     let path = await fixture.manager.configuredPath(for: .claudeCode)
-    let baseline = Data("{\n  \"unrelated\" : {\"keep\":true},\n  \"hooks\" : {\"OtherEvent\":[{\"x\":1}]}\n}\n".utf8)
+    let baseline = Data(
+      "{\n  \"unrelated\" : {\"keep\":true},\n  \"hooks\" : {\"OtherEvent\":[{\"x\":1}]}\n}\n".utf8)
     try FileManager.default.createDirectory(
       at: path.deletingLastPathComponent(),
       withIntermediateDirectories: true
@@ -439,7 +577,7 @@ final class HookInstallationManagerTests: XCTestCase {
     missingOwnedHook.append(0x0A)
     try missingOwnedHook.write(to: descriptor.configurationURL)
 
-    guard case let .needsRepair(detail) = await fixture.manager.status(for: descriptor.id) else {
+    guard case .needsRepair(let detail) = await fixture.manager.status(for: descriptor.id) else {
       return XCTFail("Expected missing owned hook to require repair")
     }
     XCTAssertTrue(detail.contains("Bex-owned hook fragment"))
@@ -547,7 +685,8 @@ final class HookInstallationManagerTests: XCTestCase {
 
     let displacedDirectory = fixture.root.appendingPathComponent("displaced-claude")
     try FileManager.default.moveItem(at: configurationDirectory, to: displacedDirectory)
-    try FileManager.default.createDirectory(at: configurationDirectory, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: configurationDirectory, withIntermediateDirectories: true)
     try baseline.write(to: descriptor.configurationURL)
 
     do {
@@ -571,7 +710,8 @@ final class HookInstallationManagerTests: XCTestCase {
     let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
       .replacingOccurrences(of: "\"", with: "\\\"")
     let preexisting = Data(
-      "{ \"other\": 1, \"hooks\": { \"UserPromptSubmit\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"\(escaped)\", \"timeout\": 3600, \"async\": false, \"statusMessage\": \"Bex is reviewing this prompt…\" } ] } ] } }".utf8
+      "{ \"other\": 1, \"hooks\": { \"UserPromptSubmit\": [ { \"hooks\": [ { \"type\": \"command\", \"command\": \"\(escaped)\", \"timeout\": 3600, \"async\": false, \"statusMessage\": \"Bex is reviewing this prompt…\" } ] } ] } }"
+        .utf8
     )
     try preexisting.write(to: path)
 
@@ -747,7 +887,9 @@ final class HookInstallationManagerTests: XCTestCase {
     let installedStatus = await fixture.manager.status(for: descriptor.id)
     if case .installedUnconfirmed = installedStatus {
     } else {
-      XCTFail("Expected installed OMP integration to wait for its first heartbeat; got \(installedStatus)")
+      XCTFail(
+        "Expected installed OMP integration to wait for its first heartbeat; got \(installedStatus)"
+      )
     }
 
     let heartbeatDirectory = fixture.supportDirectory.appendingPathComponent(
@@ -811,14 +953,18 @@ final class HookHelperOutputTests: XCTestCase {
       JSONSerialization.jsonObject(with: claude) as? [String: Any]
     )
     XCTAssertEqual(claudeObject["continue"] as? Bool, false)
-    XCTAssertEqual(claudeObject["stopReason"] as? String, "Bex could not review this prompt. The original was blocked.")
+    XCTAssertEqual(
+      claudeObject["stopReason"] as? String,
+      "Bex could not review this prompt. The original was blocked.")
 
     let codex = try runHelper(helper, client: "codex", input: Data("not-json".utf8))
     let codexObject = try XCTUnwrap(
       JSONSerialization.jsonObject(with: codex) as? [String: Any]
     )
     XCTAssertEqual(codexObject["decision"] as? String, "block")
-    XCTAssertEqual(codexObject["reason"] as? String, "Bex could not review this prompt. The original was blocked.")
+    XCTAssertEqual(
+      codexObject["reason"] as? String,
+      "Bex could not review this prompt. The original was blocked.")
 
     let omp = try runHelper(
       helper,
@@ -854,12 +1000,6 @@ private actor IPCRequestRecorder {
     await withCheckedContinuation { waiter = $0 }
   }
 }
-
-
-
-
-
-
 
 private struct InstallerFixture {
   let root: URL
@@ -926,7 +1066,8 @@ private func temporaryDirectory(_ prefix: String) -> URL {
     temporary.path == "/var" || temporary.path.hasPrefix("/var/")
     ? URL(fileURLWithPath: "/private\(temporary.path)", isDirectory: true)
     : temporary
-  return canonicalTemporary
+  return
+    canonicalTemporary
     .appendingPathComponent("Bex-\(prefix)-\(UUID().uuidString)", isDirectory: true)
 }
 

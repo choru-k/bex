@@ -13,6 +13,7 @@
     case permissionTrusted = "permission-trusted"
     case hookProvidedClient = "hook-provided-client"
     case hookSkipsOutboundConfirmation = "hook-skips-outbound-confirmation"
+    case hookCheckInFlight = "hook-check-in-flight"
     case hotKeyConflict = "hotkey-conflict"
     case quickCheckGrammarInFlight = "quick-check-grammar-in-flight"
     case promptDeliveryInFlight = "prompt-delivery-in-flight"
@@ -93,6 +94,17 @@
           prompt: "Make this UI test prompt concise.",
           status: .active(lastSeen: UITestFixtureConfiguration.fixtureDate)
         )
+        configuration.launchDestination = .hookPromptGate
+      case .hookCheckInFlight:
+        configuration.preferences.preferredPromptClient = .claudeCode
+        configuration.preferences.acceptedOutboundDisclosureProvider = .openAI
+        configuration.preferences.confirmsHookOutboundPayloads = false
+        configuration.hook = .init(
+          client: .claudeCode,
+          prompt: "Send this simple prompt without waiting for a correction.",
+          status: .active(lastSeen: UITestFixtureConfiguration.fixtureDate)
+        )
+        configuration.grammarBehavior = .holdPromptCheck
         configuration.launchDestination = .hookPromptGate
       case .hotKeyConflict:
         configuration.hotKeyRegistration = .conflict
@@ -177,6 +189,7 @@
   enum UITestGrammarBehavior: Equatable, Sendable {
     case immediate
     case holdFirstCheckThenFailSubsequent
+    case holdPromptCheck
   }
 
   enum UITestDeliveryGate: Equatable, Sendable {
@@ -524,6 +537,9 @@
       protectedText: PromptTechnicalSpanProtector.ProtectedText,
       destination: OutboundDestination
     ) async throws -> GrammarResult {
+      if behavior == .holdPromptCheck {
+        await checkGate.wait()
+      }
       var corrected = protectedText.masked
       if corrected == "this are a test" {
         corrected = "this is a test"

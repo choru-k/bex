@@ -26,6 +26,7 @@ struct HookInput: Decodable, Sendable {
   let promptID: String?
   let integrationID: String?
   let turnID: String?
+  let transcriptPath: String?
 
   private enum CodingKeys: String, CodingKey {
     case hookEventName = "hook_event_name"
@@ -35,6 +36,92 @@ struct HookInput: Decodable, Sendable {
     case promptID = "prompt_id"
     case turnID = "turn_id"
     case integrationID = "integration_id"
+    case transcriptPath = "transcript_path"
+  }
+}
+
+enum ClaudePromptSource {
+  static func isBackgroundTaskNotification(_ input: HookInput) -> Bool {
+    let prompt = input.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard prompt.hasPrefix("<task-notification>\n"),
+      prompt.hasSuffix("</task-notification>"),
+      let transcriptPath = input.transcriptPath,
+      !transcriptPath.isEmpty,
+      let transcriptTail = try? readTranscriptTail(at: URL(fileURLWithPath: transcriptPath))
+    else {
+      return false
+    }
+
+    for line in transcriptTail.split(separator: 0x0A, omittingEmptySubsequences: true).reversed() {
+      guard let entry = try? JSONDecoder().decode(ClaudeTranscriptEntry.self, from: Data(line))
+      else {
+        continue
+      }
+      guard entry.type == "user" else { continue }
+
+      guard entry.sessionID == input.sessionID,
+        entry.promptSource == "system",
+        entry.origin?.kind == "task-notification",
+        entry.message?.role == "user",
+        entry.message?.content == input.prompt
+      else {
+        return false
+      }
+      if let promptID = input.promptID, entry.promptID != promptID {
+        return false
+      }
+      return true
+    }
+
+    return false
+  }
+
+  private static func readTranscriptTail(at url: URL) throws -> Data {
+    let handle = try FileHandle(forReadingFrom: url)
+    defer { try? handle.close() }
+
+    let endOffset = try handle.seekToEnd()
+    let maximumTailBytes = UInt64(HookProtocolConstants.maximumMessageBytes + 65_536)
+    try handle.seek(toOffset: endOffset > maximumTailBytes ? endOffset - maximumTailBytes : 0)
+    return try handle.readToEnd() ?? Data()
+  }
+}
+
+private struct ClaudeTranscriptEntry: Decodable {
+  let type: String?
+  let sessionID: String?
+  let promptID: String?
+  let promptSource: String?
+  let origin: Origin?
+  let message: Message?
+
+  private enum CodingKeys: String, CodingKey {
+    case type
+    case sessionID = "sessionId"
+    case promptID = "promptId"
+    case promptSource
+    case origin
+    case message
+  }
+
+  struct Origin: Decodable {
+    let kind: String?
+  }
+
+  struct Message: Decodable {
+    let role: String?
+    let content: String?
+
+    private enum CodingKeys: String, CodingKey {
+      case role
+      case content
+    }
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.container(keyedBy: CodingKeys.self)
+      role = try? container.decode(String.self, forKey: .role)
+      content = try? container.decode(String.self, forKey: .content)
+    }
   }
 }
 struct OMPPromptGateInput: Decodable, Sendable {
@@ -107,7 +194,6 @@ enum OMPPromptGateFrame {
   }
 }
 
-
 struct HookReviewRequest: Codable, Equatable, Sendable {
   let requestID: UUID
   let client: PromptClient
@@ -150,6 +236,7 @@ struct HookReviewRequest: Codable, Equatable, Sendable {
 
 enum HookReviewOutcome: String, Codable, Sendable {
   case approved
+  case bypassed
   case cancelled
   case failed
 }

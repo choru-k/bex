@@ -35,7 +35,8 @@ struct PromptGateView: View {
         userInfo: [.announcement: message]
       )
     }
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    { _ in
       viewModel.refreshAccessibilityState()
     }
     .alert(
@@ -50,7 +51,9 @@ struct PromptGateView: View {
         .accessibilityIdentifier("prompt-gate-keep-correction-edits")
       Button("Discard Edits", role: .destructive) { viewModel.confirmDiscard() }
     } message: {
-      Text("Your edits to the AI correction have not been delivered. The AI output alone does not require a discard warning.")
+      Text(
+        "Your edits to the AI correction have not been delivered. The AI output alone does not require a discard warning."
+      )
     }
     .alert(
       "Replace edited correction?",
@@ -66,7 +69,8 @@ struct PromptGateView: View {
         viewModel.confirmCheckpointReplacement()
       }
     } message: {
-      Text("Checking the changed source will replace the checkpoint containing your correction edits.")
+      Text(
+        "Checking the changed source will replace the checkpoint containing your correction edits.")
     }
   }
 
@@ -307,7 +311,9 @@ struct PromptGateView: View {
       }
       .labelsHidden()
       .frame(width: 150)
-      .disabled(viewModel.clientIsLocked || viewModel.phase == .checking || viewModel.phase == .delivering)
+      .disabled(
+        viewModel.clientIsLocked || viewModel.phase == .checking || viewModel.phase == .delivering
+      )
       .accessibilityLabel("Prompt client")
       .accessibilityIdentifier("prompt-gate-client")
     }
@@ -358,13 +364,9 @@ struct PromptGateView: View {
           .disabled(viewModel.isLoadingSession)
           .focused($keyboardFocus, equals: .primaryAction)
           .accessibilityIdentifier("prompt-gate-confirm-outbound")
-      case .composing, .checking:
+      case .composing:
         cancelButton
         Spacer()
-        if viewModel.phase == .checking {
-          ProgressView().controlSize(.small)
-          Text("Checking…").foregroundStyle(.secondary)
-        }
         if viewModel.needsProviderSetup {
           Button("Open Settings") { viewModel.openSettings() }
             .keyboardShortcut(.return, modifiers: .command)
@@ -376,6 +378,16 @@ struct PromptGateView: View {
             .disabled(!viewModel.canReview)
             .focused($keyboardFocus, equals: .primaryAction)
             .accessibilityIdentifier("prompt-gate-review")
+        }
+      case .checking:
+        cancelButton
+        Spacer()
+        ProgressView().controlSize(.small)
+        Text("Checking…").foregroundStyle(.secondary)
+        if viewModel.canSkipHookCheck {
+          Button("Skip & Send Original") { viewModel.skipCheckAndSendOriginal() }
+            .keyboardShortcut(.return, modifiers: .command)
+            .accessibilityIdentifier("prompt-gate-skip-check")
         }
       case .reviewing:
         if viewModel.hasTerminalDeliveryFailure {
@@ -430,7 +442,10 @@ struct PromptGateView: View {
       }
       .keyboardShortcut(.return, modifiers: .command)
       .disabled(!viewModel.canApprove)
-      .focused($keyboardFocus, equals: viewModel.deliveryFailureEffect == nil ? .primaryAction : .recoveryAction)
+      .focused(
+        $keyboardFocus,
+        equals: viewModel.deliveryFailureEffect == nil ? .primaryAction : .recoveryAction
+      )
       .accessibilityIdentifier("prompt-gate-delivery-\(primary.rawValue)")
     }
   }

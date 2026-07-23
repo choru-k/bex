@@ -101,6 +101,12 @@ final class PromptGateViewModel: ObservableObject {
       && (deliveryFailureEffect == nil || deliveryFailureEffect?.isFullRetrySafe == true)
   }
 
+  var canSkipHookCheck: Bool {
+    phase == .checking
+      && session?.hookRequestID != nil
+      && session?.knownClient != .ohMyPi
+  }
+
   var isNoChangeReview: Bool {
     review?.hasChanges == false
   }
@@ -349,6 +355,48 @@ final class PromptGateViewModel: ObservableObject {
   func approve() {
     guard let action = primaryDeliveryAction else { return }
     performDelivery(action)
+  }
+
+  func skipCheckAndSendOriginal() {
+    guard canSkipHookCheck, let session, let requestID = session.hookRequestID else { return }
+
+    retireCurrentTask()
+    let sessionGeneration = generation
+    phase = .delivering
+    errorMessage = nil
+    isClosing = true
+    announce("Skipping the check and sending the original prompt.")
+
+    let workID = UUID()
+    currentWorkID = workID
+    currentTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        try await hookResponder.complete(
+          requestID: requestID,
+          outcome: .bypassed,
+          awaitAcknowledgement: false
+        )
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+          self.finishWork(workID)
+          return
+        }
+        finishWork(workID)
+        closeCurrentSession()
+      } catch {
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+          self.finishWork(workID)
+          return
+        }
+        isClosing = false
+        phase = .invalidated
+        errorMessage =
+          "Bex could not send the original prompt because the hook request is no longer active."
+        finishWork(workID)
+        requestFocus(keyboard: .recoveryAction, accessibility: .statusHeading)
+        announce(errorMessage ?? "The hook request is no longer active.")
+      }
+    }
   }
 
   func performDelivery(_ action: PromptDeliveryAction) {

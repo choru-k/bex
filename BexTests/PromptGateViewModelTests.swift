@@ -620,6 +620,35 @@ final class PromptGateViewModelTests: XCTestCase {
         fixture.capturedSession(text: "Second draft")
       ))
   }
+  func testHookCheckCanSkipAndSendOriginalWithoutWaitingForCorrection() async throws {
+    let grammar = SuspendedPromptGrammar()
+    let fixture = try await Fixture(
+      confirmsHookOutboundPayloads: false,
+      grammar: grammar
+    )
+    let requestID = UUID()
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.hookSession(requestID: requestID, text: "Already concise.")
+      ))
+    await grammar.waitUntilStarted()
+
+    XCTAssertEqual(fixture.viewModel.phase, .checking)
+    XCTAssertTrue(fixture.viewModel.canSkipHookCheck)
+    fixture.viewModel.skipCheckAndSendOriginal()
+    await grammar.resume(with: GrammarResult(corrected: "Late correction", explanation: "late"))
+    await fixture.viewModel.waitForCurrentWork()
+
+    let calls = await fixture.responder.recordedCalls()
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(calls.first?.requestID, requestID)
+    XCTAssertEqual(calls.first?.outcome, .bypassed)
+    XCTAssertEqual(calls.first?.awaitAcknowledgement, false)
+    XCTAssertTrue(fixture.target.deliveries.isEmpty)
+    XCTAssertEqual(fixture.target.discarded.count, 1)
+    XCTAssertEqual(fixture.viewModel.phase, .closed)
+  }
+
 }
 
 private actor RecordingPromptGrammar: PromptGrammarServicing {
