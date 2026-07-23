@@ -7,6 +7,7 @@ struct SettingsView: View {
     case general
     case provider
     case fixAndSend
+    case integrations
     case privacy
   }
 
@@ -14,12 +15,20 @@ struct SettingsView: View {
   @State private var selectedCategory: Category
   @State private var confirmDeleteSavedDraft = false
   @State private var confirmClearHistory = false
+  @AccessibilityFocusState private var installationReviewHeadingFocused: Bool
 
   init(viewModel: SettingsViewModel) {
     self.viewModel = viewModel
-    _selectedCategory = State(
-      initialValue: viewModel.setupOrigin == nil ? .general : .provider
-    )
+    #if DEBUG
+      let initialCategory: Category =
+        UITestScenario.current == .integrations
+        ? .integrations
+        : viewModel.setupOrigin == nil ? .general : .provider
+    #else
+      let initialCategory: Category =
+        viewModel.setupOrigin == nil ? .general : .provider
+    #endif
+    _selectedCategory = State(initialValue: initialCategory)
   }
 
   var body: some View {
@@ -46,6 +55,13 @@ struct SettingsView: View {
               .accessibilityIdentifier("settings-category-fix-and-send")
           }
 
+        integrationsCategory
+          .tag(Category.integrations)
+          .tabItem {
+            Label("Integrations", systemImage: "puzzlepiece.extension")
+              .accessibilityIdentifier("settings-category-integrations")
+          }
+
         privacyCategory
           .tag(Category.privacy)
           .tabItem {
@@ -69,6 +85,14 @@ struct SettingsView: View {
     }
     .onDisappear {
       viewModel.close()
+    }
+    .sheet(
+      isPresented: Binding(
+        get: { viewModel.pendingInstallationReview != nil },
+        set: { if !$0 { viewModel.cancelPendingInstallationReview() } }
+      )
+    ) {
+      installationReviewSheet
     }
     .alert("Delete Saved Draft?", isPresented: $confirmDeleteSavedDraft) {
       Button("Delete Saved Draft", role: .destructive) {
@@ -94,6 +118,254 @@ struct SettingsView: View {
           + "It does not delete Writing Styles, credentials, or your current work."
       )
     }
+  }
+
+  @ViewBuilder
+  private var installationReviewSheet: some View {
+    if let review = viewModel.pendingInstallationReview {
+      VStack(alignment: .leading, spacing: 14) {
+        Text("\(review.operation.rawValue.capitalized) \(review.descriptor.client.displayName)")
+          .font(.title2.bold())
+          .accessibilityAddTraits(.isHeader)
+          .accessibilityFocused($installationReviewHeadingFocused)
+        Text("Review every filesystem change before Apply.")
+          .foregroundStyle(.secondary)
+
+        GroupBox("Target") {
+          VStack(alignment: .leading, spacing: 6) {
+            LabeledContent("Integration", value: review.descriptor.id)
+            LabeledContent("Profile", value: review.descriptor.profile)
+            LabeledContent("Configuration", value: review.descriptor.configurationURL.path)
+            Button("Copy configuration path") {
+              copyIntegrationArtifact(review.descriptor.configurationURL.path)
+            }
+            .accessibilityLabel("Copy configuration path for \(review.descriptor.id)")
+            if let executable = review.descriptor.executableURL {
+              LabeledContent("Executable", value: executable.path)
+              Button("Copy executable path") {
+                copyIntegrationArtifact(executable.path)
+              }
+              .accessibilityLabel("Copy executable path for \(review.descriptor.id)")
+            }
+          }
+          .font(.caption.monospaced())
+          .textSelection(.enabled)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+
+        GroupBox("Exact actions") {
+          VStack(alignment: .leading, spacing: 8) {
+            Text(integrationActionSummary(review.actions))
+              .font(.caption)
+              .accessibilityLabel("Filesystem action summary: \(integrationActionSummary(review.actions))")
+            ScrollView {
+              VStack(alignment: .leading, spacing: 8) {
+                ForEach(review.actions) { action in
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text("\(action.change.rawValue.uppercased()) · \(action.path)")
+                      .font(.caption.monospaced().bold())
+                    Text(
+                      "before sha256=\(action.before.sha256 ?? "—") mode=\(action.before.mode.map { String(format: "%04o", $0) } ?? "—")"
+                    )
+                    .accessibilityLabel(
+                      "Before hash and mode for \(action.path): \(action.before.sha256 ?? "none"), \(action.before.mode.map { String(format: "%04o", $0) } ?? "none")"
+                    )
+                    Text(
+                      "after  sha256=\(action.after.sha256 ?? "—") mode=\(action.after.mode.map { String(format: "%04o", $0) } ?? "—")"
+                    )
+                    .accessibilityLabel(
+                      "After hash and mode for \(action.path): \(action.after.sha256 ?? "none"), \(action.after.mode.map { String(format: "%04o", $0) } ?? "none")"
+                    )
+                    Button("Copy artifact path") {
+                      copyIntegrationArtifact(action.path)
+                    }
+                    .accessibilityLabel("Copy path for \(action.kind.rawValue) artifact \(action.path)")
+                  }
+                  .font(.caption2.monospaced())
+                  .textSelection(.enabled)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                }
+              }
+            }
+            .frame(minHeight: 100, maxHeight: 180)
+          }
+        }
+
+        if let current = review.currentText, let proposed = review.proposedText {
+          integrationArtifactPreview(
+            title: "Unified configuration diff",
+            text: unifiedIntegrationDiff(current: current, proposed: proposed),
+            integrationID: review.descriptor.id
+          )
+        } else if let current = review.currentText {
+          integrationArtifactPreview(
+            title: "Exact content to delete",
+            text: current,
+            integrationID: review.descriptor.id
+          )
+        } else if let proposed = review.proposedText {
+          integrationArtifactPreview(
+            title: "Exact content to create",
+            text: proposed,
+            integrationID: review.descriptor.id
+          )
+        }
+
+        Text(review.trustGuidance).font(.caption)
+        Text(review.limitations)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text("Signer: \(review.signer)")
+          .font(.caption.monospaced())
+          .textSelection(.enabled)
+
+        switch viewModel.integrationReviewState {
+        case .applying:
+          Label("Applying reviewed changes", systemImage: "hourglass")
+            .accessibilityIdentifier("settings-integration-review-applying")
+        case .stale:
+          Label(
+            "Nothing changed. The reviewed baseline is stale.",
+            systemImage: "arrow.triangle.2.circlepath"
+          )
+          Button("Review Latest Changes") {
+            viewModel.reviewLatestIntegrationChanges()
+          }
+          .accessibilityIdentifier("settings-integration-review-latest")
+        case let .partialFailure(completed, restored, failed):
+          GroupBox("Partial failure recovery") {
+            VStack(alignment: .leading, spacing: 4) {
+              Text("Completed: \(completed.joined(separator: ", "))")
+              Text("Restored: \(restored.joined(separator: ", "))")
+              Text("Retained or failed: \(failed.joined(separator: ", "))")
+              Button("Review Latest Changes") {
+                viewModel.reviewLatestIntegrationChanges()
+              }
+            }
+            .font(.caption)
+            .textSelection(.enabled)
+          }
+        case .reviewing, .applied, .none:
+          EmptyView()
+        }
+
+        if let error = viewModel.promptGateError {
+          Text(error)
+            .foregroundStyle(.red)
+            .accessibilityIdentifier("settings-integration-review-error")
+        }
+
+        HStack {
+          Button("Cancel", role: .cancel) {
+            viewModel.cancelPendingInstallationReview()
+          }
+          Spacer()
+          if viewModel.integrationApplyInProgress {
+            ProgressView().controlSize(.small)
+          }
+          Button("Apply") {
+            viewModel.applyPendingInstallationReview()
+          }
+          .keyboardShortcut(.defaultAction)
+          .disabled(!installationReviewAllowsApply)
+          .accessibilityIdentifier("settings-integration-review-apply")
+        }
+      }
+      .padding(20)
+      .frame(minWidth: 720, minHeight: 600)
+      .interactiveDismissDisabled(viewModel.integrationApplyInProgress)
+      .onExitCommand {
+        if !viewModel.integrationApplyInProgress {
+          viewModel.cancelPendingInstallationReview()
+        }
+      }
+      .onAppear {
+        installationReviewHeadingFocused = true
+      }
+    }
+  }
+
+  private func integrationArtifactPreview(
+    title: String,
+    text: String,
+    integrationID: String
+  ) -> some View {
+    GroupBox(title) {
+      VStack(alignment: .leading, spacing: 4) {
+        ScrollView([.horizontal, .vertical]) {
+          Text(text)
+            .font(.caption.monospaced())
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxHeight: 120)
+        Button("Copy \(title.lowercased())") {
+          copyIntegrationArtifact(text)
+        }
+        .accessibilityLabel("Copy \(title.lowercased()) for \(integrationID)")
+      }
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private func unifiedIntegrationDiff(current: String, proposed: String) -> String {
+    let oldLines = current.components(separatedBy: "\n")
+    let newLines = proposed.components(separatedBy: "\n")
+    let difference = newLines.difference(from: oldLines)
+    var removals: [Int: String] = [:]
+    var insertions: [Int: String] = [:]
+    for change in difference {
+      switch change {
+      case let .remove(offset, element, _):
+        removals[offset] = element
+      case let .insert(offset, element, _):
+        insertions[offset] = element
+      }
+    }
+
+    var output = [
+      "--- current",
+      "+++ proposed",
+      "@@ -1,\(oldLines.count) +1,\(newLines.count) @@",
+    ]
+    var oldIndex = 0
+    var newIndex = 0
+    while oldIndex < oldLines.count || newIndex < newLines.count {
+      if let removed = removals[oldIndex] {
+        output.append("-\(removed)")
+        oldIndex += 1
+      } else if let inserted = insertions[newIndex] {
+        output.append("+\(inserted)")
+        newIndex += 1
+      } else if oldIndex < oldLines.count, newIndex < newLines.count {
+        output.append(" \(oldLines[oldIndex])")
+        oldIndex += 1
+        newIndex += 1
+      } else if oldIndex < oldLines.count {
+        output.append("-\(oldLines[oldIndex])")
+        oldIndex += 1
+      } else if newIndex < newLines.count {
+        output.append("+\(newLines[newIndex])")
+        newIndex += 1
+      }
+    }
+    return output.joined(separator: "\n")
+  }
+
+  private var installationReviewAllowsApply: Bool {
+    guard !viewModel.integrationApplyInProgress else { return false }
+    if case .reviewing = viewModel.integrationReviewState { return true }
+    return false
+  }
+
+  private func integrationActionSummary(_ actions: [HookInstallationAction]) -> String {
+    let counts = Dictionary(grouping: actions, by: \.change).mapValues(\.count)
+    return "\(counts[.create, default: 0]) create, \(counts[.replace, default: 0]) replace, \(counts[.delete, default: 0]) delete, \(counts[.keep, default: 0]) unchanged."
+  }
+
+  private func copyIntegrationArtifact(_ value: String) {
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString(value, forType: .string)
   }
 
   private var generalCategory: some View {
@@ -367,46 +639,108 @@ struct SettingsView: View {
           }
         }
 
-        DisclosureGroup("Advanced") {
-          GroupBox("App Integrations") {
-            VStack(alignment: .leading, spacing: 10) {
-              ForEach(PromptClient.allCases) { client in
-                VStack(alignment: .leading, spacing: 5) {
-                  HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                      Text(client.displayName).font(.headline)
-                      Text(viewModel.hookStatusLabel(for: client))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if viewModel.promptOperationClient == client {
-                      ProgressView().controlSize(.small)
-                    }
-                    Button(viewModel.hookActionLabel(for: client)) {
-                      viewModel.performHookAction(for: client)
-                    }
-                    .disabled(viewModel.promptOperationClient != nil)
-                    .accessibilityIdentifier("settings-prompt-hook-\(client.rawValue)")
-                  }
-                  Text(viewModel.hookConfigPath(for: client))
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                  if client == .codex {
-                    Text("After installation, open /hooks in Codex and explicitly trust the Bex handler.")
-                      .font(.caption)
-                      .foregroundStyle(.secondary)
-                  }
-                }
+    }
+    .formStyle(.grouped)
+    .padding()
+    .frame(maxWidth: .infinity)
+  }
+
+  private var integrationsCategory: some View {
+    Form {
+      Section("Claude Code and Codex") {
+        ForEach(PromptClient.focusedPickerClients) { client in
+          VStack(alignment: .leading, spacing: 5) {
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(client.displayName).font(.headline)
+                Text(viewModel.hookStatusLabel(for: client))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
               }
-              Text("Hook hosts can fail open if they terminate the helper before its one-hour timeout. Bex returns a valid block for every recoverable helper error and marks an integration active only after a heartbeat.")
+              Spacer()
+              Button(viewModel.hookActionLabel(for: client)) {
+                viewModel.prepareHookAction(for: client)
+              }
+              .disabled(viewModel.integrationApplyInProgress)
+              .accessibilityIdentifier("settings-prompt-hook-\(client.rawValue)")
+            }
+            Text(viewModel.hookConfigPath(for: client))
+              .font(.caption2.monospaced())
+              .foregroundStyle(.secondary)
+              .textSelection(.enabled)
+            if client == .codex {
+              Text("After Apply, open /hooks in Codex and explicitly approve the Bex handler.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+              Text("Claude Code /hooks is inspection-only; no separate host approval is required.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
           }
-          .padding(.top, 8)
+          .padding(.vertical, 4)
         }
+      }
+
+      Section("Oh My Pi") {
+        TextField("OMP executable", text: $viewModel.ompExecutablePath)
+          .accessibilityLabel("OMP executable path")
+          .accessibilityIdentifier("settings-omp-executable")
+        TextField("Profile", text: $viewModel.ompProfile)
+          .accessibilityLabel("OMP profile")
+          .accessibilityIdentifier("settings-omp-profile")
+        TextField("Working directory", text: $viewModel.ompWorkingDirectory)
+          .accessibilityLabel("OMP working directory")
+          .accessibilityIdentifier("settings-omp-working-directory")
+        Button("Resolve and Review OMP Installation") {
+          viewModel.prepareOMPIntegration()
+        }
+        .disabled(
+          viewModel.ompExecutablePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || viewModel.ompWorkingDirectory.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || viewModel.integrationApplyInProgress
+        )
+        .accessibilityIdentifier("settings-omp-review-install")
+
+        ForEach(viewModel.installedIntegrations.filter { $0.client == .ohMyPi }) {
+          descriptor in
+          VStack(alignment: .leading, spacing: 4) {
+            HStack {
+              VStack(alignment: .leading, spacing: 2) {
+                Text("OMP · \(descriptor.profile)").font(.headline)
+                Text(viewModel.integrationStatusLabel(for: descriptor.id))
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+              }
+              Spacer()
+              Button(viewModel.integrationActionLabel(for: descriptor.id)) {
+                viewModel.prepareAction(for: descriptor)
+              }
+              .disabled(viewModel.integrationApplyInProgress)
+              .accessibilityIdentifier("settings-omp-action-\(descriptor.id)")
+            }
+            LabeledContent("Executable", value: descriptor.executableURL?.path ?? "Unavailable")
+            LabeledContent("Native gate", value: descriptor.configurationURL.path)
+          }
+          .font(.caption)
+          .textSelection(.enabled)
+          .padding(.vertical, 4)
+        }
+
+        Text(
+          "OMP must advertise native prompt-gate-v1. Builds without it—including 17.0.6—remain unavailable; Bex never installs a best-effort extension."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
+
+      Section("Operational limits") {
+        Text(
+          "Hook hosts can fail open if they terminate the helper before its one-hour timeout. Bex returns a valid block for every recoverable helper error and marks an integration active only after a matching post-install heartbeat."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
     }
     .formStyle(.grouped)
     .padding()

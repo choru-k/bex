@@ -270,6 +270,108 @@ final class BexUITests: XCTestCase {
       configuredProvider.descendants(matching: .any)["settings-provider-connection"].exists
     )
   }
+  func testIntegrationReviewAppliesOnlyAfterExplicitConfirmation() throws {
+    continueAfterFailure = false
+    let transcript = temporarySink("BexUIIntegrationSuccess", extension: "json")
+    let app = launchScenario(
+      "integrations",
+      environment: ["BEX_UI_TEST_INTEGRATION_TRANSCRIPT_PATH": transcript.path]
+    )
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: transcript)
+    }
+
+    setOMPProfile("ui-test", in: app)
+    let review = app.buttons["settings-omp-review-install"]
+    XCTAssertTrue(review.waitForExistence(timeout: 5))
+    review.click()
+    let apply = app.buttons["settings-integration-review-apply"]
+    XCTAssertTrue(apply.waitForExistence(timeout: 3))
+    XCTAssertTrue(app.staticTexts["Install Oh My Pi"].exists)
+    apply.click()
+    XCTAssertTrue(apply.waitForNonExistence(timeout: 3))
+
+    let events = try readStringEvents(at: transcript)
+    XCTAssertTrue(events.contains { $0.hasPrefix("prepare:install:omp-ui-test:") })
+    XCTAssertTrue(events.contains { $0.hasPrefix("apply:install:omp-ui-test:") })
+  }
+
+  func testIntegrationReviewStaleBaselineRequiresFreshReview() throws {
+    continueAfterFailure = false
+    let transcript = temporarySink("BexUIIntegrationStale", extension: "json")
+    let app = launchScenario(
+      "integrations",
+      environment: [
+        "BEX_UI_TEST_INTEGRATION_TRANSCRIPT_PATH": transcript.path,
+        "BEX_UI_TEST_INJECT_DRIFT_ID": "omp-ui-test",
+      ]
+    )
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: transcript)
+    }
+
+    setOMPProfile("ui-test", in: app)
+    XCTAssertTrue(app.buttons["settings-omp-review-install"].waitForExistence(timeout: 5))
+    app.buttons["settings-omp-review-install"].click()
+    let apply = app.buttons["settings-integration-review-apply"]
+    XCTAssertTrue(apply.waitForExistence(timeout: 3))
+    apply.click()
+    let latest = app.buttons["settings-integration-review-latest"]
+    XCTAssertTrue(latest.waitForExistence(timeout: 3))
+    let error = app.descendants(matching: .any)["settings-integration-review-error"]
+    XCTAssertTrue(error.exists)
+    XCTAssertTrue(accessibilityText(of: error).contains("Nothing changed"))
+    XCTAssertFalse(apply.isEnabled)
+
+    latest.click()
+    XCTAssertTrue(apply.waitForExistence(timeout: 3))
+    XCTAssertTrue(apply.isEnabled)
+    apply.click()
+    XCTAssertTrue(apply.waitForNonExistence(timeout: 3))
+
+    let events = try readStringEvents(at: transcript)
+    XCTAssertTrue(events.contains("drift:omp-ui-test"))
+    XCTAssertEqual(events.filter { $0.hasPrefix("prepare:install:omp-ui-test:") }.count, 2)
+    XCTAssertEqual(events.filter { $0.hasPrefix("apply:install:omp-ui-test:") }.count, 1)
+  }
+
+  func testIntegrationReviewReportsPartialRollbackPaths() throws {
+    continueAfterFailure = false
+    let transcript = temporarySink("BexUIIntegrationPartial", extension: "json")
+    let app = launchScenario(
+      "integrations",
+      environment: [
+        "BEX_UI_TEST_INTEGRATION_TRANSCRIPT_PATH": transcript.path,
+        "BEX_UI_TEST_PARTIAL_FAILURE_ID": "omp-ui-test",
+      ]
+    )
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: transcript)
+    }
+
+    setOMPProfile("ui-test", in: app)
+    XCTAssertTrue(app.buttons["settings-omp-review-install"].waitForExistence(timeout: 5))
+    app.buttons["settings-omp-review-install"].click()
+    let apply = app.buttons["settings-integration-review-apply"]
+    XCTAssertTrue(apply.waitForExistence(timeout: 3))
+    apply.click()
+
+    let error = app.descendants(matching: .any)["settings-integration-review-error"]
+    XCTAssertTrue(error.waitForExistence(timeout: 3))
+    XCTAssertTrue(accessibilityText(of: error).contains("partially failed"))
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Completed:'")).firstMatch.exists)
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Restored:'")).firstMatch.exists)
+    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH 'Retained or failed:'")).firstMatch.exists)
+    XCTAssertTrue(app.buttons["Review Latest Changes"].exists)
+    XCTAssertFalse(apply.isEnabled)
+
+    let events = try readStringEvents(at: transcript)
+    XCTAssertTrue(events.contains("partial-failure:omp-ui-test"))
+  }
+
   func testFreshQuickCheckMakesRetentionChoicesAndConfirmsFullCustomPayload() {
     continueAfterFailure = false
     let app = launchScenario("fresh-quick-check")
@@ -642,6 +744,26 @@ final class BexUITests: XCTestCase {
       ),
       .completed
     )
+  }
+
+  private func setOMPProfile(_ profile: String, in app: XCUIApplication) {
+    let field = app.textFields["settings-omp-profile"]
+    XCTAssertTrue(field.waitForExistence(timeout: 5))
+    field.click()
+    field.typeKey("a", modifierFlags: .command)
+    field.typeKey(.delete, modifierFlags: [])
+    field.typeText(profile)
+    XCTAssertEqual(field.value as? String, profile)
+  }
+
+  private func temporarySink(_ prefix: String, extension pathExtension: String) -> URL {
+    FileManager.default.temporaryDirectory
+      .appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+      .appendingPathExtension(pathExtension)
+  }
+
+  private func readStringEvents(at url: URL) throws -> [String] {
+    try JSONDecoder().decode([String].self, from: Data(contentsOf: url))
   }
 
   private func launchScenario(

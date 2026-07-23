@@ -22,6 +22,7 @@
     case historyPopulated = "history-populated"
     case profilesEmpty = "profiles-empty"
     case profilesPopulated = "profiles-populated"
+    case integrations
 
     static func parse(environment: [String: String] = ProcessInfo.processInfo.environment) -> Self {
       guard let value = environment[environmentKey], let scenario = Self(rawValue: value) else {
@@ -136,6 +137,15 @@
         configuration.preferences.defaultProfileID =
           UITestFixtureConfiguration.populatedProfiles.first?.id
         configuration.launchDestination = .profiles
+      case .integrations:
+        configuration.integrations = UITestFixtureConfiguration.integrationDescriptors
+        configuration.integrationStatuses = [
+          PromptClient.claudeCode.rawValue: .installedUnconfirmed,
+          PromptClient.codex.rawValue: .awaitingCodexTrust,
+          "omp-default": .installedUnconfirmed,
+          "omp-team": .active(lastSeen: UITestFixtureConfiguration.fixtureDate),
+        ]
+        configuration.launchDestination = .settings
       }
       return configuration
     }
@@ -235,6 +245,43 @@
         profileName: nil
       ),
     ]
+    static let integrationDescriptors = [
+      HookIntegrationDescriptor(
+        id: "omp-default",
+        client: .ohMyPi,
+        profile: "default",
+        executableURL: URL(fileURLWithPath: "/opt/homebrew/bin/omp"),
+        workingDirectory: URL(fileURLWithPath: "/Users/ui/project", isDirectory: true),
+        configurationURL: URL(
+          fileURLWithPath: "/Users/ui/.omp/agent/prompt-gates/default/bex.json"
+        ),
+        gateURL: URL(fileURLWithPath: "/Users/ui/.omp/agent/prompt-gates/default/bex.json"),
+        helperURL: URL(
+          fileURLWithPath:
+            "/Users/ui/Library/Application Support/Bex/bin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bex-hook"
+        ),
+        capabilityVersion: 1,
+        validation: .supported
+      ),
+      HookIntegrationDescriptor(
+        id: "omp-team",
+        client: .ohMyPi,
+        profile: "team",
+        executableURL: URL(fileURLWithPath: "/usr/local/bin/omp"),
+        workingDirectory: URL(fileURLWithPath: "/Users/ui/team-project", isDirectory: true),
+        configurationURL: URL(
+          fileURLWithPath: "/Users/ui/.omp/team/prompt-gates/bex.json"
+        ),
+        gateURL: URL(fileURLWithPath: "/Users/ui/.omp/team/prompt-gates/bex.json"),
+        helperURL: URL(
+          fileURLWithPath:
+            "/Users/ui/Library/Application Support/Bex/bin/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/bex-hook"
+        ),
+        capabilityVersion: 1,
+        validation: .supported
+      ),
+    ]
+
 
     var preservesStoredState = false
     var preferences = UITestPreferenceSeed()
@@ -246,6 +293,11 @@
     var hotKeyRegistration: UITestHotKeyRegistration = .succeed
     var grammarBehavior: UITestGrammarBehavior = .immediate
     var pasteboardPath: String?
+    var integrations: [HookIntegrationDescriptor] = []
+    var integrationStatuses: [String: HookInstallationStatus] = [:]
+    var integrationTranscriptPath: String?
+    var injectDriftIntegrationID: String?
+    var partialFailureIntegrationID: String?
     var launchDestination: UITestLaunchDestination = .none
 
     static func resolve(environment: [String: String]) -> Self {
@@ -262,6 +314,15 @@
       configuration.pasteboardPath =
         environment["BEX_UI_TEST_PASTEBOARD_PATH"]
         ?? configuration.pasteboardPath
+      configuration.integrationTranscriptPath =
+        environment["BEX_UI_TEST_INTEGRATION_TRANSCRIPT_PATH"]
+        ?? configuration.integrationTranscriptPath
+      configuration.injectDriftIntegrationID =
+        environment["BEX_UI_TEST_INJECT_DRIFT_ID"]
+        ?? configuration.injectDriftIntegrationID
+      configuration.partialFailureIntegrationID =
+        environment["BEX_UI_TEST_PARTIAL_FAILURE_ID"]
+        ?? configuration.partialFailureIntegrationID
       if environment["BEX_UI_TEST_PROMPT_DELIVERY_ERROR"] == "1" {
         configuration.target.deliveryFailureEffect = PromptDeliveryEffect.none
       }
@@ -672,22 +733,205 @@
   }
 
   actor UITestingHookManager: HookInstallationManaging {
-    private var statuses: [PromptClient: HookInstallationStatus]
+    private var clientStatuses: [PromptClient: HookInstallationStatus]
+    private var integrationStatuses: [String: HookInstallationStatus]
+    private var descriptors: [HookIntegrationDescriptor]
+    private var prepared: [UUID: HookInstallationReview] = [:]
+    private let transcriptURL: URL?
+    private var driftIntegrationID: String?
+    private var partialFailureIntegrationID: String?
 
-    init(hook: UITestHookSeed?) {
-      statuses = hook.map { [$0.client: $0.status] } ?? [:]
+    init(configuration: UITestFixtureConfiguration) {
+      clientStatuses = configuration.hook.map { [$0.client: $0.status] } ?? [:]
+      integrationStatuses = configuration.integrationStatuses
+      descriptors = configuration.integrations
+      transcriptURL = configuration.integrationTranscriptPath.map(URL.init(fileURLWithPath:))
+      driftIntegrationID = configuration.injectDriftIntegrationID
+      partialFailureIntegrationID = configuration.partialFailureIntegrationID
     }
 
     func status(for client: PromptClient) async -> HookInstallationStatus {
-      statuses[client] ?? .notInstalled
+      integrationStatuses[client.rawValue] ?? clientStatuses[client] ?? .notInstalled
+    }
+
+    func status(for integrationID: String) async -> HookInstallationStatus {
+      integrationStatuses[integrationID] ?? .notInstalled
     }
 
     func install(_ client: PromptClient) async throws {
-      statuses[client] = .installedUnconfirmed
+      clientStatuses[client] = .installedUnconfirmed
+      record("legacy-install:\(client.rawValue)")
     }
 
     func uninstall(_ client: PromptClient) async throws {
-      statuses[client] = .notInstalled
+      clientStatuses[client] = .notInstalled
+      integrationStatuses[client.rawValue] = .notInstalled
+      record("legacy-uninstall:\(client.rawValue)")
+    }
+
+    func installedDescriptors() async -> [HookIntegrationDescriptor] {
+      descriptors
+    }
+
+    func resolve(_ target: HookIntegrationTarget) async throws -> HookIntegrationDescriptor {
+      let descriptor: HookIntegrationDescriptor
+      switch target {
+      case .claudeCode:
+        descriptor = fixedDescriptor(for: .claudeCode)
+      case .codex:
+        descriptor = fixedDescriptor(for: .codex)
+      case let .ohMyPi(executable, profile, workingDirectory):
+        let normalizedProfile = profile?.isEmpty == false ? profile! : "default"
+        descriptor =
+          descriptors.first(where: {
+            $0.client == .ohMyPi && $0.profile == normalizedProfile
+          })
+          ?? HookIntegrationDescriptor(
+            id: "omp-\(normalizedProfile)",
+            client: .ohMyPi,
+            profile: normalizedProfile,
+            executableURL: executable,
+            workingDirectory: workingDirectory,
+            configurationURL: URL(
+              fileURLWithPath:
+                "/Users/ui/.omp/\(normalizedProfile)/prompt-gates/bex.json"
+            ),
+            gateURL: URL(
+              fileURLWithPath:
+                "/Users/ui/.omp/\(normalizedProfile)/prompt-gates/bex.json"
+            ),
+            helperURL: URL(
+              fileURLWithPath:
+                "/Users/ui/Library/Application Support/Bex/bin/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc/bex-hook"
+            ),
+            capabilityVersion: 1,
+            validation: .supported
+          )
+      }
+      record("resolve:\(descriptor.id)")
+      return descriptor
+    }
+
+    func prepare(
+      _ operation: HookInstallationOperation,
+      for descriptor: HookIntegrationDescriptor
+    ) async throws -> HookInstallationReview {
+      let reviewID = UUID(uuidString: "40000000-0000-0000-0000-000000000001")!
+      let before = HookArtifactSnapshot(
+        exists: operation != .install,
+        mode: operation == .install ? nil : 0o600,
+        sha256: operation == .install ? nil : String(repeating: "1", count: 64)
+      )
+      let after = HookArtifactSnapshot(
+        exists: operation != .uninstall,
+        mode: operation == .uninstall ? nil : 0o600,
+        sha256: operation == .uninstall ? nil : String(repeating: "2", count: 64)
+      )
+      let action = HookInstallationAction(
+        id: "\(reviewID.uuidString)-config",
+        path: descriptor.configurationURL.path,
+        kind: .file,
+        change: operation == .install ? .create : operation == .uninstall ? .delete : .replace,
+        before: before,
+        after: after
+      )
+      let review = HookInstallationReview(
+        id: reviewID,
+        operation: operation,
+        descriptor: descriptor,
+        trustGuidance:
+          descriptor.client == .codex
+          ? "After Apply, approve Bex in Codex /hooks."
+          : "Review the exact Bex-owned target before Apply.",
+        limitations: "This deterministic fixture never mutates the real filesystem.",
+        signer: "bex-hook · ESURPGU29C",
+        currentText: operation == .install ? nil : "{\n  \"enabled\" : false\n}\n",
+        proposedText: operation == .uninstall ? nil : "{\n  \"enabled\" : true\n}\n",
+        actions: [action]
+      )
+      prepared[reviewID] = review
+      record("prepare:\(operation.rawValue):\(descriptor.id):\(reviewID.uuidString)")
+      return review
+    }
+
+    func apply(reviewID: UUID) async throws -> HookInstallationResult {
+      guard let review = prepared.removeValue(forKey: reviewID) else {
+        throw BexError.storageFailure("This integration review is stale or was already applied.")
+      }
+      if driftIntegrationID == review.descriptor.id {
+        driftIntegrationID = nil
+        record("drift:\(review.descriptor.id)")
+        throw BexError.storageFailure(
+          "Nothing changed because \(review.descriptor.configurationURL.path) changed after review."
+        )
+      }
+      if partialFailureIntegrationID == review.descriptor.id {
+        partialFailureIntegrationID = nil
+        let completed = review.actions.map(\.path)
+        let retained = review.descriptor.helperURL.path
+        record("partial-failure:\(review.descriptor.id)")
+        return HookInstallationResult(
+          completed: completed,
+          restored: [review.descriptor.configurationURL.path],
+          failed: [retained]
+        )
+      }
+      switch review.operation {
+      case .uninstall:
+        descriptors.removeAll { $0.id == review.descriptor.id }
+        integrationStatuses[review.descriptor.id] = .notInstalled
+      case .install, .update, .repair:
+        if !descriptors.contains(where: { $0.id == review.descriptor.id }) {
+          descriptors.append(review.descriptor)
+        }
+        integrationStatuses[review.descriptor.id] =
+          review.descriptor.client == .codex ? .awaitingCodexTrust : .installedUnconfirmed
+      }
+      record("apply:\(review.operation.rawValue):\(review.descriptor.id):\(reviewID.uuidString)")
+      return HookInstallationResult(
+        completed: review.actions.map(\.path),
+        restored: [],
+        failed: []
+      )
+    }
+
+    func cancel(reviewID: UUID) async {
+      let review = prepared.removeValue(forKey: reviewID)
+      record("cancel:\(review?.descriptor.id ?? "unknown"):\(reviewID.uuidString)")
+    }
+
+    private func fixedDescriptor(for client: PromptClient) -> HookIntegrationDescriptor {
+      let config =
+        client == .claudeCode
+        ? "/Users/ui/.claude/settings.json"
+        : "/Users/ui/.codex/hooks.json"
+      return HookIntegrationDescriptor(
+        id: client.rawValue,
+        client: client,
+        profile: "default",
+        executableURL: nil,
+        workingDirectory: nil,
+        configurationURL: URL(fileURLWithPath: config),
+        gateURL: nil,
+        helperURL: URL(
+          fileURLWithPath:
+            "/Users/ui/Library/Application Support/Bex/bin/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/bex-hook"
+        ),
+        capabilityVersion: nil,
+        validation: .supported
+      )
+    }
+
+    private func record(_ value: String) {
+      guard let transcriptURL else { return }
+      let existing =
+        (try? Data(contentsOf: transcriptURL))
+          .flatMap { try? JSONDecoder().decode([String].self, from: $0) } ?? []
+      try? FileManager.default.createDirectory(
+        at: transcriptURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      try? JSONEncoder().encode(existing + [value]).write(to: transcriptURL, options: .atomic)
     }
   }
 
@@ -725,7 +969,9 @@
     func complete(
       requestID: UUID,
       outcome: HookReviewOutcome,
-      awaitAcknowledgement: Bool
+      awaitAcknowledgement: Bool,
+      approvedPrompt: String?,
+      integrationID: String?
     ) async throws {}
   }
 
@@ -775,7 +1021,7 @@
           configuration: configuration.target,
           pasteboard: pasteboard
         )
-      let hookManager = UITestingHookManager(hook: configuration.hook)
+      let hookManager = UITestingHookManager(configuration: configuration)
       let promptGateIPC = UITestingPromptGateIPC(hook: configuration.hook)
       return AppServices(
         preferences: preferences,

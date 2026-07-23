@@ -70,6 +70,9 @@ struct PromptGateIPCClient: Sendable {
   func acknowledge(
     requestID: UUID,
     token: String,
+    integrationID: String? = nil,
+    deliveryToken: String? = nil,
+    deliveryStatus: String? = nil,
     rendezvous: HookRendezvous? = nil
   ) async throws {
     let rendezvous = try rendezvous ?? loadRendezvous()
@@ -77,7 +80,10 @@ struct PromptGateIPCClient: Sendable {
       version: HookProtocolConstants.version,
       authenticationToken: rendezvous.authenticationToken,
       requestID: requestID,
-      acknowledgmentToken: token
+      acknowledgmentToken: token,
+      integrationID: integrationID,
+      deliveryToken: deliveryToken,
+      deliveryStatus: deliveryStatus
     )
     var request = try urlRequest(
       path: HookProtocolConstants.acknowledgmentPath,

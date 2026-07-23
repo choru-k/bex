@@ -67,36 +67,46 @@ Delivery depends on the captured target:
 
 Bex masks technical-looking spans before correction—including fenced and inline code, URLs, paths, command flags, identifiers, and structured literals—and requires every protected token to return exactly once and in order. If that check fails, Prompt Gate refuses delivery.
 
-### Claude Code and Codex hooks
+### Claude Code, Codex, and Oh My Pi integrations
 
-Hooks are optional. The focused-app **⌘⇧P** flow works without them. To add fail-closed review to a supported terminal client:
+Integrations are optional. The focused-app **⌘⇧P** flow works without them. To add review to a supported terminal client:
 
-1. Open **Settings → Prompt Gate** and choose **Install** for Claude Code or Codex.
-2. Check the exact configuration path shown by Bex:
-   - Claude Code: `${CLAUDE_CONFIG_DIR}/settings.json` when `CLAUDE_CONFIG_DIR` is inherited by Bex, otherwise `~/.claude/settings.json`
-   - Codex: `${CODEX_HOME}/hooks.json` when `CODEX_HOME` is inherited by Bex, otherwise `~/.codex/hooks.json`
-3. For Codex, open `/hooks` and explicitly trust the Bex handler.
-4. Keep Bex running and submit a test prompt. Bex reports **Active** only after the installed helper records a heartbeat.
+1. Open **Settings → Integrations**.
+2. For Claude Code or Codex, choose **Install**. For Oh My Pi (OMP), enter the exact executable, profile, and working directory, then choose **Resolve and Review OMP Installation**.
+3. Review every proposed path, mode, SHA-256 digest, configuration diff, signer, and host-specific limitation. Bex changes nothing until **Apply**.
+4. For Codex, open `/hooks` and explicitly trust the Bex handler. Claude Code `/hooks` is inspection-only and needs no separate approval. OMP uses its reviewed native prompt gate and needs no marketplace extension.
+5. Keep Bex running and submit a test prompt. Bex reports **Active** only after a matching post-install heartbeat.
 
-Bex preserves unrelated JSON and file permissions and installs a stable helper at `~/Library/Application Support/Bex/bin/bex-hook`. **Uninstall** removes only the Bex-owned hook entry. If the entry or helper has drifted, Settings reports **Needs repair** and offers **Repair**.
+Bex resolves these exact host-owned targets:
 
-The hook blocks the first prompt before the client model receives it and opens Prompt Gate. After approval:
+- Claude Code: `${CLAUDE_CONFIG_DIR}/settings.json` when that variable is inherited by Bex, otherwise `~/.claude/settings.json`
+- Codex: `${CODEX_HOME}/hooks.json` when that variable is inherited by Bex, otherwise `~/.codex/hooks.json`
+- OMP: the absolute gate directory returned by `omp capabilities --json` for the selected profile and working directory
 
-- If Bex pastes the correction, focus the client composer and press Return.
-- If Bex copies the correction, replace the original composer text with the copied correction, then press Return.
-- Do not submit or manually replay the original prompt after cancellation or an error. Remove any original text retained by the host, resolve the reported problem, and retry through Prompt Gate.
+OMP must advertise `prompt-gate-v1`. OMP 17.0.6 and other builds without that capability remain unavailable; Bex does not install a best-effort `input` extension. Project-local `.omp` extensions cannot replace the native gate.
 
-The corrected replay is authorized by a one-use receipt for the exact text, client, and session. The receipt expires after two minutes; cancellation and delivery failure revoke it.
+Bex preserves unrelated JSON and file permissions. New reviews install an immutable signed helper at `~/Library/Application Support/Bex/bin/<sha256>/bex-hook`; legacy shared-helper installations remain removable and migrate only through an explicit reviewed Update or Repair. **Uninstall** removes only Bex-owned artifacts. Drift produces **Update available** or **Needs repair**, never an automatic overwrite.
+
+The integration blocks the first prompt before the client model receives it and opens Prompt Gate. After approval:
+
+- OMP stages the corrected text, acknowledges the exact delivery token, and resubmits it once through the native gate. The matching one-use receipt allows only that exact corrected replay.
+- For Claude Code or Codex, if Bex pastes the correction, focus the client composer and press Return. If Bex copies it, replace the retained original with the copied correction, then press Return.
+- Never submit or manually replay the original after cancellation or an error. Remove any original retained by the host, resolve the reported problem, and retry through Prompt Gate.
+
+Receipts bind the exact text, client, integration, and session. They are consumed once and expire after two minutes; cancellation and delivery failure revoke them.
 
 Troubleshooting:
 
 - **Installed — waiting for first prompt:** restart the client if it was already open, keep Bex running, and submit a test prompt.
 - **Installed — approve Bex in `/hooks`:** open `/hooks` in Codex, trust the handler, then submit a test prompt.
-- **Needs repair:** choose **Repair**, then restart the client.
-- **Still inactive:** verify the exact configuration path displayed by Bex. Bex uses only `CLAUDE_CONFIG_DIR` or `CODEX_HOME` inherited by its own process; otherwise it uses the default paths above.
-- **Prompt blocked with a helper or IPC error:** keep Bex running, repair the integration if offered, and retry. Do not bypass the block by submitting the original text.
+- **OMP unavailable:** install an OMP build that advertises `prompt-gate-v1`, then resolve the target again.
+- **Update available / Needs repair:** open a fresh review, verify the new baseline, and Apply.
+- **Nothing changed:** the reviewed file or an ancestor changed identity. Choose **Review Latest Changes**; Bex will not apply a stale review.
+- **Partial failure:** inspect the completed, restored, and retained paths shown in the review sheet before retrying.
+- **Still inactive:** verify the exact target, profile, and working directory displayed by Bex.
+- **Prompt blocked with a helper or IPC error:** keep Bex running, repair the integration if offered, and retry. Never bypass the block by submitting the original text.
 
-Claude Code and Codex own their hook runtimes. They can fail open if they terminate the helper or exceed its one-hour timeout, so hooks are a review aid rather than a security enforcement boundary. Bex itself returns a valid blocking response for recoverable helper, IPC, correction, cancellation, and delivery failures.
+Claude Code and Codex own their hook runtimes and can fail open if they terminate the helper or exceed its one-hour timeout, so those hooks are a review aid rather than a security boundary. OMP's `prompt-gate-v1` path blocks on malformed output, timeout, cancellation, helper failure, acknowledgment failure, or replay mismatch. Bex returns a valid blocking response for every recoverable helper, IPC, correction, cancellation, and delivery failure.
 
 ## Providers
 

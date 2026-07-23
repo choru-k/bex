@@ -374,8 +374,18 @@ final class PromptTargetService: PromptTargetServicing {
       requestID: hookRequest.requestID,
       sessionID: hookRequest.sessionID,
       cwd: hookRequest.cwd,
-      helperPID: hookRequest.helperPID
+      helperPID: hookRequest.helperPID,
+      client: hookRequest.client,
+      integrationID: hookRequest.integrationID
     )
+    if hookRequest.client == .ohMyPi {
+      return PromptTarget(
+        kind: .managedDraft,
+        applicationName: "Oh My Pi",
+        guidance: "Oh My Pi is holding the original prompt. Approval stages this exact correction in its editor for explicit replay.",
+        hookContext: context
+      )
+    }
     guard let sourcePID = hookRequest.sourcePID,
       sourcePID != ownProcessID,
       let application = applications.application(processID: sourcePID),
@@ -424,6 +434,8 @@ final class PromptTargetService: PromptTargetServicing {
           target: target,
           pressReturn: pressReturn
         )
+      case .managedDraft:
+        return .staged
       }
     } catch let failure as PromptDeliveryFailure {
       throw failure

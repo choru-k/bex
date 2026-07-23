@@ -86,6 +86,8 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
     let connectionID: UUID
     var waitingForAcknowledgment: Bool
     var acknowledgmentToken: String?
+    var approvedPrompt: String?
+    var deliveryToken: String?
     var acknowledgmentContinuation: CheckedContinuation<Void, Error>?
     var deadline: Task<Void, Never>?
   }
@@ -187,7 +189,9 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
   func complete(
     requestID: UUID,
     outcome: HookReviewOutcome,
-    awaitAcknowledgement: Bool
+    awaitAcknowledgement: Bool,
+    approvedPrompt: String?,
+    integrationID: String?
   ) async throws {
     guard var current = pending, current.request.requestID == requestID else {
       throw BexError.promptDeliveryFailed("The Prompt Gate helper disconnected.")
@@ -201,6 +205,18 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
       return
     }
 
+    if current.request.client == .ohMyPi {
+      guard
+        let approvedPrompt,
+        !approvedPrompt.isEmpty,
+        let integrationID,
+        integrationID == current.request.integrationID
+      else {
+        throw BexError.promptDeliveryFailed("The OMP approval identity is invalid.")
+      }
+      current.approvedPrompt = approvedPrompt
+      current.deliveryToken = Self.randomToken()
+    }
     let acknowledgmentToken = Self.randomToken()
     current.waitingForAcknowledgment = true
     current.acknowledgmentToken = acknowledgmentToken
@@ -236,7 +252,14 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
 
   private func publishApproval(requestID: UUID, token: String) async {
     guard let current = pending, current.request.requestID == requestID else { return }
-    await sendReviewResponse(.approved, token: token, connection: current.connection)
+    await sendReviewResponse(
+      .approved,
+      token: token,
+      connection: current.connection,
+      request: current.request,
+      approvedPrompt: current.approvedPrompt,
+      deliveryToken: current.deliveryToken
+    )
     current.connection.cancel()
     Task { [weak self] in
       try? await Task.sleep(for: .seconds(2))
@@ -313,6 +336,8 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
       connectionID: id,
       waitingForAcknowledgment: false,
       acknowledgmentToken: nil,
+      approvedPrompt: nil,
+      deliveryToken: nil,
       acknowledgmentContinuation: nil,
       deadline: nil
     )
@@ -350,6 +375,17 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
       await sendHTTP(status: 409, body: Data(), connection: connection)
       connection.cancel()
       return
+    }
+    if current.request.client == .ohMyPi {
+      guard
+        envelope.integrationID == current.request.integrationID,
+        envelope.deliveryToken == current.deliveryToken,
+        envelope.deliveryStatus == "delivered"
+      else {
+        await sendHTTP(status: 403, body: Data(), connection: connection)
+        connection.cancel()
+        return
+      }
     }
     guard
       current.acknowledgmentToken == envelope.acknowledgmentToken,
@@ -404,12 +440,18 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
   private func sendReviewResponse(
     _ outcome: HookReviewOutcome,
     token: String?,
-    connection: NWConnection
+    connection: NWConnection,
+    request: HookReviewRequest? = nil,
+    approvedPrompt: String? = nil,
+    deliveryToken: String? = nil
   ) async {
     let envelope = HookReviewResponseEnvelope(
       version: HookProtocolConstants.version,
       outcome: outcome,
-      acknowledgmentToken: token
+      acknowledgmentToken: token,
+      integrationID: request?.integrationID,
+      approvedPrompt: approvedPrompt,
+      deliveryToken: deliveryToken
     )
     let body = (try? JSONEncoder().encode(envelope)) ?? Data()
     await sendHTTP(status: 200, body: body, connection: connection)

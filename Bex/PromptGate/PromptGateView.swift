@@ -301,7 +301,7 @@ struct PromptGateView: View {
           set: { viewModel.setSelectedClient($0) }
         )
       ) {
-        ForEach(PromptClient.allCases) { client in
+        ForEach(PromptClient.focusedPickerClients) { client in
           Text(client.displayName).tag(client)
         }
       }

@@ -25,6 +25,7 @@ final class UITestScenarioContractTests: XCTestCase {
         "history-populated",
         "profiles-empty",
         "profiles-populated",
+        "integrations",
       ]
     )
 
@@ -65,6 +66,9 @@ final class UITestScenarioContractTests: XCTestCase {
         "BEX_UI_TEST_PROMPT_DELIVERY_EVENTS_PATH": "/tmp/bex-delivery-events.json",
         "BEX_UI_TEST_PROMPT_DELIVERY_ERROR": "1",
         "BEX_UI_TEST_REAL_TARGET": "1",
+        "BEX_UI_TEST_INTEGRATION_TRANSCRIPT_PATH": "/tmp/bex-integrations.json",
+        "BEX_UI_TEST_INJECT_DRIFT_ID": "omp-default",
+        "BEX_UI_TEST_PARTIAL_FAILURE_ID": "omp-team",
       ]
     )
 
@@ -78,6 +82,9 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(configuration.target.deliveryFailureEffect, PromptDeliveryEffect.none)
     XCTAssertTrue(configuration.target.usesRealTarget)
     XCTAssertEqual(configuration.preferences.promptDeliveryMode, .pasteOnly)
+    XCTAssertEqual(configuration.integrationTranscriptPath, "/tmp/bex-integrations.json")
+    XCTAssertEqual(configuration.injectDriftIntegrationID, "omp-default")
+    XCTAssertEqual(configuration.partialFailureIntegrationID, "omp-team")
   }
 
   func testNamedConfigurationsDeclareConsentPermissionHookFailureAndResumeStates() throws {
@@ -141,6 +148,10 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertTrue(UITestScenario.setupResume.configuration.preservesStoredState)
     XCTAssertEqual(UITestScenario.setupResume.configuration.credentialProvider, nil)
     XCTAssertEqual(UITestScenario.setupResume.configuration.launchDestination, .setup(.quickCheck))
+    let integrations = UITestScenario.integrations.configuration
+    XCTAssertEqual(integrations.integrations.map(\.id), ["omp-default", "omp-team"])
+    XCTAssertEqual(integrations.launchDestination, .settings)
+    XCTAssertEqual(integrations.integrationStatuses["omp-default"], .installedUnconfirmed)
   }
 
   func testPreferenceAndCollectionSeedsAreDeterministic() async throws {

@@ -17,6 +17,7 @@ actor PromptApprovalStore {
     let version: Int
     let id: UUID
     let client: PromptClient
+    let integrationID: String?
     let sessionID: String?
     let cwd: String?
     let textSHA256: String
@@ -41,6 +42,7 @@ actor PromptApprovalStore {
 
   func issue(
     client: PromptClient,
+    integrationID: String? = nil,
     text: String,
     sessionID: String?,
     cwd: String?
@@ -51,6 +53,7 @@ actor PromptApprovalStore {
       version: HookProtocolConstants.version,
       id: UUID(),
       client: client,
+      integrationID: try Self.canonicalIntegrationID(client: client, integrationID: integrationID),
       sessionID: sessionID,
       cwd: cwd,
       textSHA256: Self.digest(text),
@@ -71,6 +74,7 @@ actor PromptApprovalStore {
 
   func consume(
     client: PromptClient,
+    integrationID: String? = nil,
     text: String,
     sessionID: String?,
     cwd: String?
@@ -82,6 +86,10 @@ actor PromptApprovalStore {
       options: [.skipsHiddenFiles]
     ).filter { $0.pathExtension == "json" && $0.lastPathComponent.hasPrefix("receipt-") }
     let expectedDigest = Self.digest(text)
+    let expectedIntegrationID = try Self.canonicalIntegrationID(
+      client: client,
+      integrationID: integrationID
+    )
 
     for candidate in candidates {
       guard
@@ -98,6 +106,7 @@ actor PromptApprovalStore {
       guard matches(
         candidateReceipt,
         client: client,
+        integrationID: expectedIntegrationID,
         digest: expectedDigest,
         sessionID: sessionID,
         cwd: cwd
@@ -121,6 +130,7 @@ actor PromptApprovalStore {
         matches(
           receipt,
           client: client,
+          integrationID: expectedIntegrationID,
           digest: expectedDigest,
           sessionID: sessionID,
           cwd: cwd
@@ -136,15 +146,33 @@ actor PromptApprovalStore {
   private func matches(
     _ receipt: Receipt,
     client: PromptClient,
+    integrationID: String,
     digest: String,
     sessionID: String?,
     cwd: String?
   ) -> Bool {
     receipt.version == HookProtocolConstants.version
+      && Self.receiptIntegrationID(receipt) == integrationID
       && receipt.client == client
       && receipt.textSHA256 == digest
       && (receipt.sessionID.map { $0 == sessionID } ?? true)
       && (receipt.cwd.map { $0 == cwd } ?? true)
+  }
+
+  private static func canonicalIntegrationID(
+    client: PromptClient,
+    integrationID: String?
+  ) throws -> String {
+    if let integrationID, !integrationID.isEmpty { return integrationID }
+    guard client != .ohMyPi else {
+      throw PromptApprovalError.storageFailure("OMP prompt approval requires an integration identity.")
+    }
+    return client.rawValue
+  }
+
+  private static func receiptIntegrationID(_ receipt: Receipt) -> String? {
+    if let integrationID = receipt.integrationID, !integrationID.isEmpty { return integrationID }
+    return receipt.client == .ohMyPi ? nil : receipt.client.rawValue
   }
 
   private func ensureDirectory() throws {

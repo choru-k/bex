@@ -168,6 +168,8 @@ final class PromptGateViewModel: ObservableObject {
       return .pasteInDestination
     case .capturedField:
       return deliveryMode == .sendAfterApproval ? .pasteAndSubmit : .pasteInDestination
+    case .managedDraft:
+      return .pasteInDestination
     }
   }
 
@@ -377,7 +379,12 @@ final class PromptGateViewModel: ObservableObject {
       guard let self else { return }
       var issuedReceipt: UUID?
       do {
-        let status = await hookManager.status(for: client)
+        let context = session.target.hookContext
+        let status = if let integrationID = context?.integrationID {
+          await hookManager.status(for: integrationID)
+        } else {
+          await hookManager.status(for: client)
+        }
         guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
           self.finishWork(workID)
           return
@@ -393,9 +400,11 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
-          let context = session.target.hookContext
+        }
+        if session.hookRequestID != nil, context?.client != .ohMyPi {
           issuedReceipt = try await approvalStore.issue(
             client: client,
+            integrationID: context?.integrationID,
             text: correction,
             sessionID: context?.sessionID,
             cwd: context?.cwd
@@ -408,7 +417,9 @@ final class PromptGateViewModel: ObservableObject {
             try await hookResponder.complete(
               requestID: requestID,
               outcome: .approved,
-              awaitAcknowledgement: true
+              awaitAcknowledgement: true,
+              approvedPrompt: correction,
+              integrationID: context?.integrationID
             )
           } catch {
             throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
@@ -1019,6 +1030,8 @@ final class PromptGateViewModel: ObservableObject {
       "Correction pasted in \(target.applicationName). Return was not pressed."
     case .submitted:
       "Correction pasted and submitted in \(target.applicationName)."
+    case .staged:
+      "Correction staged in \(target.applicationName). Press Enter there unchanged to send it."
     }
   }
 

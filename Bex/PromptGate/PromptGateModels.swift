@@ -1,10 +1,12 @@
 import Foundation
 
 extension PromptClient {
+  static let focusedPickerClients: [PromptClient] = [.claudeCode, .codex]
   var displayName: String {
     switch self {
     case .claudeCode: "Claude Code"
     case .codex: "Codex"
+    case .ohMyPi: "Oh My Pi"
     }
   }
 }
@@ -64,6 +66,7 @@ enum PromptDeliveryOutcome: Equatable, Sendable {
   case copied
   case pasted
   case submitted
+  case staged
 }
 
 extension PromptDeliveryOutcome {
@@ -72,6 +75,7 @@ extension PromptDeliveryOutcome {
     case .copied: .copied
     case .pasted: .pastedNotSubmitted
     case .submitted: .submitted
+    case .staged: .pastedNotSubmitted
     }
   }
 }
@@ -80,6 +84,7 @@ enum PromptTargetKind: String, Codable, Sendable {
   case capturedField
   case composerPaste
   case copyOnly
+  case managedDraft
 }
 
 struct PromptHookContext: Codable, Equatable, Sendable {
@@ -87,6 +92,24 @@ struct PromptHookContext: Codable, Equatable, Sendable {
   let sessionID: String
   let cwd: String
   let helperPID: Int32
+  let client: PromptClient?
+  let integrationID: String?
+
+  init(
+    requestID: UUID,
+    sessionID: String,
+    cwd: String,
+    helperPID: Int32,
+    client: PromptClient? = nil,
+    integrationID: String? = nil
+  ) {
+    self.requestID = requestID
+    self.sessionID = sessionID
+    self.cwd = cwd
+    self.helperPID = helperPID
+    self.client = client
+    self.integrationID = integrationID
+  }
 }
 
 struct PromptTarget: Identifiable, Codable, Equatable, Sendable {
@@ -128,11 +151,16 @@ extension PromptTarget {
       hookContext == nil ? [.copyCorrection, .pasteInDestination] : [.pasteInDestination]
     case .capturedField:
       [.pasteInDestination, .pasteAndSubmit]
+    case .managedDraft:
+      [.pasteInDestination]
     }
   }
 
   func label(for action: PromptDeliveryAction) -> String {
-    switch action {
+    if kind == .managedDraft {
+      return "Stage in \(applicationName)"
+    }
+    return switch action {
     case .copyCorrection:
       "Copy Correction"
     case .pasteInDestination:
@@ -270,8 +298,85 @@ struct PromptGateFocusRequest: Equatable, Sendable {
   }
 }
 
+enum HookIntegrationTarget: Equatable, Sendable {
+  case claudeCode
+  case codex
+  case ohMyPi(executable: URL, profile: String?, workingDirectory: URL)
+}
+
+enum HookIntegrationValidation: Equatable, Sendable {
+  case supported
+  case unavailable(String)
+}
+
+struct HookIntegrationDescriptor: Identifiable, Equatable, Sendable {
+  let id: String
+  let client: PromptClient
+  let profile: String
+  let executableURL: URL?
+  let workingDirectory: URL?
+  let configurationURL: URL
+  let gateURL: URL?
+  let helperURL: URL
+  let capabilityVersion: Int?
+  let validation: HookIntegrationValidation
+}
+
+enum HookInstallationOperation: String, Codable, Equatable, Sendable {
+  case install
+  case update
+  case repair
+  case uninstall
+}
+
+enum HookArtifactKind: String, Codable, Equatable, Sendable {
+  case directory
+  case file
+}
+
+enum HookArtifactChange: String, Codable, Equatable, Sendable {
+  case create
+  case replace
+  case delete
+  case keep
+}
+
+struct HookArtifactSnapshot: Equatable, Sendable {
+  let exists: Bool
+  let mode: UInt16?
+  let sha256: String?
+}
+
+struct HookInstallationAction: Identifiable, Equatable, Sendable {
+  let id: String
+  let path: String
+  let kind: HookArtifactKind
+  let change: HookArtifactChange
+  let before: HookArtifactSnapshot
+  let after: HookArtifactSnapshot
+}
+
+struct HookInstallationReview: Identifiable, Equatable, Sendable {
+  let id: UUID
+  let operation: HookInstallationOperation
+  let descriptor: HookIntegrationDescriptor
+  let trustGuidance: String
+  let limitations: String
+  let signer: String
+  let currentText: String?
+  let proposedText: String?
+  let actions: [HookInstallationAction]
+}
+
+struct HookInstallationResult: Equatable, Sendable {
+  let completed: [String]
+  let restored: [String]
+  let failed: [String]
+}
+
 enum HookInstallationStatus: Equatable, Sendable {
   case notInstalled
+  case updateAvailable
   case awaitingCodexTrust
   case installedUnconfirmed
   case active(lastSeen: Date)
@@ -280,7 +385,7 @@ enum HookInstallationStatus: Equatable, Sendable {
 
   var permitsReceipt: Bool {
     switch self {
-    case .awaitingCodexTrust, .installedUnconfirmed, .active:
+    case .awaitingCodexTrust, .installedUnconfirmed, .active, .updateAvailable:
       true
     case .notInstalled, .needsRepair, .unavailable:
       false
@@ -291,15 +396,68 @@ enum HookInstallationStatus: Equatable, Sendable {
 protocol HookInstallationManaging: Sendable {
   func status(for client: PromptClient) async -> HookInstallationStatus
   func install(_ client: PromptClient) async throws
+  func resolve(_ target: HookIntegrationTarget) async throws -> HookIntegrationDescriptor
+  func installedDescriptors() async -> [HookIntegrationDescriptor]
+  func prepare(
+    _ operation: HookInstallationOperation,
+    for descriptor: HookIntegrationDescriptor
+  ) async throws -> HookInstallationReview
+  func apply(reviewID: UUID) async throws -> HookInstallationResult
+  func cancel(reviewID: UUID) async
+  func status(for integrationID: String) async -> HookInstallationStatus
   func uninstall(_ client: PromptClient) async throws
+}
+
+extension HookInstallationManaging {
+  func resolve(_ target: HookIntegrationTarget) async throws -> HookIntegrationDescriptor {
+    throw BexError.storageFailure("This integration manager cannot resolve targets.")
+  }
+
+  func installedDescriptors() async -> [HookIntegrationDescriptor] { [] }
+
+  func prepare(
+    _ operation: HookInstallationOperation,
+    for descriptor: HookIntegrationDescriptor
+  ) async throws -> HookInstallationReview {
+    throw BexError.storageFailure("This integration manager cannot prepare changes.")
+  }
+
+  func apply(reviewID: UUID) async throws -> HookInstallationResult {
+    throw BexError.storageFailure("This integration manager cannot apply changes.")
+  }
+
+  func cancel(reviewID: UUID) async {}
+
+  func status(for integrationID: String) async -> HookInstallationStatus {
+    .notInstalled
+  }
 }
 
 protocol HookReviewResponding: Sendable {
   func complete(
     requestID: UUID,
     outcome: HookReviewOutcome,
-    awaitAcknowledgement: Bool
+    awaitAcknowledgement: Bool,
+    approvedPrompt: String?,
+    integrationID: String?
   ) async throws
+}
+
+extension HookReviewResponding {
+  func complete(
+    requestID: UUID,
+    outcome: HookReviewOutcome,
+    awaitAcknowledgement: Bool
+  ) async throws {
+    try await complete(
+      requestID: requestID,
+      outcome: outcome,
+      awaitAcknowledgement: awaitAcknowledgement,
+      approvedPrompt: nil,
+      integrationID: nil
+    )
+  }
+
 }
 
 protocol PromptGateIPCServicing: Sendable {

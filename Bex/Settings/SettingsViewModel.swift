@@ -23,6 +23,14 @@ enum ProviderConnectionState: Equatable {
   case failed
 }
 
+enum IntegrationReviewState: Equatable {
+  case reviewing
+  case applying
+  case stale
+  case partialFailure(completed: [String], restored: [String], failed: [String])
+  case applied
+}
+
 @MainActor
 final class SettingsViewModel: ObservableObject {
   @Published private(set) var provider: LLMProvider = .openAI
@@ -50,6 +58,14 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var hookConfigPaths: [PromptClient: String] = [:]
   @Published private(set) var promptGateError: String?
   @Published private(set) var promptOperationClient: PromptClient?
+  @Published private(set) var installedIntegrations: [HookIntegrationDescriptor] = []
+  @Published private(set) var integrationStatuses: [String: HookInstallationStatus] = [:]
+  @Published private(set) var pendingInstallationReview: HookInstallationReview?
+  @Published private(set) var integrationApplyInProgress = false
+  @Published private(set) var integrationReviewState: IntegrationReviewState?
+  @Published var ompExecutablePath = ""
+  @Published var ompProfile = "default"
+  @Published var ompWorkingDirectory = FileManager.default.homeDirectoryForCurrentUser.path
   @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var outboundConfirmationPolicy: OutboundConfirmationPolicy =
@@ -120,6 +136,7 @@ final class SettingsViewModel: ObservableObject {
     self.onDeleteSavedDraft = onDeleteSavedDraft
     self.onClearHistory = onClearHistory
     self.onSetupRoute = onSetupRoute
+    self.ompExecutablePath = Self.defaultOMPExecutablePath()
   }
 
   var showsCredential: Bool {
@@ -619,18 +636,223 @@ final class SettingsViewModel: ObservableObject {
       : BexError.accessibilityPermissionRequired.localizedDescription
   }
 
-  func installHook(_ client: PromptClient) {
-    runHookOperation(client: client, install: true)
-  }
-
-  func uninstallHook(_ client: PromptClient) {
-    runHookOperation(client: client, install: false)
-  }
-
   func hookStatusLabel(for client: PromptClient) -> String {
+    statusLabel(hookStatuses[client] ?? .notInstalled)
+  }
+
+  func hookConfigPath(for client: PromptClient) -> String {
+    hookConfigPaths[client] ?? "Managed by Bex"
+  }
+
+  func hookActionLabel(for client: PromptClient) -> String {
     switch hookStatuses[client] ?? .notInstalled {
+    case .notInstalled, .unavailable:
+      "Install"
+    case .updateAvailable:
+      "Update"
+    case .needsRepair:
+      "Repair"
+    case .awaitingCodexTrust, .installedUnconfirmed, .active:
+      "Uninstall"
+    }
+  }
+
+  func performHookAction(for client: PromptClient) {
+    prepareHookAction(for: client)
+  }
+
+  func integrationStatusLabel(for integrationID: String) -> String {
+    statusLabel(integrationStatuses[integrationID] ?? .notInstalled)
+  }
+
+  func integrationActionLabel(for integrationID: String) -> String {
+    let status = integrationStatuses[integrationID] ?? .notInstalled
+    if case .unavailable = status,
+      installedIntegrations.contains(where: { $0.id == integrationID })
+    {
+      return "Uninstall"
+    }
+    return actionLabel(status)
+  }
+  func prepareHookAction(for client: PromptClient) {
+    let target: HookIntegrationTarget = client == .claudeCode ? .claudeCode : .codex
+    prepareIntegration(target: target)
+  }
+
+  func prepareOMPIntegration() {
+    let executable = URL(
+      fileURLWithPath: (ompExecutablePath as NSString).expandingTildeInPath
+    )
+    let workingDirectory = URL(
+      fileURLWithPath: (ompWorkingDirectory as NSString).expandingTildeInPath,
+      isDirectory: true
+    )
+    prepareIntegration(
+      target: .ohMyPi(
+        executable: executable,
+        profile: ompProfile.trimmingCharacters(in: .whitespacesAndNewlines),
+        workingDirectory: workingDirectory
+      )
+    )
+  }
+
+  func prepareAction(for descriptor: HookIntegrationDescriptor) {
+    prepareDescriptor(
+      descriptor,
+      currentStatus: integrationStatuses[descriptor.id] ?? .notInstalled
+    )
+  }
+
+  func cancelPendingInstallationReview() {
+    guard let review = pendingInstallationReview else { return }
+    pendingInstallationReview = nil
+    integrationReviewState = nil
+    promptGateError = nil
+    Task { await hookManager.cancel(reviewID: review.id) }
+  }
+
+  func applyPendingInstallationReview() {
+    guard let review = pendingInstallationReview, !integrationApplyInProgress else { return }
+    integrationApplyInProgress = true
+    integrationReviewState = .applying
+    promptGateError = nil
+    promptTask?.cancel()
+    promptTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        let result = try await hookManager.apply(reviewID: review.id)
+        if result.failed.isEmpty {
+          integrationReviewState = .applied
+          pendingInstallationReview = nil
+          await refreshIntegrationState()
+        } else {
+          integrationReviewState = .partialFailure(
+            completed: result.completed,
+            restored: result.restored,
+            failed: result.failed
+          )
+          promptGateError =
+            "Apply partially failed. Review completed, restored, and retained paths before retrying."
+        }
+      } catch {
+        promptGateError = error.localizedDescription
+        integrationReviewState =
+          error.localizedDescription.contains("Nothing changed") ? .stale : .reviewing
+      }
+      integrationApplyInProgress = false
+    }
+  }
+  func reviewLatestIntegrationChanges() {
+    guard let review = pendingInstallationReview, !integrationApplyInProgress else { return }
+    promptGateError = nil
+    promptTask?.cancel()
+    promptTask = Task { [weak self] in
+      guard let self else { return }
+      await hookManager.cancel(reviewID: review.id)
+      do {
+        pendingInstallationReview = try await hookManager.prepare(
+          review.operation,
+          for: review.descriptor
+        )
+        integrationReviewState = .reviewing
+      } catch {
+        promptGateError = error.localizedDescription
+        integrationReviewState = .stale
+      }
+    }
+  }
+
+
+  private func prepareIntegration(target: HookIntegrationTarget) {
+    guard !integrationApplyInProgress, pendingInstallationReview == nil else { return }
+    promptGateError = nil
+    promptTask?.cancel()
+    promptTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        let descriptor = try await hookManager.resolve(target)
+        let currentStatus = await hookManager.status(for: descriptor.id)
+        try await prepareDescriptorNow(
+          descriptor,
+          currentStatus: currentStatus,
+          isOwned: currentStatus != .notInstalled
+        )
+      } catch {
+        promptGateError = error.localizedDescription
+      }
+    }
+  }
+
+  private func prepareDescriptor(
+    _ descriptor: HookIntegrationDescriptor,
+    currentStatus: HookInstallationStatus
+  ) {
+    guard !integrationApplyInProgress, pendingInstallationReview == nil else { return }
+    promptGateError = nil
+    promptTask?.cancel()
+    promptTask = Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await prepareDescriptorNow(descriptor, currentStatus: currentStatus, isOwned: true)
+      } catch {
+        promptGateError = error.localizedDescription
+      }
+    }
+  }
+
+  private func prepareDescriptorNow(
+    _ descriptor: HookIntegrationDescriptor,
+    currentStatus: HookInstallationStatus,
+    isOwned: Bool
+  ) async throws {
+    let operation: HookInstallationOperation
+    switch currentStatus {
+    case .awaitingCodexTrust, .installedUnconfirmed, .active:
+      operation = .uninstall
+    case .updateAvailable:
+      operation = .update
+    case .needsRepair:
+      operation = .repair
+    case .notInstalled:
+      operation = .install
+    case .unavailable:
+      operation = isOwned ? .uninstall : .install
+    }
+    pendingInstallationReview = try await hookManager.prepare(operation, for: descriptor)
+    integrationReviewState = .reviewing
+  }
+
+  private func refreshIntegrationState() async {
+    installedIntegrations = await hookManager.installedDescriptors()
+    var statuses: [String: HookInstallationStatus] = [:]
+    for descriptor in installedIntegrations {
+      statuses[descriptor.id] = await hookManager.status(for: descriptor.id)
+    }
+    integrationStatuses = statuses
+    for client in PromptClient.focusedPickerClients {
+      hookStatuses[client] = await hookManager.status(for: client)
+    }
+  }
+
+  private func actionLabel(_ status: HookInstallationStatus) -> String {
+    switch status {
+    case .notInstalled, .unavailable:
+      "Install"
+    case .updateAvailable:
+      "Update"
+    case .needsRepair:
+      "Repair"
+    case .awaitingCodexTrust, .installedUnconfirmed, .active:
+      "Uninstall"
+    }
+  }
+
+  private func statusLabel(_ status: HookInstallationStatus) -> String {
+    switch status {
     case .notInstalled:
       "Not installed"
+    case .updateAvailable:
+      "Update available"
     case .awaitingCodexTrust:
       "Installed — approve Bex in /hooks"
     case .installedUnconfirmed:
@@ -644,41 +866,23 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
-  func hookConfigPath(for client: PromptClient) -> String {
-    hookConfigPaths[client] ?? "Managed by Bex"
-  }
-
-  func hookActionLabel(for client: PromptClient) -> String {
-    switch hookStatuses[client] ?? .notInstalled {
-    case .notInstalled, .unavailable:
-      "Install"
-    case .needsRepair:
-      "Repair"
-    case .awaitingCodexTrust, .installedUnconfirmed, .active:
-      "Uninstall"
-    }
-  }
-
-  func performHookAction(for client: PromptClient) {
-    switch hookStatuses[client] ?? .notInstalled {
-    case .awaitingCodexTrust, .installedUnconfirmed, .active:
-      uninstallHook(client)
-    case .notInstalled, .needsRepair, .unavailable:
-      installHook(client)
-    }
+  private static func defaultOMPExecutablePath() -> String {
+    let candidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+      .split(separator: ":")
+      .map { URL(fileURLWithPath: String($0)).appendingPathComponent("omp").path }
+    return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+      ?? "/opt/homebrew/bin/omp"
   }
 
   private func loadPromptGate() async {
     promptDeliveryMode = await preferences.promptDeliveryMode()
     accessibilityTrusted = promptTarget.isAccessibilityTrusted
     if let manager = hookManager as? HookInstallationManager {
-      for client in PromptClient.allCases {
+      for client in PromptClient.focusedPickerClients {
         hookConfigPaths[client] = await manager.configuredPath(for: client).path
       }
     }
-    for client in PromptClient.allCases {
-      hookStatuses[client] = await hookManager.status(for: client)
-    }
+    await refreshIntegrationState()
   }
 
   private func runHookOperation(client: PromptClient, install: Bool) {

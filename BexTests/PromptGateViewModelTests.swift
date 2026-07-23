@@ -736,7 +736,9 @@ private actor StubHookResponder: HookReviewResponding {
   func complete(
     requestID: UUID,
     outcome: HookReviewOutcome,
-    awaitAcknowledgement: Bool
+    awaitAcknowledgement: Bool,
+    approvedPrompt: String?,
+    integrationID: String?
   ) async throws {
     calls.append(
       Call(

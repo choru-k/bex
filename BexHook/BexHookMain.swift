@@ -2,6 +2,18 @@ import AppKit
 import Darwin
 import Foundation
 
+private struct OMPStageAcknowledgment: Decodable {
+  let event: String
+  let deliveryToken: String
+  let status: String
+
+  private enum CodingKeys: String, CodingKey {
+    case event
+    case deliveryToken = "delivery_token"
+    case status
+  }
+}
+
 @main
 struct BexHookMain {
   private static let reviewedReason = "Bex reviewed this prompt. The original was not sent."
@@ -22,6 +34,14 @@ struct BexHookMain {
       return
     }
 
+    if client == .ohMyPi {
+      await runOMP(expectedIntegrationID: arguments.dropFirst(2).first)
+    } else {
+      await runLegacy(client: client)
+    }
+  }
+
+  private static func runLegacy(client: PromptClient) async {
     do {
       let data = try readStandardInput()
       let input = try JSONDecoder().decode(HookInput.self, from: data)
@@ -36,17 +56,19 @@ struct BexHookMain {
       let approvalStore = PromptApprovalStore()
       if try await approvalStore.consume(
         client: client,
+        integrationID: input.integrationID,
         text: input.prompt,
         sessionID: input.sessionID,
         cwd: input.cwd
       ) {
-        try writeHeartbeat(client: client)
+        try writeHeartbeat(client: client, integrationID: input.integrationID)
         return
       }
 
       let sourceApplication = NSWorkspace.shared.frontmostApplication
       let request = HookReviewRequest(
         client: client,
+        integrationID: input.integrationID,
         prompt: input.prompt,
         sessionID: input.sessionID,
         cwd: input.cwd,
@@ -65,7 +87,7 @@ struct BexHookMain {
         }
         writeBlock(client: client, reason: reviewedReason, closeOutput: true)
         try await ipc.acknowledge(requestID: request.requestID, token: token)
-        try writeHeartbeat(client: client)
+        try writeHeartbeat(client: client, integrationID: input.integrationID)
       case .cancelled:
         writeBlock(client: client, reason: cancelledReason)
       case .failed:
@@ -76,12 +98,136 @@ struct BexHookMain {
     }
   }
 
+  private static func runOMP(expectedIntegrationID: String?) async {
+    var integrationID = expectedIntegrationID ?? ""
+    var decisionWritten = false
+    do {
+      let inputData = try readStandardInputLine()
+      let input = try JSONDecoder().decode(OMPPromptGateInput.self, from: inputData)
+      guard input.version == HookProtocolConstants.version,
+        input.event == HookProtocolConstants.promptGateCapability,
+        input.integrationID == expectedIntegrationID,
+        !input.integrationID.isEmpty,
+        input.images.isEmpty,
+        !input.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        !input.sessionID.isEmpty,
+        !input.cwd.isEmpty
+      else {
+        throw HookIPCError.invalidResponse
+      }
+      integrationID = input.integrationID
+
+      let approvalStore = PromptApprovalStore()
+      if try await approvalStore.consume(
+        client: .ohMyPi,
+        integrationID: integrationID,
+        text: input.text,
+        sessionID: input.sessionID,
+        cwd: input.cwd
+      ) {
+        try writeFrame(OMPPromptGateFrame.allow(integrationID: integrationID))
+        decisionWritten = true
+        try writeHeartbeat(client: .ohMyPi, integrationID: integrationID)
+        return
+      }
+
+      try writeFrame(
+        OMPPromptGateFrame.block(
+          integrationID: integrationID,
+          reason: reviewedReason
+        )
+      )
+      decisionWritten = true
+
+      let request = HookReviewRequest(
+        client: .ohMyPi,
+        integrationID: integrationID,
+        prompt: input.text,
+        sessionID: input.sessionID,
+        cwd: input.cwd,
+        helperPID: ProcessInfo.processInfo.processIdentifier
+      )
+      let ipc = PromptGateIPCClient()
+      let response = try await ipc.submit(request)
+      guard response.outcome == .approved,
+        response.integrationID == integrationID,
+        let approvedPrompt = response.approvedPrompt,
+        !approvedPrompt.isEmpty,
+        let deliveryToken = response.deliveryToken,
+        !deliveryToken.isEmpty,
+        let acknowledgmentToken = response.acknowledgmentToken
+      else {
+        return
+      }
+
+      try writeFrame(
+        OMPPromptGateFrame.stageApproved(
+          integrationID: integrationID,
+          text: approvedPrompt,
+          deliveryToken: deliveryToken
+        )
+      )
+      let acknowledgmentData = try readStandardInputLine()
+      let acknowledgment = try JSONDecoder().decode(
+        OMPStageAcknowledgment.self,
+        from: acknowledgmentData
+      )
+      guard acknowledgment.event == "stage_delivery",
+        acknowledgment.deliveryToken == deliveryToken,
+        acknowledgment.status == "delivered"
+      else {
+        throw HookIPCError.invalidResponse
+      }
+      try await ipc.acknowledge(
+        requestID: request.requestID,
+        token: acknowledgmentToken,
+        integrationID: integrationID,
+        deliveryToken: deliveryToken,
+        deliveryStatus: acknowledgment.status
+      )
+      try writeHeartbeat(client: .ohMyPi, integrationID: integrationID)
+    } catch {
+      if !decisionWritten, !integrationID.isEmpty {
+        try? writeFrame(
+          OMPPromptGateFrame.block(
+            integrationID: integrationID,
+            reason: recoveryReason
+          )
+        )
+      } else {
+        try? FileHandle.standardOutput.close()
+      }
+    }
+  }
+
   private static func readStandardInput() throws -> Data {
     let data = try FileHandle.standardInput.readToEnd() ?? Data()
     guard data.count <= HookProtocolConstants.maximumMessageBytes else {
       throw HookIPCError.messageTooLarge
     }
     return data
+  }
+
+  private static func readStandardInputLine() throws -> Data {
+    var data = Data()
+    while data.count <= HookProtocolConstants.maximumMessageBytes {
+      guard let byte = try FileHandle.standardInput.read(upToCount: 1), !byte.isEmpty else {
+        break
+      }
+      if byte[byte.startIndex] == 0x0A {
+        return data
+      }
+      data.append(byte)
+    }
+    guard data.count <= HookProtocolConstants.maximumMessageBytes else {
+      throw HookIPCError.messageTooLarge
+    }
+    return data
+  }
+
+  private static func writeFrame(_ data: Data) throws {
+    FileHandle.standardOutput.write(data)
+    try FileHandle.standardOutput.synchronize()
   }
 
   private static func writeBlock(
@@ -112,7 +258,10 @@ struct BexHookMain {
     FileHandle.standardOutput.write(data)
   }
 
-  private static func writeHeartbeat(client: PromptClient) throws {
+  private static func writeHeartbeat(
+    client: PromptClient,
+    integrationID: String?
+  ) throws {
     let directory = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Bex/PromptGate/heartbeats", isDirectory: true)
     try FileManager.default.createDirectory(
@@ -124,10 +273,12 @@ struct BexHookMain {
     let heartbeat = HookHeartbeat(
       version: HookProtocolConstants.version,
       client: client,
-      seenAt: Date()
+      seenAt: Date(),
+      integrationID: integrationID
     )
     let data = try JSONEncoder().encode(heartbeat)
-    let destination = directory.appendingPathComponent("\(client.rawValue).json")
+    let filename = integrationID.map(filenameSafeIdentity) ?? client.rawValue
+    let destination = directory.appendingPathComponent("\(filename).json")
     let temporary = directory.appendingPathComponent(".heartbeat-\(UUID().uuidString).tmp")
     try data.write(to: temporary, options: .withoutOverwriting)
     chmod(temporary.path, 0o600)
@@ -136,4 +287,11 @@ struct BexHookMain {
       throw HookIPCError.unavailable
     }
   }
+  private static func filenameSafeIdentity(_ value: String) -> String {
+    Data(value.utf8).base64EncodedString()
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "=", with: "")
+  }
+
 }
