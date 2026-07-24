@@ -38,6 +38,7 @@ final class PromptGateViewModel: ObservableObject {
   private let approvalStore: PromptApprovalStore
   private let hookManager: any HookInstallationManaging
   private let hookResponder: any HookReviewResponding
+  private let learningLog: LearningLogStore
   private let closePanel: @MainActor () -> Void
   private let openSettingsCallback: @MainActor () -> Void
 
@@ -64,6 +65,7 @@ final class PromptGateViewModel: ObservableObject {
     approvalStore: PromptApprovalStore,
     hookManager: any HookInstallationManaging,
     hookResponder: any HookReviewResponding,
+    learningLog: LearningLogStore = LearningLogStore(),
     onClose: @escaping @MainActor () -> Void,
     onOpenSettings: @escaping @MainActor () -> Void
   ) {
@@ -74,6 +76,7 @@ final class PromptGateViewModel: ObservableObject {
     self.approvalStore = approvalStore
     self.hookManager = hookManager
     self.hookResponder = hookResponder
+    self.learningLog = learningLog
     closePanel = onClose
     openSettingsCallback = onOpenSettings
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
@@ -1011,6 +1014,26 @@ final class PromptGateViewModel: ObservableObject {
         phase = .reviewing
         finishWork(workID)
         focusReview(completedReview)
+        // Fire-and-forget: record the approved correction for the learning log without
+        // suspending the state transition above. Awaiting here would reintroduce a
+        // suspension point between the isCurrent guard and the review/phase mutation,
+        // letting a concurrent cancel/invalidate clobber the state. See LearningLogStore.
+        let logClient = session.knownClient?.rawValue ?? "manual"
+        let logOriginal = pending.original
+        let logCorrected = result.corrected
+        let logExplanation = result.explanation
+        let logProvider = destination.provider.rawValue
+        let logModel = destination.model
+        Task { [learningLog] in
+          await learningLog.append(
+            client: logClient,
+            original: logOriginal,
+            corrected: logCorrected,
+            explanation: logExplanation,
+            provider: logProvider,
+            model: logModel
+          )
+        }
       } catch is CancellationError {
         self.finishWork(workID)
       } catch {

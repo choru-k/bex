@@ -924,6 +924,7 @@ private final class Fixture {
   let hooks = StubHookManager()
   let responder = StubHookResponder()
   let receiptDirectory: URL
+  let learningLogDirectory: URL
   private let suite: String
 
   init(
@@ -949,6 +950,9 @@ private final class Fixture {
     receiptDirectory = FileManager.default.temporaryDirectory
       .appendingPathComponent("PromptGateReceipts-\(UUID().uuidString)", isDirectory: true)
     let approvalStore = PromptApprovalStore(directoryURL: receiptDirectory)
+    learningLogDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PromptGateLearningLog-\(UUID().uuidString)", isDirectory: true)
+    let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
     target = StubPromptTarget(isAccessibilityTrusted: accessibilityTrusted)
 
     viewModel = PromptGateViewModel(
@@ -959,6 +963,7 @@ private final class Fixture {
       approvalStore: approvalStore,
       hookManager: hooks,
       hookResponder: responder,
+      learningLog: learningLog,
       onClose: {},
       onOpenSettings: {}
     )
@@ -966,6 +971,7 @@ private final class Fixture {
 
   deinit {
     try? FileManager.default.removeItem(at: receiptDirectory)
+    try? FileManager.default.removeItem(at: learningLogDirectory)
     UserDefaults.standard.removePersistentDomain(forName: suite)
   }
 

@@ -178,6 +178,8 @@ Masking is best-effort and covers only recognized spans. Unrecognized sensitive 
 
 Prompt Gate receipts at `~/Library/Application Support/Bex/PromptGate/receipts` bind the exact text, client, integration, and session, and contain a SHA-256 digest and routing metadata, not prompt text. They are mode `0600`, are consumed once, and expire after two minutes; cancellation and delivery failure revoke them. The local IPC (inter-process communication) rendezvous and integration heartbeat files live under `~/Library/Application Support/Bex/PromptGate`.
 
+Prompt Gate corrections you approve are also appended to a local learning log at `~/Library/Application Support/Bex/LearningLog/learning-log.jsonl` (directory `0700`, file `0600`). Unlike receipts, this log stores the full prompt prose you wrote—the original text, the correction, and the explanation—in cleartext, including technical spans that are masked before being sent to a provider. It is append-only, owner-only, and never leaves the Mac. It is not part of Quick Check history. Deleting `~/Library/Application Support/Bex` removes it (see [Uninstall](#uninstall)).
+
 Prompt Gate installs its immutable signed helper at `~/Library/Application Support/Bex/bin/<sha256>/bex-hook`. Legacy shared-helper installations remain removable and migrate only through an explicit reviewed Update or Repair.
 
 ## Uninstall
