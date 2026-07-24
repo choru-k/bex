@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct DiffText: View {
@@ -38,6 +39,129 @@ struct DiffText: View {
     return result
   }
 }
+
+struct DiffChange: Equatable, Sendable {
+  let oldText: String
+  let newText: String
+
+  static func make(from segments: [DiffSegment]) -> [DiffChange] {
+    var changes: [DiffChange] = []
+    var oldText = ""
+    var newText = ""
+
+    func flush() {
+      guard !oldText.isEmpty || !newText.isEmpty else { return }
+      changes.append(DiffChange(oldText: oldText, newText: newText))
+      oldText.removeAll(keepingCapacity: true)
+      newText.removeAll(keepingCapacity: true)
+    }
+
+    for segment in segments {
+      switch segment.kind {
+      case .unchanged:
+        flush()
+      case .removed:
+        oldText.append(segment.text)
+      case .inserted:
+        newText.append(segment.text)
+      }
+    }
+    flush()
+    return changes
+  }
+}
+
+struct DiffChangeRows: View {
+  let changes: [DiffChange]
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Changes · \(changes.count)")
+        .font(.headline)
+
+      ForEach(changes.indices, id: \.self) { index in
+        let change = changes[index]
+        if index > 0 {
+          Divider()
+        }
+        ViewThatFits(in: .horizontal) {
+          HStack(alignment: .top, spacing: 10) {
+            changeCell(label: "Before", text: change.oldText, isBefore: true)
+            Image(systemName: "arrow.right")
+              .foregroundStyle(.secondary)
+              .padding(.top, 24)
+              .accessibilityHidden(true)
+            changeCell(label: "After", text: change.newText, isBefore: false)
+          }
+          VStack(alignment: .leading, spacing: 6) {
+            changeCell(label: "Before", text: change.oldText, isBefore: true)
+            Image(systemName: "arrow.down")
+              .foregroundStyle(.secondary)
+              .frame(maxWidth: .infinity)
+              .accessibilityHidden(true)
+            changeCell(label: "After", text: change.newText, isBefore: false)
+          }
+        }
+      }
+    }
+  }
+
+  private func changeCell(label: String, text: String, isBefore: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(label)
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+      if text.isEmpty {
+        Text("Nothing")
+          .italic()
+          .foregroundStyle(.secondary)
+      } else {
+        Text(displayText(for: text))
+          .foregroundStyle(isBefore ? Color.red : Color.green)
+          .fontWeight(isBefore ? .regular : .semibold)
+          .strikethrough(isBefore)
+          .padding(.horizontal, 5)
+          .padding(.vertical, 3)
+          .background(
+            (isBefore ? Color.red : Color.green).opacity(isBefore ? 0.12 : 0.14)
+          )
+          .clipShape(RoundedRectangle(cornerRadius: 4))
+          .textSelection(.enabled)
+      }
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .fixedSize(horizontal: false, vertical: true)
+  }
+
+  private func displayText(for text: String) -> String {
+    text.allSatisfy(\.isWhitespace)
+      ? AccessibleDiffSummary.describeChange(text)
+      : text
+  }
+}
+struct DiffSummaryAccessibilityElement: NSViewRepresentable {
+  let changeCount: Int
+  let summary: String
+
+  func makeNSView(context: Context) -> NSView {
+    let view = NSView()
+    configure(view)
+    return view
+  }
+
+  func updateNSView(_ view: NSView, context: Context) {
+    configure(view)
+  }
+
+  private func configure(_ view: NSView) {
+    view.setAccessibilityElement(true)
+    view.setAccessibilityRole(.group)
+    view.setAccessibilityLabel("\(changeCount) changes")
+    view.setAccessibilityValue(summary)
+    view.setAccessibilityIdentifier("prompt-gate-diff-summary")
+  }
+}
+
 
 struct AccessibleDiffSummary: Sendable {
   private static let contextCharacterLimit = 24
@@ -107,7 +231,7 @@ struct AccessibleDiffSummary: Sendable {
     text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
   }
 
-  private static func describeChange(_ text: String) -> String {
+  static func describeChange(_ text: String) -> String {
     var parts: [String] = []
     var textRun = ""
     var whitespaceKind: WhitespaceKind?

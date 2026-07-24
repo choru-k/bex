@@ -38,8 +38,6 @@ actor PreferencesStore {
     static let activeProfileID = "activeProfileID"
     static let defaultProfileID = "defaultProfileID"
     static let quickDraft = "quickDraft"
-    static let promptDeliveryMode = "promptGate.deliveryMode"
-    static let promptLastClient = "promptGate.lastClient"
     static let draftRetentionChoice = "storage.quickDraft.choice"
     static let historyRetentionChoice = "storage.history.choice"
     static let quickCheckKeyChord = "shortcut.quickCheck"
@@ -228,33 +226,7 @@ actor PreferencesStore {
     defaults.set(choice.rawValue, forKey: Key.historyRetentionChoice)
   }
 
-  func preferredPromptClient() -> PromptClient {
-    guard
-      let rawValue = defaults.string(forKey: Key.promptLastClient),
-      let client = PromptClient(rawValue: rawValue)
-    else {
-      return .claudeCode
-    }
-    return client
-  }
 
-  func setPreferredPromptClient(_ client: PromptClient) {
-    defaults.set(client.rawValue, forKey: Key.promptLastClient)
-  }
-
-  func promptDeliveryMode() -> PromptDeliveryMode {
-    guard
-      let rawValue = defaults.string(forKey: Key.promptDeliveryMode),
-      let mode = PromptDeliveryMode(rawValue: rawValue)
-    else {
-      return .sendAfterApproval
-    }
-    return mode
-  }
-
-  func setPromptDeliveryMode(_ mode: PromptDeliveryMode) {
-    defaults.set(mode.rawValue, forKey: Key.promptDeliveryMode)
-  }
 
   func confirmsHookOutboundPayloads() -> Bool {
     guard defaults.object(forKey: Key.confirmsHookOutboundPayloads) != nil else {

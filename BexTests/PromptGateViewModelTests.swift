@@ -229,10 +229,58 @@ final class PromptGateViewModelTests: XCTestCase {
 
     XCTAssertTrue(fixture.viewModel.isNoChangeReview)
     XCTAssertEqual(fixture.viewModel.accessibleDiffSummary, "No differences")
+    XCTAssertEqual(
+      fixture.viewModel.accessibilityAnnouncementHistory.last,
+      "Review ready. No changes. Focus is in the final message editor."
+    )
+    XCTAssertTrue(fixture.viewModel.canEditCorrection)
+    let reviewFocus = fixture.viewModel.focusRequest
+    let announcementCount = fixture.viewModel.accessibilityAnnouncementHistory.count
     fixture.viewModel.updateCorrected("Already correct, with an edit.")
     XCTAssertFalse(fixture.viewModel.isNoChangeReview)
     XCTAssertNotEqual(fixture.viewModel.accessibleDiffSummary, "No differences")
     XCTAssertTrue(fixture.viewModel.canApprove)
+    XCTAssertEqual(fixture.viewModel.focusRequest, reviewFocus)
+    XCTAssertEqual(fixture.viewModel.accessibilityAnnouncementHistory.count, announcementCount)
+    fixture.viewModel.updateCorrected("Already correct.")
+    XCTAssertTrue(fixture.viewModel.isNoChangeReview)
+    XCTAssertEqual(fixture.viewModel.focusRequest, reviewFocus)
+    XCTAssertEqual(fixture.viewModel.accessibilityAnnouncementHistory.count, announcementCount)
+  }
+
+  func testReviewMetadataNamesRouteCheckerAndPendingEffect() async throws {
+    let captured = try await Fixture()
+    XCTAssertTrue(captured.viewModel.begin(captured.capturedSession(text: "This are original.")))
+    await captured.viewModel.waitForCurrentWork()
+    XCTAssertEqual(captured.viewModel.reviewTitle, "Review Message for Editor")
+    XCTAssertEqual(
+      captured.viewModel.reviewContextDescription,
+      "Captured from Editor · Checked by OpenAI · gpt-test-model"
+    )
+    XCTAssertEqual(captured.viewModel.reviewPendingStatus, "Nothing has been sent.")
+
+    let composer = try await Fixture()
+    XCTAssertTrue(composer.viewModel.begin(composer.composerSession(text: "This are original.")))
+    await composer.viewModel.waitForCurrentWork()
+    XCTAssertEqual(composer.viewModel.reviewTitle, "Review Correction for Editor")
+    XCTAssertEqual(
+      composer.viewModel.reviewContextDescription,
+      "Created in Bex · Checked by OpenAI · gpt-test-model"
+    )
+    XCTAssertEqual(composer.viewModel.reviewPendingStatus, "Nothing has been pasted.")
+
+    let hook = try await Fixture()
+    await hook.hooks.setStatus(.active(lastSeen: Date()))
+    XCTAssertTrue(
+      hook.viewModel.begin(hook.hookSession(requestID: UUID(), text: "This are original."))
+    )
+    await hook.viewModel.waitForCurrentWork()
+    XCTAssertEqual(hook.viewModel.reviewTitle, "Review Correction for Terminal")
+    XCTAssertEqual(
+      hook.viewModel.reviewContextDescription,
+      "Requested by Claude Code · Checked by OpenAI · gpt-test-model"
+    )
+    XCTAssertEqual(hook.viewModel.reviewPendingStatus, "Nothing has been pasted.")
   }
 
   func testFocusAndAnnouncementsFollowConsentCheckingAndReviewMatrix() async throws {
@@ -264,9 +312,12 @@ final class PromptGateViewModelTests: XCTestCase {
       ))
     await fixture.viewModel.waitForCurrentWork()
     XCTAssertEqual(fixture.viewModel.focusRequest?.keyboard, .correctedEditor)
-    XCTAssertEqual(fixture.viewModel.focusRequest?.accessibility, .changesHeading)
+    XCTAssertEqual(fixture.viewModel.focusRequest?.accessibility, .finalMessageHeading)
     XCTAssertEqual(fixture.viewModel.accessibilityAnnouncementHistory.count, 3)
-    XCTAssertTrue(fixture.viewModel.accessibilityAnnouncementHistory[2].contains("Changes ready"))
+    XCTAssertEqual(
+      fixture.viewModel.accessibilityAnnouncementHistory[2],
+      "Review ready. 1 changes. Focus is in the final message editor."
+    )
 
     fixture.viewModel.backToEdit()
     XCTAssertEqual(fixture.viewModel.focusRequest?.keyboard, .draftEditor)
@@ -285,22 +336,26 @@ final class PromptGateViewModelTests: XCTestCase {
       fixture.viewModel.availableDeliveryActions,
       [.pasteInDestination, .pasteAndSubmit]
     )
-    XCTAssertEqual(fixture.viewModel.primaryDeliveryAction, .pasteAndSubmit)
+    XCTAssertEqual(fixture.viewModel.primaryDeliveryAction, .pasteInDestination)
     XCTAssertEqual(
       fixture.viewModel.deliveryActionLabel(.pasteInDestination),
-      "Paste in Editor"
+      "Replace Draft in Editor"
     )
     XCTAssertEqual(
       fixture.viewModel.deliveryActionLabel(.pasteAndSubmit),
-      "Paste & Send in Editor"
+      "Replace & Press Return in Editor"
     )
-    XCTAssertTrue(
-      fixture.viewModel.deliveryEffectDescription(for: .pasteInDestination)
-        .contains("will not press Return")
+    XCTAssertEqual(
+      fixture.viewModel.deliveryEffectDescription(for: .pasteInDestination),
+      "Replaces the captured draft in Editor without sending."
     )
-    XCTAssertTrue(
-      fixture.viewModel.deliveryEffectDescription(for: .pasteAndSubmit)
-        .contains("presses Return once")
+    XCTAssertEqual(
+      fixture.viewModel.deliveryEffectDescription(for: .pasteAndSubmit),
+      "Replaces the captured draft, verifies the pasted text, then presses Return once in Editor."
+    )
+    XCTAssertEqual(
+      fixture.viewModel.deliveryGuidanceIntroduction,
+      "Bex will verify that the same Editor field still contains your original draft before replacing it."
     )
   }
 
@@ -321,6 +376,7 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(safeRetry.viewModel.deliveryFailureEffect, PromptDeliveryEffect.none)
     XCTAssertTrue(safeRetry.viewModel.canApprove)
     XCTAssertFalse(safeRetry.viewModel.availableDeliveryActions.isEmpty)
+    XCTAssertTrue(safeRetry.viewModel.canEditCorrection)
     XCTAssertTrue(safeRetry.viewModel.errorMessage?.contains("Nothing was delivered") == true)
 
     safeRetry.target.deliveryError = nil
@@ -347,6 +403,7 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(partial.viewModel.review?.corrected, correction)
     XCTAssertFalse(partial.viewModel.canApprove)
     XCTAssertTrue(partial.viewModel.availableDeliveryActions.isEmpty)
+    XCTAssertFalse(partial.viewModel.canEditCorrection)
     XCTAssertTrue(partial.viewModel.errorMessage?.contains("already in Editor") == true)
     XCTAssertTrue(partial.viewModel.errorMessage?.contains("Press Return there") == true)
     XCTAssertTrue(partial.viewModel.errorMessage?.contains("will not paste it again") == true)
@@ -379,6 +436,7 @@ final class PromptGateViewModelTests: XCTestCase {
       XCTAssertEqual(fixture.viewModel.deliveryFailureEffect, effect)
       XCTAssertTrue(fixture.viewModel.hasTerminalDeliveryFailure)
       XCTAssertTrue(fixture.viewModel.availableDeliveryActions.isEmpty)
+      XCTAssertFalse(fixture.viewModel.canEditCorrection)
       fixture.viewModel.backToEdit()
       XCTAssertEqual(fixture.viewModel.phase, .reviewing)
       XCTAssertEqual(fixture.viewModel.review, review)
@@ -403,6 +461,7 @@ final class PromptGateViewModelTests: XCTestCase {
     fixture.viewModel.approve()
     await fixture.target.waitUntilDeliveryStarted()
     XCTAssertEqual(fixture.viewModel.phase, .delivering)
+    XCTAssertFalse(fixture.viewModel.canEditCorrection)
 
     fixture.viewModel.cancel()
     XCTAssertEqual(fixture.viewModel.phase, .delivering)
@@ -444,6 +503,36 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(calls.first?.awaitAcknowledgement, true)
     XCTAssertEqual(fixture.target.deliveries.map(\.pressReturn), [false])
     XCTAssertEqual(fixture.viewModel.phase, .closed)
+  }
+
+  func testHookAuthorizationRequiresKnownClient() async throws {
+    let fixture = try await Fixture()
+    await fixture.hooks.setStatus(.active(lastSeen: Date()))
+    let requestID = UUID()
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.hookSession(
+          requestID: requestID,
+          text: "This are original.",
+          knownClient: nil
+        )
+      )
+    )
+    await fixture.viewModel.waitForCurrentWork()
+    fixture.viewModel.acceptDisclosure()
+    await fixture.viewModel.waitForCurrentWork()
+
+    fixture.viewModel.approve()
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.viewModel.deliveryFailureEffect, PromptDeliveryEffect.none)
+    XCTAssertEqual(fixture.target.deliveries.count, 0)
+    XCTAssertTrue(fixture.viewModel.canEditCorrection)
+    XCTAssertTrue(
+      fixture.viewModel.errorMessage?.contains("could not authorize this corrected prompt") == true
+    )
+    let responderCalls = await fixture.responder.recordedCalls()
+    XCTAssertTrue(responderCalls.isEmpty)
   }
 
   func testHookAcknowledgementFailureIsUnknownAndCannotBeRetried() async throws {
@@ -908,7 +997,11 @@ private final class Fixture {
     )
   }
 
-  func hookSession(requestID: UUID, text: String) -> PromptGateSession {
+  func hookSession(
+    requestID: UUID,
+    text: String,
+    knownClient: PromptClient? = .claudeCode
+  ) -> PromptGateSession {
     PromptGateSession(
       initialDraft: text,
       target: PromptTarget(
@@ -924,7 +1017,7 @@ private final class Fixture {
           helperPID: 123
         )
       ),
-      knownClient: .claudeCode,
+      knownClient: knownClient,
       source: .hook(requestID: requestID)
     )
   }

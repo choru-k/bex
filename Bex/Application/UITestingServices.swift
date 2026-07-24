@@ -78,7 +78,6 @@
         configuration.target.requestedAccessibilityTrust = true
         configuration.launchDestination = .settings
       case .hookProvidedClient:
-        configuration.preferences.preferredPromptClient = .codex
         configuration.hook = .init(
           client: .codex,
           prompt: "Make this UI test prompt concise.",
@@ -86,7 +85,6 @@
         )
         configuration.launchDestination = .hookPromptGate
       case .hookSkipsOutboundConfirmation:
-        configuration.preferences.preferredPromptClient = .codex
         configuration.preferences.acceptedOutboundDisclosureProvider = .openAI
         configuration.preferences.confirmsHookOutboundPayloads = false
         configuration.hook = .init(
@@ -96,7 +94,6 @@
         )
         configuration.launchDestination = .hookPromptGate
       case .hookCheckInFlight:
-        configuration.preferences.preferredPromptClient = .claudeCode
         configuration.preferences.acceptedOutboundDisclosureProvider = .openAI
         configuration.preferences.confirmsHookOutboundPayloads = false
         configuration.hook = .init(
@@ -206,8 +203,6 @@
     var draftRetentionChoice: RetentionChoice?
     var historyRetentionChoice: RetentionChoice?
     var quickDraft: String?
-    var preferredPromptClient: PromptClient?
-    var promptDeliveryMode: PromptDeliveryMode?
     var acceptedOutboundDisclosureProvider: LLMProvider?
     var confirmsHookOutboundPayloads: Bool?
   }
@@ -347,7 +342,6 @@
       }
       if environment["BEX_UI_TEST_REAL_TARGET"] == "1" {
         configuration.target.usesRealTarget = true
-        configuration.preferences.promptDeliveryMode = .pasteOnly
       }
       return configuration
     }
@@ -376,12 +370,6 @@
       }
       if let id = preferences.defaultProfileID {
         await store.setDefaultProfileID(id)
-      }
-      if let client = preferences.preferredPromptClient {
-        await store.setPreferredPromptClient(client)
-      }
-      if let mode = preferences.promptDeliveryMode {
-        await store.setPromptDeliveryMode(mode)
       }
       if let confirms = preferences.confirmsHookOutboundPayloads {
         await store.setConfirmsHookOutboundPayloads(confirms)

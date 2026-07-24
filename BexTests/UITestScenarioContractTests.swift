@@ -83,7 +83,6 @@ final class UITestScenarioContractTests: XCTestCase {
     )
     XCTAssertEqual(configuration.target.deliveryFailureEffect, PromptDeliveryEffect.none)
     XCTAssertTrue(configuration.target.usesRealTarget)
-    XCTAssertEqual(configuration.preferences.promptDeliveryMode, .pasteOnly)
     XCTAssertEqual(configuration.integrationTranscriptPath, "/tmp/bex-integrations.json")
     XCTAssertEqual(configuration.injectDriftIntegrationID, "omp-default")
     XCTAssertEqual(configuration.partialFailureIntegrationID, "omp-team")
@@ -122,12 +121,7 @@ final class UITestScenarioContractTests: XCTestCase {
     let hook = try XCTUnwrap(UITestScenario.hookProvidedClient.configuration.hook)
     XCTAssertEqual(hook.client, .codex)
     XCTAssertEqual(hook.prompt, "Make this UI test prompt concise.")
-    XCTAssertEqual(
-      UITestScenario.hookProvidedClient.configuration.preferences.preferredPromptClient,
-      .codex
-    )
     let directHook = UITestScenario.hookSkipsOutboundConfirmation.configuration
-    XCTAssertEqual(directHook.preferences.preferredPromptClient, .codex)
     XCTAssertEqual(directHook.preferences.acceptedOutboundDisclosureProvider, .openAI)
     XCTAssertEqual(directHook.preferences.confirmsHookOutboundPayloads, false)
     XCTAssertEqual(directHook.launchDestination, .hookPromptGate)

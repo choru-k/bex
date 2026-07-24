@@ -2,25 +2,42 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum PromptGateLayout {
+  static func finalEditorHeight(for availableHeight: CGFloat) -> CGFloat {
+    min(320, max(180, availableHeight * 0.4))
+  }
+}
+
 struct PromptGateView: View {
   @ObservedObject var viewModel: PromptGateViewModel
   @FocusState private var keyboardFocus: PromptGateKeyboardFocus?
   @AccessibilityFocusState private var accessibilityFocus: PromptGateAccessibilityFocus?
+  @State private var isOriginalExpanded = false
+  @State private var isAINoteExpanded = false
 
   var body: some View {
-    VStack(spacing: 0) {
-      ScrollView {
-        content
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .padding(16)
+    GeometryReader { geometry in
+      VStack(spacing: 0) {
+        ScrollView {
+          content(availableHeight: geometry.size.height)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+        }
+        Divider()
+        footer
+          .padding(.horizontal, 16)
+          .padding(.vertical, 12)
+          .background(.bar)
       }
-      Divider()
-      footer
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(.bar)
     }
-    .frame(minWidth: 620, minHeight: 500)
+    .frame(
+      minWidth: PromptGatePanelLayout.minimumContentSize.width,
+      minHeight: PromptGatePanelLayout.minimumContentSize.height
+    )
+    .onChange(of: viewModel.session?.id) { _ in
+      isOriginalExpanded = false
+      isAINoteExpanded = false
+    }
     .onExitCommand { viewModel.cancel() }
     .onReceive(viewModel.$focusRequest.compactMap { $0 }) { request in
       DispatchQueue.main.async {
@@ -75,7 +92,7 @@ struct PromptGateView: View {
   }
 
   @ViewBuilder
-  private var content: some View {
+  private func content(availableHeight: CGFloat) -> some View {
     switch viewModel.phase {
     case .onboarding:
       if viewModel.isLoadingSession {
@@ -88,7 +105,7 @@ struct PromptGateView: View {
     case .composing, .checking:
       composer
     case .reviewing, .delivering:
-      review
+      review(availableHeight: availableHeight)
     case .invalidated:
       invalidated
     case .closed:
@@ -112,6 +129,7 @@ struct PromptGateView: View {
           .textSelection(.enabled)
           .frame(maxWidth: .infinity, alignment: .leading)
           .accessibilityLabel("Masked Prompt Gate payload")
+          .accessibilityValue(viewModel.outboundPayload)
           .accessibilityIdentifier("prompt-gate-outbound-payload")
       }
 
@@ -151,95 +169,126 @@ struct PromptGateView: View {
     }
   }
 
-  @ViewBuilder
-  private var review: some View {
+  private func review(availableHeight: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      header
-      if let review = viewModel.review {
-        if viewModel.isNoChangeReview {
-          noChangeReview(review)
-        } else {
-          changedReview(review)
-        }
-      }
-      targetGuidance
-      if let action = viewModel.primaryDeliveryAction {
-        Text(viewModel.deliveryEffectDescription(for: action))
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .accessibilityIdentifier("prompt-gate-delivery-effect")
-      }
-      error
-    }
-  }
-
-  private func noChangeReview(_ review: PromptGateReview) -> some View {
-    VStack(alignment: .leading, spacing: 8) {
-      Text("No Changes")
-        .font(.title3.bold())
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityFocused($accessibilityFocus, equals: .noChangesHeading)
-      Text("Bex found no grammar changes. You can still edit the final text before delivery.")
-        .foregroundStyle(.secondary)
-      correctedEditor(review.corrected, minimumHeight: 260)
-    }
-    .accessibilityIdentifier("prompt-gate-no-changes")
-  }
-
-  private func changedReview(_ review: PromptGateReview) -> some View {
-    VStack(alignment: .leading, spacing: 14) {
-      VStack(alignment: .leading, spacing: 6) {
-        Text("Changes")
-          .font(.title3.bold())
+      VStack(alignment: .leading, spacing: 4) {
+        Text(viewModel.reviewTitle)
+          .font(.title2.bold())
           .accessibilityAddTraits(.isHeader)
-          .accessibilityFocused($accessibilityFocus, equals: .changesHeading)
-        Text(viewModel.accessibleDiffSummary)
-          .font(.caption)
+          .accessibilityIdentifier("prompt-gate-review-title")
+        Text(viewModel.reviewContextDescription)
           .foregroundStyle(.secondary)
-          .accessibilityIdentifier("prompt-gate-diff-summary")
-        DiffText(segments: review.diff, changesOnly: false)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .textSelection(.enabled)
-          .accessibilityHidden(true)
-          .accessibilityIdentifier("prompt-gate-diff")
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("prompt-gate-review-context")
+        Text(viewModel.reviewPendingStatus)
+          .font(.callout.weight(.medium))
+          .accessibilityIdentifier("prompt-gate-review-pending-status")
       }
 
-      HStack(alignment: .top, spacing: 12) {
-        VStack(alignment: .leading, spacing: 5) {
-          Text("Original — read only").font(.headline)
-          ScrollView {
-            Text(review.original)
-              .frame(maxWidth: .infinity, alignment: .leading)
-              .textSelection(.enabled)
-              .padding(8)
-          }
-          .frame(minHeight: 170)
-          .background(Color(nsColor: .textBackgroundColor))
-          .clipShape(RoundedRectangle(cornerRadius: 7))
-          .accessibilityLabel("Original prompt, read only")
-          .accessibilityIdentifier("prompt-gate-original")
-        }
-        VStack(alignment: .leading, spacing: 5) {
-          Text("Corrected — editable").font(.headline)
-          correctedEditor(review.corrected, minimumHeight: 170)
-        }
-      }
-
-      if !review.explanation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-        VStack(alignment: .leading, spacing: 5) {
-          Text("Explanation")
+      if let review = viewModel.review {
+        let changes = DiffChange.make(from: review.diff)
+        VStack(alignment: .leading, spacing: 6) {
+          Text("Final Message — Editable")
             .font(.headline)
             .accessibilityAddTraits(.isHeader)
-          Text(review.explanation)
-            .foregroundStyle(.secondary)
-            .textSelection(.enabled)
-            .accessibilityIdentifier("prompt-gate-explanation")
+            .accessibilityFocused($accessibilityFocus, equals: .finalMessageHeading)
+            .accessibilityIdentifier("prompt-gate-final-message-heading")
+          correctedEditor(
+            review.corrected,
+            height: PromptGateLayout.finalEditorHeight(for: availableHeight)
+          )
         }
+
+        error
+
+        if changes.isEmpty {
+          VStack(alignment: .leading, spacing: 3) {
+            Text("No Changes")
+              .font(.headline)
+              .accessibilityIdentifier("prompt-gate-no-changes")
+            Text("Bex found no grammar changes. You can still edit the final message.")
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+          }
+        } else {
+          DiffChangeRows(changes: changes)
+            .accessibilityHidden(true)
+            .overlay {
+              DiffSummaryAccessibilityElement(
+                changeCount: changes.count,
+                summary: viewModel.accessibleDiffSummary
+              )
+            }
+        }
+
+        DisclosureGroup(isExpanded: $isOriginalExpanded) {
+          Text(review.original)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .textSelection(.enabled)
+            .padding(.top, 6)
+            .accessibilityLabel("Original message, read only")
+            .accessibilityValue(review.original)
+            .accessibilityIdentifier("prompt-gate-original")
+        } label: {
+          Button("Original Message") { isOriginalExpanded.toggle() }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("prompt-gate-original-disclosure")
+        }
+
+        if !review.explanation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+          DisclosureGroup(isExpanded: $isAINoteExpanded) {
+            VStack(alignment: .leading, spacing: 6) {
+              Text(review.explanation)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .accessibilityIdentifier("prompt-gate-explanation")
+              if review.hasHumanEdits {
+                Text("This AI note describes the original suggestion and may not reflect your edits.")
+                  .font(.caption)
+                  .foregroundStyle(.secondary)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .accessibilityIdentifier("prompt-gate-ai-note-stale")
+              }
+            }
+            .padding(.top, 6)
+          } label: {
+            Button("AI Note") { isAINoteExpanded.toggle() }
+              .buttonStyle(.plain)
+              .accessibilityIdentifier("prompt-gate-ai-note-disclosure")
+          }
+        }
+      }
+
+      if let target = viewModel.session?.target {
+        GroupBox("Delivery") {
+          VStack(alignment: .leading, spacing: 6) {
+            Text(viewModel.deliveryGuidanceIntroduction)
+              .fixedSize(horizontal: false, vertical: true)
+            ForEach(target.availableDeliveryActions, id: \.self) { action in
+              Text(
+                "\(viewModel.deliveryActionLabel(action)): \(viewModel.deliveryEffectDescription(for: action))"
+              )
+              .fixedSize(horizontal: false, vertical: true)
+            }
+            if viewModel.session?.hookRequestID != nil,
+              viewModel.hookClientStatus.permitsReceipt
+            {
+              Text(
+                "Approval is acknowledged for this request only and expires after two minutes."
+              )
+              .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("prompt-gate-delivery-guidance")
       }
     }
   }
 
-  private func correctedEditor(_ value: String, minimumHeight: CGFloat) -> some View {
+  private func correctedEditor(_ value: String, height: CGFloat) -> some View {
     TextEditor(
       text: Binding(
         get: { viewModel.review?.corrected ?? value },
@@ -247,16 +296,16 @@ struct PromptGateView: View {
       )
     )
     .padding(5)
-    .frame(minHeight: minimumHeight)
+    .frame(height: height)
     .background(Color(nsColor: .textBackgroundColor))
     .clipShape(RoundedRectangle(cornerRadius: 7))
     .overlay {
       RoundedRectangle(cornerRadius: 7)
         .stroke(Color(nsColor: .separatorColor))
     }
-    .disabled(viewModel.phase != .reviewing)
+    .disabled(!viewModel.canEditCorrection)
     .focused($keyboardFocus, equals: .correctedEditor)
-    .accessibilityLabel("Corrected prompt, editable")
+    .accessibilityLabel("Final message for \(viewModel.destinationLabel), editable")
     .accessibilityIdentifier("prompt-gate-corrected")
   }
 
@@ -297,25 +346,6 @@ struct PromptGateView: View {
       Text(viewModel.selectedProvider.displayName)
       Text("·").foregroundStyle(.secondary)
       Text(viewModel.selectedModel).lineLimit(1)
-      Spacer()
-      Picker(
-        "Prompt client",
-        selection: Binding(
-          get: { viewModel.selectedClient },
-          set: { viewModel.setSelectedClient($0) }
-        )
-      ) {
-        ForEach(PromptClient.focusedPickerClients) { client in
-          Text(client.displayName).tag(client)
-        }
-      }
-      .labelsHidden()
-      .frame(width: 150)
-      .disabled(
-        viewModel.clientIsLocked || viewModel.phase == .checking || viewModel.phase == .delivering
-      )
-      .accessibilityLabel("Prompt client")
-      .accessibilityIdentifier("prompt-gate-client")
     }
     .font(.caption)
   }
@@ -327,7 +357,7 @@ struct PromptGateView: View {
       Text(viewModel.session?.target.guidance ?? "")
       Text(viewModel.permissionGuidance)
       if viewModel.session?.hookRequestID != nil,
-        viewModel.selectedClientStatus.permitsReceipt
+        viewModel.hookClientStatus.permitsReceipt
       {
         Text("Approval is acknowledged for this request only and expires after two minutes.")
       }
@@ -344,6 +374,9 @@ struct PromptGateView: View {
         .font(.caption)
         .foregroundStyle(.red)
         .textSelection(.enabled)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(errorMessage)
+        .accessibilityValue(errorMessage)
         .accessibilityAddTraits(.isHeader)
         .accessibilityFocused($accessibilityFocus, equals: .errorHeading)
         .accessibilityIdentifier("prompt-gate-error")
@@ -390,17 +423,8 @@ struct PromptGateView: View {
             .accessibilityIdentifier("prompt-gate-skip-check")
         }
       case .reviewing:
-        if viewModel.hasTerminalDeliveryFailure {
-          Spacer()
-          deliveryButtons
-        } else {
-          cancelButton
-          Button("Back") { viewModel.backToEdit() }
-            .keyboardShortcut("[", modifiers: .command)
-            .accessibilityIdentifier("prompt-gate-back")
-          Spacer()
-          deliveryButtons
-        }
+        reviewFooter
+          .frame(maxWidth: .infinity)
       case .delivering:
         Spacer()
         ProgressView().controlSize(.small)
@@ -413,6 +437,42 @@ struct PromptGateView: View {
           .accessibilityIdentifier("prompt-gate-close-invalidated")
       }
     }
+  }
+
+  @ViewBuilder
+  private var reviewFooter: some View {
+    if viewModel.hasTerminalDeliveryFailure {
+      HStack(spacing: 10) {
+        Spacer()
+        deliveryButtons
+      }
+    } else {
+      ViewThatFits(in: .horizontal) {
+        HStack(spacing: 10) {
+          cancelButton
+          editOriginalButton
+          Spacer()
+          deliveryButtons
+        }
+        VStack(alignment: .trailing, spacing: 8) {
+          HStack(spacing: 10) {
+            cancelButton
+            editOriginalButton
+            Spacer()
+          }
+          HStack(spacing: 10) {
+            Spacer()
+            deliveryButtons
+          }
+        }
+      }
+    }
+  }
+
+  private var editOriginalButton: some View {
+    Button("Edit Original & Recheck") { viewModel.backToEdit() }
+      .keyboardShortcut("[", modifiers: .command)
+      .accessibilityIdentifier("prompt-gate-back")
   }
 
   private var cancelButton: some View {
@@ -430,12 +490,14 @@ struct PromptGateView: View {
     } else if let target = viewModel.session?.target,
       let primary = viewModel.primaryDeliveryAction
     {
-      ForEach(target.availableDeliveryActions.filter { $0 != primary }, id: \.self) { action in
-        Button(viewModel.deliveryActionLabel(action)) {
-          viewModel.performDelivery(action)
+      ForEach(target.availableDeliveryActions, id: \.self) { action in
+        if action != primary {
+          Button(viewModel.deliveryActionLabel(action)) {
+            viewModel.performDelivery(action)
+          }
+          .disabled(!viewModel.canApprove)
+          .accessibilityIdentifier("prompt-gate-delivery-\(action.rawValue)")
         }
-        .disabled(!viewModel.canApprove)
-        .accessibilityIdentifier("prompt-gate-delivery-\(action.rawValue)")
       }
       Button(viewModel.deliveryActionLabel(primary)) {
         viewModel.performDelivery(primary)

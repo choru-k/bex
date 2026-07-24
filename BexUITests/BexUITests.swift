@@ -145,11 +145,58 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue((corrected.value as? String)?.contains("--dry-run") == true)
     XCTAssertTrue((corrected.value as? String)?.contains("https://example.com/a?q=1") == true)
     XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
+    XCTAssertEqual(
+      accessibilityText(of: app.descendants(matching: .any)["prompt-gate-review-title"]),
+      "Review Message for UI Test Target"
+    )
+    XCTAssertTrue(
+      accessibilityText(of: app.descendants(matching: .any)["prompt-gate-review-context"])
+        .contains("Captured from UI Test Target · Checked by OpenAI")
+    )
+    XCTAssertEqual(
+      accessibilityText(
+        of: app.descendants(matching: .any)["prompt-gate-review-pending-status"]
+      ),
+      "Nothing has been sent."
+    )
+    let finalHeading = app.descendants(matching: .any)["prompt-gate-final-message-heading"]
+    let originalDisclosure =
+      app.descendants(matching: .any)["prompt-gate-original-disclosure"]
+    let aiNoteDisclosure =
+      app.descendants(matching: .any)["prompt-gate-ai-note-disclosure"]
+    XCTAssertTrue(finalHeading.exists)
+    XCTAssertTrue(originalDisclosure.exists)
+    XCTAssertTrue(aiNoteDisclosure.exists)
+    XCTAssertLessThan(finalHeading.frame.minY, originalDisclosure.frame.minY)
+    XCTAssertFalse(app.descendants(matching: .any)["prompt-gate-original"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["prompt-gate-explanation"].exists)
     let initialDiff = app.descendants(matching: .any)["prompt-gate-diff-summary"]
     XCTAssertTrue(initialDiff.waitForExistence(timeout: 3))
+    XCTAssertTrue(initialDiff.label.contains("3 changes"))
     let initialDiffSummary = accessibilityText(of: initialDiff)
     XCTAssertTrue(initialDiffSummary.contains("Removed"))
     XCTAssertTrue(initialDiffSummary.contains("Inserted"))
+    XCTAssertLessThan(corrected.frame.minY, initialDiff.frame.minY)
+
+    originalDisclosure.click()
+    let originalContent = app.descendants(matching: .any)["prompt-gate-original"]
+    XCTAssertTrue(originalContent.waitForExistence(timeout: 3))
+    XCTAssertEqual(
+      accessibilityText(of: originalContent),
+      "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
+    )
+    originalDisclosure.click()
+    let aiNoteY = aiNoteDisclosure.frame.minY
+    app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -300)
+    XCTAssertLessThan(aiNoteDisclosure.frame.minY, aiNoteY)
+    XCTAssertTrue(aiNoteDisclosure.isHittable)
+    aiNoteDisclosure.click()
+    let explanation = app.descendants(matching: .any)["prompt-gate-explanation"]
+    XCTAssertTrue(explanation.waitForExistence(timeout: 3))
+    XCTAssertEqual(
+      accessibilityText(of: explanation),
+      "Corrected capitalization, agreement, and spelling."
+    )
 
     corrected.click()
     corrected.typeText(" please")
@@ -170,19 +217,27 @@ final class BexUITests: XCTestCase {
     let editedDiffSummary = accessibilityText(of: editedDiff)
     XCTAssertTrue(editedDiffSummary.contains("Inserted"))
     XCTAssertTrue(editedDiffSummary.contains("please"))
+    XCTAssertTrue(
+      app.descendants(matching: .any)["prompt-gate-ai-note-stale"]
+        .waitForExistence(timeout: 3)
+    )
 
     app.buttons["prompt-gate-cancel"].click()
-    let discardEdits = app.buttons["Discard Edits"]
+    let discardEdits = app.sheets.buttons["Discard Edits"]
     XCTAssertTrue(discardEdits.waitForExistence(timeout: 3))
     discardEdits.click()
+    XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
     XCTAssertTrue(app.windows["Fix & Send"].waitForNonExistence(timeout: 3))
     XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
 
-    openMenuCommand("Fix & Send", in: app)
+    app.terminate()
+    app.launch()
     XCTAssertTrue(app.buttons["prompt-gate-confirm-outbound"].waitForExistence(timeout: 3))
     app.buttons["prompt-gate-confirm-outbound"].click()
     let reopened = awaitPromptCorrection(in: app)
     XCTAssertEqual(reopened.value as? String, expected)
+    XCTAssertFalse(app.descendants(matching: .any)["prompt-gate-original"].exists)
+    XCTAssertFalse(app.descendants(matching: .any)["prompt-gate-explanation"].exists)
     XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
     app.buttons["prompt-gate-cancel"].click()
   }
@@ -208,13 +263,98 @@ final class BexUITests: XCTestCase {
     let send = app.buttons["prompt-gate-delivery-pasteAndSubmit"]
     XCTAssertTrue(send.isEnabled)
     send.click()
-    XCTAssertTrue(app.windows["Fix & Send"].waitForNonExistence(timeout: 3))
+    XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
     XCTAssertEqual(try String(contentsOf: targetSink, encoding: .utf8), expected)
     XCTAssertFalse(app.buttons["prompt-gate-delivery-pasteAndSubmit"].exists)
     XCTAssertEqual(
       try readDeliveryEvents(at: deliveryEventsSink),
       [RecordedDeliveryEvent(sequence: 1, effect: "submitted")]
     )
+  }
+
+  func testPromptGateCommandReturnReplacesWithoutSending() throws {
+    continueAfterFailure = false
+    let (app, targetSink, deliveryEventsSink) = launchPromptGate()
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: deliveryEventsSink)
+    }
+
+    XCTAssertTrue(app.buttons["prompt-gate-confirm-outbound"].waitForExistence(timeout: 5))
+    app.buttons["prompt-gate-confirm-outbound"].click()
+    let corrected = awaitPromptCorrection(in: app)
+    corrected.typeKey(.return, modifierFlags: .command)
+
+    XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
+    XCTAssertEqual(
+      try String(contentsOf: targetSink, encoding: .utf8),
+      "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
+    )
+    XCTAssertEqual(
+      try readDeliveryEvents(at: deliveryEventsSink),
+      [RecordedDeliveryEvent(sequence: 1, effect: "pastedNotSubmitted")]
+    )
+  }
+
+  func testPromptGateNoChangeKeepsFinalMessagePrimary() throws {
+    continueAfterFailure = false
+    let source = "Already correct."
+    let (app, targetSink, deliveryEventsSink) = launchPromptGate(source: source)
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: deliveryEventsSink)
+    }
+
+    XCTAssertTrue(app.buttons["prompt-gate-confirm-outbound"].waitForExistence(timeout: 5))
+    app.buttons["prompt-gate-confirm-outbound"].click()
+    let corrected = awaitPromptCorrection(in: app, expected: source)
+    let noChanges = app.descendants(matching: .any)["prompt-gate-no-changes"]
+    let disclosure = app.descendants(matching: .any)["prompt-gate-original-disclosure"]
+    XCTAssertTrue(noChanges.waitForExistence(timeout: 3))
+    XCTAssertLessThan(corrected.frame.minY, noChanges.frame.minY)
+    XCTAssertLessThan(corrected.frame.minY, disclosure.frame.minY)
+    corrected.click()
+    corrected.typeText(" Edited")
+    XCTAssertEqual(corrected.value as? String, "Already correct. Edited")
+  }
+
+  func testPromptGateLongMessageRemainsEditableAndDeliverable() throws {
+    continueAfterFailure = false
+    let source =
+      "i has teh file "
+      + (1...30).map { "line \($0): detail with wrapping text" }.joined(separator: "\n")
+    let expected =
+      "I have the file "
+      + (1...30).map { "line \($0): detail with wrapping text" }.joined(separator: "\n")
+    let (app, targetSink, deliveryEventsSink) = launchPromptGate(source: source)
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: deliveryEventsSink)
+    }
+
+    XCTAssertTrue(app.buttons["prompt-gate-confirm-outbound"].waitForExistence(timeout: 5))
+    app.buttons["prompt-gate-confirm-outbound"].click()
+    let corrected = awaitPromptCorrection(in: app, expected: expected)
+    corrected.click()
+    corrected.typeKey(.downArrow, modifierFlags: .command)
+    corrected.typeText(" Final edit.")
+    XCTAssertEqual(corrected.value as? String, expected + " Final edit.")
+
+    let originalDisclosure =
+      app.descendants(matching: .any)["prompt-gate-original-disclosure"]
+    let originalY = originalDisclosure.frame.minY
+    app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -1_000)
+    XCTAssertLessThan(originalDisclosure.frame.minY, originalY)
+    XCTAssertTrue(originalDisclosure.isHittable)
+    originalDisclosure.click()
+    XCTAssertTrue(
+      app.descendants(matching: .any)["prompt-gate-original"].waitForExistence(timeout: 3)
+    )
+    XCTAssertTrue(app.buttons["prompt-gate-back"].isHittable)
+    XCTAssertTrue(app.buttons["prompt-gate-delivery-pasteInDestination"].isHittable)
   }
 
   func testPromptGatePartialDeliveryExplainsEffectWithoutRetry() throws {
@@ -238,7 +378,7 @@ final class BexUITests: XCTestCase {
     let error = app.descendants(matching: .any)["prompt-gate-error"]
     XCTAssertTrue(error.waitForExistence(timeout: 3))
     XCTAssertTrue(((error.value as? String) ?? error.label).contains("already in UI Test Target"))
-    XCTAssertTrue(app.windows["Fix & Send"].exists)
+    XCTAssertTrue(corrected.exists)
     XCTAssertEqual(app.textViews["prompt-gate-corrected"].value as? String, expected)
     XCTAssertEqual(try? String(contentsOf: targetSink, encoding: .utf8), expected)
     XCTAssertTrue(app.buttons["prompt-gate-delivery-done"].exists)
@@ -252,7 +392,6 @@ final class BexUITests: XCTestCase {
     continueAfterFailure = false
 
     let freshConsent = launchScenario("fresh-consent")
-    XCTAssertTrue(freshConsent.windows["Fix & Send"].waitForExistence(timeout: 5))
     XCTAssertTrue(
       freshConsent.descendants(matching: .any)["prompt-gate-disclosure"]
         .waitForExistence(timeout: 3)
@@ -531,7 +670,7 @@ final class BexUITests: XCTestCase {
     XCTAssertFalse(FileManager.default.fileExists(atPath: deliveryEventsSink.path))
 
     postUITestingCommand("com.bex.desktop.ui-testing.release-delivery")
-    XCTAssertTrue(app.windows["Fix & Send"].waitForNonExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Delivering…"].waitForNonExistence(timeout: 5))
     XCTAssertEqual(try String(contentsOf: targetSink, encoding: .utf8), expected)
     XCTAssertEqual(
       try readDeliveryEvents(at: deliveryEventsSink),
@@ -572,7 +711,7 @@ final class BexUITests: XCTestCase {
     XCTAssertFalse(denied.buttons["prompt-gate-delivery-pasteInDestination"].exists)
     XCTAssertFalse(denied.buttons["prompt-gate-delivery-pasteAndSubmit"].exists)
     copy.click()
-    XCTAssertTrue(denied.windows["Fix & Send"].waitForNonExistence(timeout: 3))
+    XCTAssertTrue(denied.textViews["prompt-gate-corrected"].waitForNonExistence(timeout: 3))
     XCTAssertEqual(try String(contentsOf: copySink, encoding: .utf8), "this is a test")
     denied.terminate()
     try? FileManager.default.removeItem(at: copySink)
@@ -599,7 +738,6 @@ final class BexUITests: XCTestCase {
       try? FileManager.default.removeItem(at: copySink)
     }
 
-    XCTAssertTrue(hook.windows["Fix & Send"].waitForExistence(timeout: 5))
     XCTAssertTrue(
       hook.descendants(matching: .any)["prompt-gate-disclosure"].waitForExistence(timeout: 3)
     )
@@ -609,21 +747,21 @@ final class BexUITests: XCTestCase {
       ).contains("Make this UI test prompt concise.")
     )
     hook.buttons["prompt-gate-confirm-outbound"].click()
-    _ = awaitPromptCorrection(
+    let corrected = awaitPromptCorrection(
       in: hook,
       expected: "Make this UI test prompt concise."
     )
 
-    let client = hook.descendants(matching: .any)["prompt-gate-client"]
-    XCTAssertTrue(client.waitForExistence(timeout: 3))
-    XCTAssertTrue(accessibilityText(of: client).contains("Codex"))
-    XCTAssertFalse(client.isEnabled)
+    let context = hook.descendants(matching: .any)["prompt-gate-review-context"]
+    XCTAssertTrue(context.waitForExistence(timeout: 3))
+    XCTAssertTrue(accessibilityText(of: context).contains("Requested by Codex"))
+    XCTAssertFalse(hook.descendants(matching: .any)["prompt-gate-client"].exists)
     let copy = hook.buttons["prompt-gate-delivery-copyCorrection"]
     XCTAssertTrue(copy.waitForExistence(timeout: 3))
     XCTAssertFalse(hook.buttons["prompt-gate-delivery-pasteInDestination"].exists)
     XCTAssertFalse(hook.buttons["prompt-gate-delivery-pasteAndSubmit"].exists)
     copy.click()
-    XCTAssertTrue(hook.windows["Fix & Send"].waitForNonExistence(timeout: 3))
+    XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
     XCTAssertEqual(
       try String(contentsOf: copySink, encoding: .utf8),
       "Make this UI test prompt concise."
@@ -823,7 +961,9 @@ final class BexUITests: XCTestCase {
   }
 
   private func launchPromptGate(
-    deliveryError: Bool = false
+    deliveryError: Bool = false,
+    source: String =
+      "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
   ) -> (XCUIApplication, URL, URL) {
     let targetSink = FileManager.default.temporaryDirectory
       .appendingPathComponent("BexUITestPromptTarget-\(UUID().uuidString).txt")
@@ -838,8 +978,7 @@ final class BexUITests: XCTestCase {
     app.launchArguments = ["--ui-testing", "--open-prompt-gate"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
     app.launchEnvironment["BEX_UI_TEST_OPEN_PROMPT_GATE"] = "1"
-    app.launchEnvironment["BEX_UI_TEST_PROMPT_SOURCE"] =
-      "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
+    app.launchEnvironment["BEX_UI_TEST_PROMPT_SOURCE"] = source
     app.launchEnvironment["BEX_UI_TEST_PROMPT_TARGET_PATH"] = targetSink.path
     app.launchEnvironment["BEX_UI_TEST_PROMPT_DELIVERY_EVENTS_PATH"] = deliveryEventsSink.path
     app.launchEnvironment["BEX_UI_TEST_PASTEBOARD_PATH"] = copySink.path
@@ -855,8 +994,8 @@ final class BexUITests: XCTestCase {
     expected: String =
       "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
   ) -> XCUIElement {
-    XCTAssertTrue(app.windows["Fix & Send"].waitForExistence(timeout: 5))
     let corrected = app.textViews["prompt-gate-corrected"]
+    XCTAssertTrue(corrected.waitForExistence(timeout: 5))
     let predicate = NSPredicate(format: "value == %@", expected)
     XCTAssertEqual(
       XCTWaiter.wait(

@@ -52,7 +52,6 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var oauthInProgress = false
   @Published private(set) var manualCallbackRequired = false
   @Published var callbackURL = ""
-  @Published private(set) var promptDeliveryMode: PromptDeliveryMode = .sendAfterApproval
   @Published private(set) var confirmsHookOutboundPayloads = true
   @Published private(set) var accessibilityTrusted = false
   @Published private(set) var hookStatuses: [PromptClient: HookInstallationStatus] = [:]
@@ -217,7 +216,6 @@ final class SettingsViewModel: ObservableObject {
   func load() async {
     async let selectedProvider = preferences.selectedProvider()
     async let savedAppearance = preferences.appearance()
-    async let savedPromptDeliveryMode = preferences.promptDeliveryMode()
     async let savedHookOutboundConfirmation = preferences.confirmsHookOutboundPayloads()
     async let savedDraftRetention = preferences.draftRetentionChoice()
     async let savedHistoryRetention = preferences.historyRetentionChoice()
@@ -229,7 +227,6 @@ final class SettingsViewModel: ObservableObject {
     effort = await preferences.selectedEffort(for: provider)
     ollamaURL = await preferences.ollamaURL()
     appearance = await savedAppearance
-    promptDeliveryMode = await savedPromptDeliveryMode
     confirmsHookOutboundPayloads = await savedHookOutboundConfirmation
     draftRetentionChoice = await savedDraftRetention
     historyRetentionChoice = await savedHistoryRetention
@@ -430,12 +427,6 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
-  func selectPromptDeliveryMode(_ mode: PromptDeliveryMode) {
-    promptDeliveryMode = mode
-    enqueuePreferenceUpdate { [preferences] in
-      await preferences.setPromptDeliveryMode(mode)
-    }
-  }
 
   func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
     confirmsHookOutboundPayloads = confirms
@@ -873,7 +864,6 @@ final class SettingsViewModel: ObservableObject {
   }
 
   private func loadPromptGate() async {
-    promptDeliveryMode = await preferences.promptDeliveryMode()
     accessibilityTrusted = promptTarget.isAccessibilityTrusted
     if let manager = hookManager as? HookInstallationManager {
       for client in PromptClient.focusedPickerClients {

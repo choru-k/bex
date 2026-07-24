@@ -89,6 +89,72 @@ final class PromptGateFrameMemoryTests: XCTestCase {
     XCTAssertLessThanOrEqual(restored.maxY, visibleFrame.maxY)
   }
 
+  func testPromptGateLayoutContractsAreExact() {
+    XCTAssertEqual(
+      PromptGatePanelLayout.preferredContentSize,
+      NSSize(width: 640, height: 500)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.minimumContentSize,
+      NSSize(width: 460, height: 420)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .closed),
+      NSSize(width: 460, height: 500)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .onboarding),
+      NSSize(width: 460, height: 500)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .invalidated),
+      NSSize(width: 460, height: 500)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .composing),
+      NSSize(width: 460, height: 600)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .checking),
+      NSSize(width: 460, height: 600)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .reviewing),
+      NSSize(width: 460, height: 680)
+    )
+    XCTAssertEqual(
+      PromptGatePanelLayout.requiredContentSize(for: .delivering),
+      NSSize(width: 460, height: 680)
+    )
+
+    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 0), 180)
+    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 450), 180)
+    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 500), 200)
+    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 800), 320)
+    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 1_000), 320)
+  }
+
+  func testRememberedMinimumWidthGrowsOnlyVerticallyForReview() {
+    let roomyVisibleFrame = NSRect(x: 100, y: 50, width: 1_400, height: 1_200)
+    let remembered = NSRect(x: 240, y: 280, width: 460, height: 500)
+    var memory = PromptGateFrameMemory(restoredFrame: remembered)
+
+    let reviewFrame = memory.frameGrowing(
+      to: PromptGatePanelLayout.requiredContentSize(for: .reviewing),
+      defaultSize: PromptGatePanelLayout.preferredContentSize,
+      visibleFrame: roomyVisibleFrame
+    )
+
+    XCTAssertEqual(reviewFrame.width, 460, accuracy: 0.001)
+    XCTAssertEqual(reviewFrame.height, 680, accuracy: 0.001)
+    XCTAssertEqual(reviewFrame.minX, remembered.minX, accuracy: 0.001)
+    XCTAssertEqual(reviewFrame.maxY, remembered.maxY, accuracy: 0.001)
+    XCTAssertGreaterThanOrEqual(reviewFrame.minX, roomyVisibleFrame.minX)
+    XCTAssertGreaterThanOrEqual(reviewFrame.minY, roomyVisibleFrame.minY)
+    XCTAssertLessThanOrEqual(reviewFrame.maxX, roomyVisibleFrame.maxX)
+    XCTAssertLessThanOrEqual(reviewFrame.maxY, roomyVisibleFrame.maxY)
+  }
+
   func testAutosavedFrameSeedsMemoryAcrossControllerRecreation() throws {
     let autosaveName = NSWindow.FrameAutosaveName("BexTests.PromptGate.\(UUID().uuidString)")
     NSWindow.removeFrame(usingName: autosaveName)

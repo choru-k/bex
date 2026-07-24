@@ -11,19 +11,6 @@ extension PromptClient {
   }
 }
 
-enum PromptDeliveryMode: String, Codable, CaseIterable, Identifiable, Sendable {
-  case pasteOnly = "paste-only"
-  case sendAfterApproval = "send-after-approval"
-
-  var id: String { rawValue }
-
-  var displayName: String {
-    switch self {
-    case .pasteOnly: "Paste only"
-    case .sendAfterApproval: "Send after approval"
-    }
-  }
-}
 
 enum PromptDeliveryAction: String, CaseIterable, Equatable, Hashable, Sendable {
   case copyCorrection
@@ -160,6 +147,16 @@ extension PromptTarget {
     if kind == .managedDraft {
       return "Stage in \(applicationName)"
     }
+    if kind == .capturedField {
+      return switch action {
+      case .copyCorrection:
+        "Copy Correction"
+      case .pasteInDestination:
+        "Replace Draft in \(applicationName)"
+      case .pasteAndSubmit:
+        "Replace & Press Return in \(applicationName)"
+      }
+    }
     return switch action {
     case .copyCorrection:
       "Copy Correction"
@@ -276,8 +273,7 @@ enum PromptGateKeyboardFocus: Equatable, Hashable, Sendable {
 enum PromptGateAccessibilityFocus: Equatable, Hashable, Sendable {
   case disclosureHeading
   case composerHeading
-  case changesHeading
-  case noChangesHeading
+  case finalMessageHeading
   case errorHeading
   case statusHeading
   case discardAlert

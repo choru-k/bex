@@ -18,9 +18,7 @@ final class PromptGateViewModel: ObservableObject {
   @Published private(set) var review: PromptGateReview?
   @Published private(set) var selectedProvider: LLMProvider = .openAI
   @Published private(set) var selectedModel = LLMProvider.openAI.defaultModel
-  @Published private(set) var selectedClient: PromptClient = .claudeCode
-  @Published private(set) var deliveryMode: PromptDeliveryMode = .sendAfterApproval
-  @Published private(set) var selectedClientStatus: HookInstallationStatus = .notInstalled
+  @Published private(set) var hookClientStatus: HookInstallationStatus = .notInstalled
   @Published private(set) var providerIsSetUp = false
   @Published private(set) var isLoadingSession = false
   @Published private(set) var isAccessibilityTrusted = false
@@ -81,12 +79,15 @@ final class PromptGateViewModel: ObservableObject {
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
   }
 
-  var clientIsLocked: Bool { session?.knownClient != nil }
   var providerDisclosureIsAccepted: Bool { hasAcceptedDestinationDisclosure }
   var needsProviderSetup: Bool { !providerIsSetUp }
 
   var hasTerminalDeliveryFailure: Bool {
     deliveryFailureEffect.map { !$0.isFullRetrySafe } ?? false
+  }
+
+  var canEditCorrection: Bool {
+    phase == .reviewing && !hasTerminalDeliveryFailure
   }
 
   var canReview: Bool {
@@ -114,6 +115,47 @@ final class PromptGateViewModel: ObservableObject {
   var accessibleDiffSummary: String {
     guard let review else { return "No differences" }
     return AccessibleDiffSummary.make(from: review.diff)
+  }
+
+  var reviewTitle: String {
+    guard let session else { return "Review Correction" }
+    switch session.target.kind {
+    case .capturedField:
+      return "Review Message for \(session.target.applicationName)"
+    case .composerPaste, .managedDraft:
+      return "Review Correction for \(session.target.applicationName)"
+    case .copyOnly:
+      return "Review Correction"
+    }
+  }
+
+  var reviewContextDescription: String {
+    guard let session else { return "" }
+    let checker = "Checked by \(selectedProvider.displayName) · \(selectedModel)"
+    switch session.source {
+    case .capturedField:
+      return "Captured from \(session.target.applicationName) · \(checker)"
+    case .composer:
+      return "Created in Bex · \(checker)"
+    case .hook:
+      let requester = session.knownClient?.displayName ?? session.target.applicationName
+      return "Requested by \(requester) · \(checker)"
+    }
+  }
+
+  var reviewPendingStatus: String {
+    switch session?.target.kind {
+    case .capturedField:
+      return "Nothing has been sent."
+    case .composerPaste:
+      return "Nothing has been pasted."
+    case .copyOnly:
+      return "Nothing has been copied."
+    case .managedDraft:
+      return "Nothing has been staged."
+    case nil:
+      return ""
+    }
   }
 
   var providerDisclosure: String {
@@ -175,7 +217,7 @@ final class PromptGateViewModel: ObservableObject {
     case .composerPaste:
       return .pasteInDestination
     case .capturedField:
-      return deliveryMode == .sendAfterApproval ? .pasteAndSubmit : .pasteInDestination
+      return .pasteInDestination
     case .managedDraft:
       return .pasteInDestination
     }
@@ -415,7 +457,6 @@ final class PromptGateViewModel: ObservableObject {
     }
 
     let correction = review.corrected
-    let client = session.knownClient ?? selectedClient
     let sessionGeneration = generation
     deliveryFailureEffect = nil
     phase = .delivering
@@ -429,20 +470,22 @@ final class PromptGateViewModel: ObservableObject {
       guard let self else { return }
       var issuedReceipt: UUID?
       do {
-        let context = session.target.hookContext
-        let status =
-          if let integrationID = context?.integrationID {
-            await hookManager.status(for: integrationID)
-          } else {
-            await hookManager.status(for: client)
-          }
-        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
-          self.finishWork(workID)
-          return
-        }
-        selectedClientStatus = status
-
         if session.hookRequestID != nil {
+          guard let client = session.knownClient else {
+            throw PromptDeliveryFailure(
+              effect: .none,
+              underlyingError: BexError.promptDeliveryFailed(
+                "Bex could not authorize this corrected prompt."
+              )
+            )
+          }
+          let context = session.target.hookContext
+          let status = await hookStatus(for: session)
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+            self.finishWork(workID)
+            return
+          }
+          hookClientStatus = status
           guard status.permitsReceipt else {
             throw PromptDeliveryFailure(
               effect: .none,
@@ -451,29 +494,28 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
-        }
-        if session.hookRequestID != nil, context?.client != .ohMyPi {
-          issuedReceipt = try await approvalStore.issue(
-            client: client,
-            integrationID: context?.integrationID,
-            text: correction,
-            sessionID: context?.sessionID,
-            cwd: context?.cwd
-          )
-          activeReceiptID = issuedReceipt
-        }
-
-        if let requestID = session.hookRequestID {
-          do {
-            try await hookResponder.complete(
-              requestID: requestID,
-              outcome: .approved,
-              awaitAcknowledgement: true,
-              approvedPrompt: correction,
-              integrationID: context?.integrationID
+          if context?.client != .ohMyPi {
+            issuedReceipt = try await approvalStore.issue(
+              client: client,
+              integrationID: context?.integrationID,
+              text: correction,
+              sessionID: context?.sessionID,
+              cwd: context?.cwd
             )
-          } catch {
-            throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
+            activeReceiptID = issuedReceipt
+          }
+          if let requestID = session.hookRequestID {
+            do {
+              try await hookResponder.complete(
+                requestID: requestID,
+                outcome: .approved,
+                awaitAcknowledgement: true,
+                approvedPrompt: correction,
+                integrationID: context?.integrationID
+              )
+            } catch {
+              throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
+            }
           }
         }
         try Task.checkCancellation()
@@ -613,27 +655,14 @@ final class PromptGateViewModel: ObservableObject {
 
   func updateCorrected(_ value: String) {
     guard phase == .reviewing, var review else { return }
-    let previouslyHadChanges = review.hasChanges
     review.updateCorrected(value)
     self.review = review
     errorMessage =
       value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? BexError.emptyInput.localizedDescription
       : nil
-    if review.hasChanges != previouslyHadChanges {
-      let accessibilityFocus: PromptGateAccessibilityFocus =
-        review.hasChanges
-        ? .changesHeading
-        : .noChangesHeading
-      requestFocus(keyboard: .correctedEditor, accessibility: accessibilityFocus)
-    }
   }
 
-  func setSelectedClient(_ client: PromptClient) {
-    guard !clientIsLocked, phase == .composing || phase == .reviewing else { return }
-    selectedClient = client
-    Task { await preferences.setPreferredPromptClient(client) }
-  }
 
   func openSettings() {
     openSettingsCallback()
@@ -645,8 +674,6 @@ final class PromptGateViewModel: ObservableObject {
     let sessionGeneration = generation
     let provider = await preferences.selectedProvider()
     let model = await preferences.selectedModel(for: provider)
-    let preferredClient = await preferences.preferredPromptClient()
-    let mode = await preferences.promptDeliveryMode()
     let hookOutboundConfirmation = await preferences.confirmsHookOutboundPayloads()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
@@ -669,8 +696,7 @@ final class PromptGateViewModel: ObservableObject {
       } else {
         false
       }
-    let refreshedClient = session.knownClient ?? preferredClient
-    let clientStatus = await hookManager.status(for: refreshedClient)
+    let clientStatus = await hookStatus(for: session)
     guard isCurrent(sessionID: sessionID, generation: sessionGeneration) else { return }
 
     let destinationChanged = configuredDestination != destination
@@ -678,12 +704,10 @@ final class PromptGateViewModel: ObservableObject {
     selectedProvider = destination?.provider ?? provider
     selectedModel = destination?.model ?? model
     configuredDestination = destination
-    selectedClient = refreshedClient
-    deliveryMode = mode
+    hookClientStatus = clientStatus
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
-    selectedClientStatus = clientStatus
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
     if destinationChanged {
       confirmedOutboundDraft = nil
@@ -722,16 +746,32 @@ final class PromptGateViewModel: ObservableObject {
     return session.hookRequestID == nil ? targetLabel : "Acknowledge & \(targetLabel)"
   }
 
+  var deliveryGuidanceIntroduction: String {
+    guard let target = session?.target else { return "" }
+    if target.kind == .capturedField {
+      return
+        "Bex will verify that the same \(target.applicationName) field still contains your original draft before replacing it."
+    }
+    return target.guidance
+  }
+
   func deliveryEffectDescription(for action: PromptDeliveryAction) -> String {
     guard let target = session?.target else { return "" }
     switch action {
     case .copyCorrection:
       return "Copies the correction to the Clipboard. Nothing is pasted or submitted."
     case .pasteInDestination:
-      return "Pastes the correction in \(target.applicationName). Bex will not press Return."
+      switch target.kind {
+      case .capturedField:
+        return "Replaces the captured draft in \(target.applicationName) without sending."
+      case .managedDraft:
+        return "Stages the correction in \(target.applicationName) without sending."
+      case .composerPaste, .copyOnly:
+        return "Pastes the correction in \(target.applicationName). Bex will not press Return."
+      }
     case .pasteAndSubmit:
       return
-        "Pastes the correction in \(target.applicationName), verifies it, then presses Return once."
+        "Replaces the captured draft, verifies the pasted text, then presses Return once in \(target.applicationName)."
     }
   }
 
@@ -739,6 +779,16 @@ final class PromptGateViewModel: ObservableObject {
     let hasHumanEdits = review?.hasHumanEdits == true || checkpoint?.hasHumanEdits == true
     let hasMeaningfulDeliveryEffect = deliveryFailureEffect.map { $0 != .none } ?? false
     return hasHumanEdits && !hasMeaningfulDeliveryEffect
+  }
+
+  private func hookStatus(for session: PromptGateSession) async -> HookInstallationStatus {
+    if let integrationID = session.target.hookContext?.integrationID {
+      return await hookManager.status(for: integrationID)
+    }
+    if let client = session.knownClient {
+      return await hookManager.status(for: client)
+    }
+    return .notInstalled
   }
 
   private func providerIsSetUp(for destination: OutboundDestination) async -> Bool {
@@ -751,8 +801,6 @@ final class PromptGateViewModel: ObservableObject {
   private func loadSession(sessionID: UUID, generation: UUID, workID: UUID) async {
     let provider = await preferences.selectedProvider()
     let model = await preferences.selectedModel(for: provider)
-    let preferredClient = await preferences.preferredPromptClient()
-    let mode = await preferences.promptDeliveryMode()
     let hookOutboundConfirmation = await preferences.confirmsHookOutboundPayloads()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
@@ -783,12 +831,10 @@ final class PromptGateViewModel: ObservableObject {
     selectedProvider = destination?.provider ?? provider
     selectedModel = destination?.model ?? model
     configuredDestination = destination
-    selectedClient = session.knownClient ?? preferredClient
-    deliveryMode = mode
+    hookClientStatus = await hookStatus(for: session)
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
-    selectedClientStatus = await hookManager.status(for: selectedClient)
     guard isCurrent(sessionID: sessionID, generation: generation) else {
       finishWork(workID)
       return
@@ -982,13 +1028,15 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   private func focusReview(_ review: PromptGateReview) {
-    let accessibilityFocus: PromptGateAccessibilityFocus =
-      review.hasChanges
-      ? .changesHeading
-      : .noChangesHeading
-    requestFocus(keyboard: .correctedEditor, accessibility: accessibilityFocus)
-    let heading = review.hasChanges ? "Changes ready." : "No Changes."
-    announce("\(heading) \(AccessibleDiffSummary.make(from: review.diff))")
+    let changeCount = DiffChange.make(from: review.diff).count
+    requestFocus(keyboard: .correctedEditor, accessibility: .finalMessageHeading)
+    if changeCount == 0 {
+      announce("Review ready. No changes. Focus is in the final message editor.")
+    } else {
+      announce(
+        "Review ready. \(changeCount) changes. Focus is in the final message editor."
+      )
+    }
   }
 
   private func discardCurrentSession() {

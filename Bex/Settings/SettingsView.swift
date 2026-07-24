@@ -582,12 +582,6 @@ struct SettingsView: View {
   private var fixAndSendCategory: some View {
     Form {
         Section("Delivery") {
-          Picker("After Fix & Send approval", selection: promptDeliveryBinding) {
-            ForEach(PromptDeliveryMode.allCases) { mode in
-              Text(mode.displayName).tag(mode)
-            }
-          }
-          .accessibilityIdentifier("settings-prompt-delivery")
 
 
           Text(viewModel.providerDisclosure)
@@ -865,12 +859,6 @@ struct SettingsView: View {
     )
   }
 
-  private var promptDeliveryBinding: Binding<PromptDeliveryMode> {
-    Binding(
-      get: { viewModel.promptDeliveryMode },
-      set: { viewModel.selectPromptDeliveryMode($0) }
-    )
-  }
 
   private var hookOutboundConfirmationBinding: Binding<Bool> {
     Binding(

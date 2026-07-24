@@ -1,6 +1,22 @@
 import AppKit
 import SwiftUI
 
+enum PromptGatePanelLayout {
+  static let preferredContentSize = NSSize(width: 640, height: 500)
+  static let minimumContentSize = NSSize(width: 460, height: 420)
+
+  static func requiredContentSize(for phase: PromptGatePhase) -> NSSize {
+    switch phase {
+    case .closed, .onboarding, .invalidated:
+      NSSize(width: 460, height: 500)
+    case .composing, .checking:
+      NSSize(width: 460, height: 600)
+    case .reviewing, .delivering:
+      NSSize(width: 460, height: 680)
+    }
+  }
+}
+
 final class PromptGatePanel: NSPanel {
   override var canBecomeKey: Bool { true }
   override var canBecomeMain: Bool { false }
@@ -71,7 +87,6 @@ struct PromptGateFrameMemory: Equatable {
 
 @MainActor
 final class PromptGatePanelController: NSWindowController, NSWindowDelegate {
-  private static let compactContentSize = NSSize(width: 640, height: 500)
   static let frameAutosaveName = NSWindow.FrameAutosaveName("Bex.PromptGate")
 
   private let hostingController: NSHostingController<AnyView>
@@ -89,15 +104,15 @@ final class PromptGatePanelController: NSWindowController, NSWindowDelegate {
     self.cancelAction = cancelAction
 
     let panel = PromptGatePanel(
-      contentRect: NSRect(origin: .zero, size: Self.compactContentSize),
+      contentRect: NSRect(origin: .zero, size: PromptGatePanelLayout.preferredContentSize),
       styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
       backing: .buffered,
       defer: false
     )
     panel.title = "Fix & Send"
     panel.contentViewController = hostingController
-    panel.setContentSize(Self.compactContentSize)
-    panel.contentMinSize = NSSize(width: 620, height: 500)
+    panel.setContentSize(PromptGatePanelLayout.preferredContentSize)
+    panel.contentMinSize = PromptGatePanelLayout.minimumContentSize
     panel.level = .floating
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     panel.hidesOnDeactivate = false
@@ -148,15 +163,7 @@ final class PromptGatePanelController: NSWindowController, NSWindowDelegate {
   }
 
   func accommodate(_ phase: PromptGatePhase) {
-    let requiredContentSize = switch phase {
-    case .closed, .onboarding, .invalidated:
-      Self.compactContentSize
-    case .composing, .checking:
-      NSSize(width: 720, height: 600)
-    case .reviewing, .delivering:
-      NSSize(width: 820, height: 680)
-    }
-    ensureMinimumContentSize(requiredContentSize)
+    ensureMinimumContentSize(PromptGatePanelLayout.requiredContentSize(for: phase))
   }
 
   private func ensureMinimumContentSize(_ requiredContentSize: NSSize) {

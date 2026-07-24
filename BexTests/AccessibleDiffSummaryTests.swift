@@ -124,6 +124,84 @@ final class AccessibleDiffSummaryTests: XCTestCase {
     )
   }
 
+  func testDiffChangeGroupsReplacementFromWordDiff() {
+    XCTAssertEqual(
+      changes("This are correct.", "This is correct."),
+      [DiffChange(oldText: "are", newText: "is")]
+    )
+  }
+
+  func testDiffChangePreservesOrderedMultipleReplacements() {
+    XCTAssertEqual(
+      changes("i has teh file", "I have the file"),
+      [
+        DiffChange(oldText: "i", newText: "I"),
+        DiffChange(oldText: "has", newText: "have"),
+        DiffChange(oldText: "teh", newText: "the"),
+      ]
+    )
+  }
+
+  func testDiffChangeHandlesOneSidedAndEqualInputs() {
+    XCTAssertEqual(
+      changes("", "Inserted"),
+      [DiffChange(oldText: "", newText: "Inserted")]
+    )
+    XCTAssertEqual(
+      changes("Removed", ""),
+      [DiffChange(oldText: "Removed", newText: "")]
+    )
+    XCTAssertEqual(changes("Equal", "Equal"), [])
+  }
+
+  func testDiffChangeKeepsPunctuationAttached() {
+    XCTAssertEqual(
+      changes("Hello,", "Hello;"),
+      [DiffChange(oldText: "Hello,", newText: "Hello;")]
+    )
+  }
+
+  func testDiffChangePreservesWhitespaceOnlyReplacement() {
+    XCTAssertEqual(
+      changes("Hello  world", "Hello\tworld"),
+      [DiffChange(oldText: "  ", newText: "\t")]
+    )
+  }
+
+  func testDiffChangePreservesInsertedTrailingSpace() {
+    XCTAssertEqual(
+      changes("Hello", "Hello "),
+      [DiffChange(oldText: "", newText: " ")]
+    )
+  }
+
+  func testDiffChangePreservesMixedTabAndLineBreakKinds() {
+    XCTAssertEqual(
+      changes("a\tb\nc\r\nd", "a b\r\nc\nd"),
+      [
+        DiffChange(oldText: "\t", newText: " "),
+        DiffChange(oldText: "\nc", newText: ""),
+        DiffChange(oldText: "", newText: "c\n"),
+      ]
+    )
+  }
+
+  func testDiffChangeDefensivelyGroupsInterleavedChangedSegments() {
+    XCTAssertEqual(
+      DiffChange.make(from: [
+        segment("a", .removed),
+        segment("b", .inserted),
+        segment("c", .removed),
+        segment("d", .inserted),
+      ]),
+      [DiffChange(oldText: "ac", newText: "bd")]
+    )
+  }
+
+  private func changes(_ original: String, _ corrected: String) -> [DiffChange] {
+    DiffChange.make(from: WordDiff.compute(original: original, corrected: corrected))
+  }
+
   private func segment(_ text: String, _ kind: DiffSegment.Kind) -> DiffSegment {
     DiffSegment(text: text, kind: kind)
   }
