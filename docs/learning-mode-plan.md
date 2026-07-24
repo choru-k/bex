@@ -1,4 +1,19 @@
-# Bex — Learning Mode Plan (v6.1)
+# Bex — Learning Mode Plan (v6.2)
+
+> **v6.2 — Phase 1 corpus-source correction + v1 scope:**
+> - **Phase 1 aggregates the LEARNING LOG, not `HistoryViewModel.entries`.** v6.1 moved the primary
+>   (terminal) corpus into the separate learning log; the Phase-1 text below still said "history."
+>   Corrected: the recurring-grammar aggregation reads the learning log JSONL (and may fold in Quick
+>   Check history later, since both now carry the tagged two-section `explanation`). `LearningLogStore`
+>   gains a read API; the store is shared via `AppServices` so the Prompt Gate (writer) and the
+>   Learning window (reader) use one instance.
+> - **Phase 1 v1 = a read-only "Learning" window only.** It shows recurring grammar-tag counts and
+>   recent "Consider" suggestions, self-guarding to an empty state until data accrues. This window
+>   *is the by-hand gate instrument*: open it after a week and see whether recurrence actually
+>   exists. **Deferred to the post-gate build:** the always-on menu-bar badge, the rate-per-100-words
+>   metric + complexity floor + 6-week kill-timebox, and automated goal-2 uptake detection. Building
+>   the read-only view now is harmless (empty until real data) and avoids building the adherence
+>   machinery on faith.
 
 > **v6.1 — owner decisions before implementation:**
 > - **Learning log (closes a hole all five reviewers missed):** Prompt Gate corrections — the
