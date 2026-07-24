@@ -62,6 +62,19 @@ actor LearningLogStore {
     }
   }
 
+  /// Reads every entry currently on disk, oldest first. Never throws: a missing file
+  /// yields `[]`, and malformed or blank lines are skipped rather than failing the
+  /// whole read — this log is best-effort, read-only tooling, not a source of truth
+  /// that must round-trip perfectly.
+  func readAll() -> [Entry] {
+    guard let data = try? Data(contentsOf: fileURL) else { return [] }
+    let decoder = JSONDecoder()
+    return data.split(separator: 0x0A).compactMap { line in
+      guard !line.isEmpty else { return nil }
+      return try? decoder.decode(Entry.self, from: Data(line))
+    }
+  }
+
   private func ensureDirectory() throws {
     try FileManager.default.createDirectory(
       at: directoryURL,

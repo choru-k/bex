@@ -1011,6 +1011,9 @@
       }
       let data = BexDataStore(fileURL: directory.appendingPathComponent("data.json"))
       try? await configuration.seed(preferences: preferences, data: data)
+      let learningLog = LearningLogStore(
+        directoryURL: directory.appendingPathComponent("LearningLog", isDirectory: true)
+      )
 
       let keychain = KeychainStore(
         service: "com.bex.desktop.credentials.ui-testing",
@@ -1036,6 +1039,7 @@
         preferences: preferences,
         keychain: keychain,
         data: data,
+        learningLog: learningLog,
         grammar: grammar,
         promptGrammar: grammar,
         pasteboard: pasteboard,

@@ -343,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     toolsMenu.addItem(.separator())
     toolsMenu.addItem(command("History", "openHistory", target: target))
+    toolsMenu.addItem(command("Learning", "openLearning", target: target))
     toolsMenu.addItem(command("Writing Styles", "openProfiles", target: target))
     mainMenu.addItem(rootItem(title: "Tools", submenu: toolsMenu))
 
@@ -417,6 +418,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       )
     )
     menu.addItem(command("History", "openHistory", target: target))
+    menu.addItem(command("Learning", "openLearning", target: target))
     menu.addItem(command("Writing Styles", "openProfiles", target: target))
     menu.addItem(command("Settings…", "openSettings", target: target))
     menu.addItem(.separator())
@@ -585,6 +587,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func openHistory() {
     coordinator().showHistory()
+  }
+
+  @objc private func openLearning() {
+    coordinator().showLearning()
   }
 
   @objc private func openProfiles() {

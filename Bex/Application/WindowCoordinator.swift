@@ -19,6 +19,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   private var pendingManualFixAndSendDraft: String?
   private var welcomeWindowController: NSWindowController?
   private var historyWindowController: NSWindowController?
+  private var learningWindowController: NSWindowController?
   private var profilesWindowController: NSWindowController?
   private var settingsWindowController: NSWindowController?
   private var settingsViewModel: SettingsViewModel?
@@ -41,6 +42,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     defaultContentSize: NSSize(width: 760, height: 560),
     minimumContentSize: NSSize(width: 620, height: 400),
     frameAutosaveName: "Bex.HistoryWindow"
+  )
+  static let learningWindowConfiguration = StandardWindowConfiguration(
+    title: "Learning",
+    defaultContentSize: NSSize(width: 620, height: 520),
+    minimumContentSize: NSSize(width: 480, height: 360),
+    frameAutosaveName: "Bex.LearningWindow"
   )
   static let writingStylesWindowConfiguration = StandardWindowConfiguration(
     title: "Writing Styles",
@@ -260,6 +267,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     show(historyWindowController)
   }
 
+  func showLearning() {
+    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
+    if learningWindowController == nil {
+      let viewModel = LearningViewModel(learningLog: services.learningLog)
+      learningWindowController = Self.makeWindowController(
+        configuration: Self.learningWindowConfiguration,
+        rootView: LearningView(viewModel: viewModel),
+        delegate: self
+      )
+    }
+    show(learningWindowController)
+  }
+
   private func replaceQuickCheckDraftFromHistory(with text: String) {
     showQuickCheck(draft: text)
   }
@@ -399,6 +419,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
     if window === historyWindowController?.window {
       historyWindowController = nil
+    } else if window === learningWindowController?.window {
+      learningWindowController = nil
     } else if window === profilesWindowController?.window {
       profilesWindowController = nil
     } else if window === settingsWindowController?.window {
@@ -418,6 +440,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         approvalStore: services.approvalStore,
         hookManager: services.hookManager,
         hookResponder: services.promptGateIPC,
+        learningLog: services.learningLog,
         onClose: { [weak self] in self?.closePromptGate() },
         onOpenSettings: { [weak self] in self?.showSettings(origin: .fixAndSend) }
       )
