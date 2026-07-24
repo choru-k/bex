@@ -17,7 +17,7 @@ Bex is a native macOS menubar app for checking English grammar and expression wi
 ## Requirements
 
 - macOS 13 Ventura or later
-- A credential for one provider:
+- Access to at least one provider:
   - OpenAI — API key from [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
   - OpenAI Codex — a ChatGPT account (OAuth, no key)
   - Claude — API key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
@@ -57,8 +57,6 @@ Bex runs as a small icon in the macOS menu bar rather than in the Dock.
 3. Press `⌘⇧G` from any app to open Quick Check.
 4. Enter text, run **Check**, review the word-level diff and explanation, then copy the result.
 
-The first time you press `⌘⇧G`, macOS may ask for Accessibility access. Grant it in **System Settings → Privacy & Security → Accessibility**, or the shortcut won't fire from other apps.
-
 Quick Check also supports three in-place rewrites:
 
 - **More Formal** (`⌘1`)
@@ -74,7 +72,7 @@ The Bex menu opens the management windows only when needed:
 ### Troubleshooting
 
 - **No icon in the menu bar:** the bar may be full. Check the overflow area (`⌘`-drag icons) or a menu-bar manager like Bartender/Ice.
-- **`⌘⇧G` does nothing:** grant Accessibility access (above), or another app may have claimed the same shortcut.
+- **`⌘⇧G` does nothing:** macOS or another app may have claimed the shortcut. Choose a different one under **Settings → General → Shortcuts**.
 - **Credential rejected or empty model list:** re-check the key in **Settings**, and for Ollama confirm the local URL is reachable and a model is pulled.
 
 ## Providers
@@ -148,7 +146,7 @@ OMP must advertise the `prompt-gate-v1` capability. Builds without it — includ
 
 Bex preserves unrelated JSON and file permissions. **Uninstall** removes only Bex-owned artifacts. Drift produces **Update available** or **Needs repair**, never an automatic overwrite; the signed helper is replaced only through an explicit reviewed Update or Repair.
 
-After approval, the integration blocks the first prompt before the client model receives it and opens Prompt Gate:
+The integration blocks the first prompt before the client model receives it and opens Prompt Gate. After approval:
 
 - OMP stages the corrected text, acknowledges the exact delivery token, and resubmits it once through the native gate. The matching single-use receipt allows only that exact corrected replay.
 - For Claude Code or Codex, deliver as shown in the table above.
@@ -174,7 +172,7 @@ API keys and the OpenAI Codex session are stored in macOS Keychain. Profiles and
 ~/Library/Application Support/Bex/data.json
 ```
 
-Bex keeps at most 500 Quick Check history entries and writes its data atomically. Prompt Gate reviews are not added to that history. Cloud correction sends the prompt prose—with recognized technical spans replaced by placeholders—directly to the selected provider; Ollama processes the request at the configured local URL.
+Bex keeps at most 500 Quick Check history entries and writes its data atomically. Prompt Gate reviews are not added to that history. For Prompt Gate, cloud correction sends the prompt prose—with recognized technical spans replaced by placeholders—directly to the selected provider; Quick Check sends the text as entered. Ollama processes requests at the configured local URL.
 
 Masking is best-effort and covers only recognized spans. Unrecognized sensitive text in ordinary prose—secrets, personal data, or tokens that match no known pattern—is sent to the provider as written. When Bex delivers a correction by copying it, the corrected text stays on the system clipboard, where other apps and Universal Clipboard can read it until it is replaced.
 
