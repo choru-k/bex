@@ -414,6 +414,12 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
         }
+
+        Section("About") {
+          LabeledContent("Version", value: Self.appVersionString)
+            .textSelection(.enabled)
+            .accessibilityIdentifier("settings-app-version")
+        }
     }
     .formStyle(.grouped)
     .padding()
@@ -890,6 +896,17 @@ struct SettingsView: View {
     }
   }
 
+
+  /// Marketing version and build from the app bundle, e.g. "0.5.9 (42)".
+  private static var appVersionString: String {
+    let info = Bundle.main.infoDictionary
+    let short = info?["CFBundleShortVersionString"] as? String ?? "—"
+    let build = info?["CFBundleVersion"] as? String
+    if let build, !build.isEmpty, build != short {
+      return "\(short) (\(build))"
+    }
+    return short
+  }
 
   private var appearanceBinding: Binding<AppearancePreference> {
     Binding(

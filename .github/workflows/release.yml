@@ -14,7 +14,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Extract version from tag
         id: version
@@ -163,7 +163,7 @@ jobs:
             "",
           )
           abort "Bex cask must require macOS Ventura or newer" unless content.include?(
-            'depends_on macos: ">= :ventura"',
+            "depends_on macos: :ventura",
           )
           abort "Bex cask must install Bex.app" unless content.include?('app "Bex.app"')
           File.write(path, content)
