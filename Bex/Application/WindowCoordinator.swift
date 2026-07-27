@@ -23,6 +23,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   private var profilesWindowController: NSWindowController?
   private var settingsWindowController: NSWindowController?
   private var settingsViewModel: SettingsViewModel?
+  /// Set by `AppDelegate` after construction so opening Learning can refresh the
+  /// menu-bar badge it owns, without `WindowCoordinator` holding a reference back to it.
+  var onLearningViewed: (() -> Void)?
   struct StandardWindowConfiguration {
     let title: String
     let defaultContentSize: NSSize
@@ -278,6 +281,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       )
     }
     show(learningWindowController)
+    // Clears the ambient badge: opening the window counts as reviewing everything up to
+    // now. `Date()` belongs here only — never in the pure `LearningBadge` logic/tests.
+    Task { [weak self] in
+      guard let self else { return }
+      await self.services.preferences.setLastLearningViewedAt(Date())
+      self.onLearningViewed?()
+    }
   }
 
   private func replaceQuickCheckDraftFromHistory(with text: String) {

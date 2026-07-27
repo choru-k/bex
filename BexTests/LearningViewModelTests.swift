@@ -70,4 +70,37 @@ final class LearningViewModelTests: XCTestCase {
     )
     XCTAssertEqual(viewModel.recentSuggestions, ["\"he go\" → \"he went\" — more natural."])
   }
+
+  func testLoadComputesMetricsFromParsedSamples() async {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("LearningViewModelTests-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+    let store = LearningLogStore(directoryURL: directory, now: { fixedNow })
+
+    await store.append(
+      client: "claude-code",
+      original: "he go store yesterday to buy food",
+      corrected: "He went to the store yesterday to buy food.",
+      explanation: """
+        Fixed:
+        [verb-tense] "go" → "went" — past tense.
+
+        Consider:
+        "he go" → "he went" — more natural.
+        """,
+      provider: "openai",
+      model: "gpt-5.6-sol"
+    )
+
+    let viewModel = LearningViewModel(learningLog: store)
+    await viewModel.load()
+
+    XCTAssertEqual(viewModel.categoryRates.map(\.category), ["verb-tense"])
+    XCTAssertEqual(viewModel.categoryRates.first?.count, 1)
+    XCTAssertGreaterThan(viewModel.medianSentenceLength, 0)
+    XCTAssertEqual(viewModel.weeklyRates.count, 1)
+    XCTAssertEqual(viewModel.uptakeSuggested, 1)
+    XCTAssertEqual(viewModel.uptakeAdopted, 0)
+  }
 }

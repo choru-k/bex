@@ -177,6 +177,21 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertEqual(reloadedVersion, 1)
   }
 
+  func testLastLearningViewedAtDefaultsNilAndPersists() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+
+    let preferences = fixture.store
+    let initial = await preferences.lastLearningViewedAt()
+    XCTAssertNil(initial)
+
+    let viewedAt = Date(timeIntervalSince1970: 1_700_000_000)
+    await preferences.setLastLearningViewedAt(viewedAt)
+
+    let reloaded = await fixture.reloadedStore().lastLearningViewedAt()
+    XCTAssertEqual(reloaded, viewedAt)
+  }
+
   func testKeyChordsDefaultAndPersistIndependently() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }

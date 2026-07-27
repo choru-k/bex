@@ -12,6 +12,11 @@ final class LearningViewModel: ObservableObject {
   @Published private(set) var isLoading = true
   @Published private(set) var recurringMistakes: [GrammarCategoryCount] = []
   @Published private(set) var recentSuggestions: [String] = []
+  @Published private(set) var categoryRates: [CategoryRate] = []
+  @Published private(set) var medianSentenceLength: Double = 0
+  @Published private(set) var weeklyRates: [WeeklyRate] = []
+  @Published private(set) var uptakeAdopted: Int = 0
+  @Published private(set) var uptakeSuggested: Int = 0
 
   private let learningLog: LearningLogStore
 
@@ -33,6 +38,15 @@ final class LearningViewModel: ObservableObject {
         .flatMap { LearningAggregator.parseConsiderSuggestions(from: $0.explanation) }
         .prefix(recentSuggestionsLimit)
     )
+
+    let samples = LearningLogSamples.parse(entries)
+    categoryRates = LearningMetrics.categoryRates(samples: samples)
+    medianSentenceLength = LearningMetrics.medianSentenceLength(originals: samples.map(\.original))
+    weeklyRates = LearningMetrics.weeklyRates(samples: samples)
+    let uptake = LearningMetrics.uptake(samples: samples)
+    uptakeAdopted = uptake.adopted
+    uptakeSuggested = uptake.suggested
+
     isLoading = false
   }
 }

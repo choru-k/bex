@@ -9,6 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var windowCoordinator: WindowCoordinator?
   private var statusItem: NSStatusItem?
   private var statusMenu: NSMenu?
+  private var learningMenuItem: NSMenuItem?
+  private var learningLogChangeTask: Task<Void, Never>?
   private var globalHotKey: GlobalHotKey?
   private var shortcutMenuItems: [BexShortcut: [NSMenuItem]] = [:]
   private var shortcutChords: [BexShortcut: KeyChord] = [
@@ -102,6 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = installCoordinator(services: services)
     installMainMenu()
     installStatusItem()
+    startObservingLearningLog()
+    Task { [weak self] in
+      await self?.refreshLearningBadge()
+    }
     #if DEBUG
       installUITestingCommands()
     #endif
@@ -202,12 +208,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     self.services = services
     windowCoordinator = coordinator
     coordinator.applyStoredAppearance()
+    coordinator.onLearningViewed = { [weak self] in
+      Task { [weak self] in
+        await self?.refreshLearningBadge()
+      }
+    }
     return coordinator
   }
 
   func applicationWillTerminate(_ notification: Notification) {
     BexShortcutBridge.updater = nil
     globalHotKey?.unregisterAll()
+    learningLogChangeTask?.cancel()
     #if DEBUG
       DistributedNotificationCenter.default().removeObserver(self)
     #endif
@@ -390,6 +402,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     item.menu = menu
     statusItem = item
     statusMenu = menu
+    learningMenuItem = menu.items.first {
+      $0.identifier?.rawValue == "bex-learning-status-item"
+    }
     trackShortcutItems(in: menu)
   }
 
@@ -418,7 +433,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       )
     )
     menu.addItem(command("History", "openHistory", target: target))
-    menu.addItem(command("Learning", "openLearning", target: target))
+    let learningItem = command("Learning", "openLearning", target: target)
+    learningItem.identifier = NSUserInterfaceItemIdentifier("bex-learning-status-item")
+    menu.addItem(learningItem)
     menu.addItem(command("Writing Styles", "openProfiles", target: target))
     menu.addItem(command("Settings…", "openSettings", target: target))
     menu.addItem(.separator())
@@ -591,6 +608,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func openLearning() {
     coordinator().showLearning()
+  }
+
+  /// Observes `.bexLearningLogDidChange` (posted by `LearningLogStore.append`) for the
+  /// lifetime of the app and recomputes the badge on each correction. Mirrors
+  /// `HistoryViewModel.startObservingIfNeeded`'s `for await` pattern; `AppDelegate` is
+  /// `@MainActor`, so the loop body runs on the main actor.
+  private func startObservingLearningLog() {
+    learningLogChangeTask = Task { [weak self] in
+      for await _ in NotificationCenter.default.notifications(named: .bexLearningLogDidChange) {
+        guard !Task.isCancelled, let self else { return }
+        await self.refreshLearningBadge()
+      }
+    }
+  }
+
+  /// Reloads the learning log, recomputes `LearningBadge.status`, and applies it to the
+  /// status item + "Learning" menu item. Safe to call anytime after `installStatusItem`;
+  /// a nil `services` (shouldn't happen post-launch) is a no-op.
+  private func refreshLearningBadge() async {
+    guard let services else { return }
+    let entries = await services.learningLog.readAll()
+    let samples = LearningLogSamples.parse(entries)
+    let lastViewedAt = await services.preferences.lastLearningViewedAt()
+    let status = LearningBadge.status(samples: samples, lastViewedAt: lastViewedAt)
+    applyLearningBadge(status)
+  }
+
+  private func applyLearningBadge(_ status: LearningBadge.Status) {
+    if status.shouldShow {
+      statusItem?.button?.title = "\(status.count)"
+      statusItem?.button?.imagePosition = .imageLeft
+      statusItem?.button?.setAccessibilityLabel(
+        "Bex — \(status.count) new correction\(status.count == 1 ? "" : "s") to review")
+    } else {
+      statusItem?.button?.title = ""
+      statusItem?.button?.imagePosition = .imageOnly
+      statusItem?.button?.setAccessibilityLabel("Bex")
+    }
+    learningMenuItem?.title = status.count > 0 ? "Learning (\(status.count))" : "Learning"
   }
 
   @objc private func openProfiles() {

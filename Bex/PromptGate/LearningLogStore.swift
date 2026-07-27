@@ -1,6 +1,10 @@
 import Darwin
 import Foundation
 
+extension Notification.Name {
+  static let bexLearningLogDidChange = Notification.Name("com.bex.desktop.learningLogDidChange")
+}
+
 /// Append-only local log of successful Prompt Gate corrections (Claude Code / Codex
 /// terminal prompts). Kept separate from history/data.json per the learning-mode plan
 /// (docs/learning-mode-plan.md, v6.1): this is prompt text on disk, so it stays
@@ -57,6 +61,7 @@ actor LearningLogStore {
       var line = try JSONEncoder().encode(entry)
       line.append(0x0A)
       try appendToFile(line)
+      NotificationCenter.default.post(name: .bexLearningLogDidChange, object: nil)
     } catch {
       // Fire-and-forget: intentionally ignored, see doc comment above.
     }

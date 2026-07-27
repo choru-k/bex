@@ -44,6 +44,7 @@ actor PreferencesStore {
     static let fixAndSendKeyChord = "shortcut.fixAndSend"
     static let welcomeCompletedVersion = "welcome.completedVersion"
     static let confirmsHookOutboundPayloads = "promptGate.confirmsHookOutboundPayloads"
+    static let lastLearningViewedAt = "learning.lastViewedAt"
 
     static func outboundDisclosureVersion(for destination: OutboundDestination) -> String {
       guard destination.provider == .ollama, let endpoint = destination.ollamaEndpoint else {
@@ -276,6 +277,17 @@ actor PreferencesStore {
 
   func setWelcomeCompletedVersion(_ version: Int) {
     defaults.set(version, forKey: Key.welcomeCompletedVersion)
+  }
+
+  /// When the Learning window was last opened — `nil` before it has ever been viewed.
+  /// Drives the menu-bar badge count (`LearningBadge`); the app sets this to `Date()`
+  /// only when the window actually opens (`WindowCoordinator.showLearning`).
+  func lastLearningViewedAt() -> Date? {
+    defaults.object(forKey: Key.lastLearningViewedAt) as? Date
+  }
+
+  func setLastLearningViewedAt(_ date: Date) {
+    defaults.set(date, forKey: Key.lastLearningViewedAt)
   }
 
   private func keyChord(forKey key: String, fallback: KeyChord) -> KeyChord {
