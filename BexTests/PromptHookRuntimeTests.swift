@@ -118,7 +118,7 @@ final class PromptApprovalStoreTests: XCTestCase {
 }
 
 final class ClaudePromptSourceTests: XCTestCase {
-  func testOnlyLatestSystemTaskNotificationBypassesReview() throws {
+  func testOnlyLatestSystemTaskNotificationIsNonInteractive() throws {
     let transcriptURL = temporaryDirectory("claude-transcript")
       .appendingPathComponent("session.jsonl")
     try FileManager.default.createDirectory(
@@ -150,8 +150,10 @@ final class ClaudePromptSourceTests: XCTestCase {
       promptSource: "system",
       origin: "task-notification"
     ).write(to: transcriptURL)
-    XCTAssertTrue(ClaudePromptSource.isBackgroundTaskNotification(input))
+    XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(input))
 
+    // Appending a newer, genuinely-typed entry for the same prompt/session/promptID means the
+    // newest matching transcript entry is no longer machine-sourced, so it must gate again.
     var transcript = try Data(contentsOf: transcriptURL)
     transcript.append(0x0A)
     transcript.append(
@@ -164,10 +166,101 @@ final class ClaudePromptSourceTests: XCTestCase {
       )
     )
     try transcript.write(to: transcriptURL)
-    XCTAssertFalse(ClaudePromptSource.isBackgroundTaskNotification(input))
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(input))
   }
 
-  func testTaskNotificationRequiresExactTranscriptIdentity() throws {
+  func testSidechainSubAgentPromptIsNonInteractive() throws {
+    let transcriptURL = temporaryDirectory("claude-transcript-sidechain")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let prompt = "Summarize the findings from the sub-agent run."
+    let input = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: prompt,
+      sessionID: "session-789",
+      cwd: "/tmp/project",
+      promptID: "prompt-789",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+
+    // Sidechain sub-agent entries are non-interactive regardless of promptSource/origin.
+    try transcriptEntry(
+      prompt: prompt,
+      sessionID: input.sessionID,
+      promptID: try XCTUnwrap(input.promptID),
+      promptSource: "typed",
+      origin: "human",
+      isSidechain: true
+    ).write(to: transcriptURL)
+    XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(input))
+  }
+
+  func testSlashCommandWrapperIsNonInteractive() throws {
+    // The real-world bug: slash-command wrapper entries (e.g. the /model command) carry NO
+    // promptSource and NO origin — no machine marker at all — yet must not reach the gate.
+    let transcriptURL = temporaryDirectory("claude-transcript-command")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let wrapper =
+      "<command-name>/model</command-name>\n"
+      + "<command-message>model</command-message>\n<command-args></command-args>"
+    let input = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: wrapper,
+      sessionID: "session-cmd",
+      cwd: "/tmp/project",
+      promptID: "prompt-cmd",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+    try transcriptEntry(
+      prompt: wrapper,
+      sessionID: input.sessionID,
+      promptID: try XCTUnwrap(input.promptID)
+    ).write(to: transcriptURL)
+    XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(input))
+  }
+
+  func testGenuineTypedPromptIsGated() throws {
+    let transcriptURL = temporaryDirectory("claude-transcript-typed")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    let prompt = "Please refactor this function to be async."
+    let input = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: prompt,
+      sessionID: "session-321",
+      cwd: "/tmp/project",
+      promptID: "prompt-321",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+
+    // This is the critical regression guard: a real, human-typed prompt must still be gated.
+    try transcriptEntry(
+      prompt: prompt,
+      sessionID: input.sessionID,
+      promptID: try XCTUnwrap(input.promptID),
+      promptSource: "typed",
+      origin: "human"
+    ).write(to: transcriptURL)
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(input))
+  }
+
+  func testIdentityMismatchIsGated() throws {
     let transcriptURL = temporaryDirectory("claude-transcript-identity")
       .appendingPathComponent("session.jsonl")
     try FileManager.default.createDirectory(
@@ -197,28 +290,103 @@ final class ClaudePromptSourceTests: XCTestCase {
       turnID: nil,
       transcriptPath: transcriptURL.path
     )
-    XCTAssertFalse(ClaudePromptSource.isBackgroundTaskNotification(input))
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(input))
+
+    // Same session and content, but a different promptId, is also an identity mismatch.
+    let matchingSessionButDifferentPromptID = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: notification,
+      sessionID: "different-session",
+      cwd: "/tmp/project",
+      promptID: "not-the-recorded-prompt-id",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(matchingSessionButDifferentPromptID))
+
+    // Same session and promptId, but different content, is also an identity mismatch.
+    let matchingSessionButDifferentContent = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: "not the recorded content",
+      sessionID: "different-session",
+      cwd: "/tmp/project",
+      promptID: "different-prompt",
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: transcriptURL.path
+    )
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(matchingSessionButDifferentContent))
+  }
+
+  func testMissingOrUnreadableTranscriptIsGated() throws {
+    let noTranscriptInput = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: "hello",
+      sessionID: "session-000",
+      cwd: "/tmp/project",
+      promptID: nil,
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: nil
+    )
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(noTranscriptInput))
+
+    let emptyTranscriptPathInput = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: "hello",
+      sessionID: "session-000",
+      cwd: "/tmp/project",
+      promptID: nil,
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: ""
+    )
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(emptyTranscriptPathInput))
+
+    let unreadableTranscriptInput = HookInput(
+      hookEventName: "UserPromptSubmit",
+      prompt: "hello",
+      sessionID: "session-000",
+      cwd: "/tmp/project",
+      promptID: nil,
+      integrationID: nil,
+      turnID: nil,
+      transcriptPath: temporaryDirectory("claude-transcript-missing")
+        .appendingPathComponent("does-not-exist.jsonl").path
+    )
+    XCTAssertFalse(ClaudePromptSource.isNonInteractivePrompt(unreadableTranscriptInput))
   }
 
   private func transcriptEntry(
     prompt: String,
     sessionID: String,
     promptID: String,
-    promptSource: String,
-    origin: String
+    promptSource: String? = nil,
+    origin: String? = nil,
+    isSidechain: Bool? = nil
   ) throws -> Data {
-    try JSONSerialization.data(
-      withJSONObject: [
-        "type": "user",
-        "sessionId": sessionID,
-        "promptId": promptID,
-        "promptSource": promptSource,
-        "origin": ["kind": origin],
-        "message": [
-          "role": "user",
-          "content": prompt,
-        ],
+    var object: [String: Any] = [
+      "type": "user",
+      "sessionId": sessionID,
+      "promptId": promptID,
+      "message": [
+        "role": "user",
+        "content": prompt,
       ],
+    ]
+    // Real command/meta entries carry neither field, so include them only when set.
+    if let promptSource {
+      object["promptSource"] = promptSource
+    }
+    if let origin {
+      object["origin"] = ["kind": origin]
+    }
+    if let isSidechain {
+      object["isSidechain"] = isSidechain
+    }
+    return try JSONSerialization.data(
+      withJSONObject: object,
       options: [.sortedKeys]
     )
   }

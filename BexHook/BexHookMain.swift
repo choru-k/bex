@@ -53,7 +53,7 @@ struct BexHookMain {
         throw HookIPCError.invalidResponse
       }
 
-      if client == .claudeCode, ClaudePromptSource.isBackgroundTaskNotification(input) {
+      if client == .claudeCode, ClaudePromptSource.isNonInteractivePrompt(input) {
         try? writeHeartbeat(client: client, integrationID: input.integrationID)
         return
       }
