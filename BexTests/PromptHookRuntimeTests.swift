@@ -118,23 +118,18 @@ final class PromptApprovalStoreTests: XCTestCase {
 }
 
 final class ClaudePromptSourceTests: XCTestCase {
-  func testOnlyLatestSystemTaskNotificationIsNonInteractive() throws {
+  func testSystemOriginTranscriptEntrySkippedUntilTypedEntryAppears() throws {
     let transcriptURL = temporaryDirectory("claude-transcript")
       .appendingPathComponent("session.jsonl")
     try FileManager.default.createDirectory(
       at: transcriptURL.deletingLastPathComponent(),
       withIntermediateDirectories: true
     )
-    let notification = """
-      <task-notification>
-      <task-id>agent-123</task-id>
-      <status>completed</status>
-      <summary>Agent finished</summary>
-      </task-notification>
-      """
+    // A plain-text prompt (no injected wrapper prefix) so the transcript path does the work.
+    let prompt = "Summarize the results of the run."
     let input = HookInput(
       hookEventName: "UserPromptSubmit",
-      prompt: notification,
+      prompt: prompt,
       sessionID: "session-123",
       cwd: "/tmp/project",
       promptID: "prompt-123",
@@ -143,8 +138,9 @@ final class ClaudePromptSourceTests: XCTestCase {
       transcriptPath: transcriptURL.path
     )
 
+    // Matched entry is machine-sourced (non-human origin) -> skip.
     try transcriptEntry(
-      prompt: notification,
+      prompt: prompt,
       sessionID: input.sessionID,
       promptID: try XCTUnwrap(input.promptID),
       promptSource: "system",
@@ -153,12 +149,12 @@ final class ClaudePromptSourceTests: XCTestCase {
     XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(input))
 
     // Appending a newer, genuinely-typed entry for the same prompt/session/promptID means the
-    // newest matching transcript entry is no longer machine-sourced, so it must gate again.
+    // newest matching transcript entry is human-typed, so it must gate again.
     var transcript = try Data(contentsOf: transcriptURL)
     transcript.append(0x0A)
     transcript.append(
       try transcriptEntry(
-        prompt: notification,
+        prompt: prompt,
         sessionID: input.sessionID,
         promptID: try XCTUnwrap(input.promptID),
         promptSource: "typed",
@@ -230,6 +226,63 @@ final class ClaudePromptSourceTests: XCTestCase {
     XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(input))
   }
 
+  func testTaskNotificationIsNonInteractiveWithoutTranscriptEntry() throws {
+    // The reported bug: task-notifications fire the hook but current Claude Code does NOT record
+    // them as a matchable transcript entry, so the transcript lookup can't find them. They must
+    // still be recognized (by prompt shape) and skipped — even when no matching entry exists.
+    let notification =
+      "<task-notification>\n<task-id>agent-1</task-id>\n<status>completed</status>\n"
+      + "</task-notification>"
+
+    let transcriptURL = temporaryDirectory("claude-transcript-tasknotif")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    // Transcript contains only an unrelated tool-result entry — no notification entry at all.
+    let unrelatedEntry: [String: Any] = [
+      "type": "user", "sessionId": "session-tn",
+      "message": ["role": "user", "content": [["type": "tool_result", "content": "x"]]],
+    ]
+    var unrelated = try JSONSerialization.data(withJSONObject: unrelatedEntry, options: [.sortedKeys])
+    unrelated.append(0x0A)
+    try unrelated.write(to: transcriptURL)
+
+    let withUnrelatedTranscript = HookInput(
+      hookEventName: "UserPromptSubmit", prompt: notification, sessionID: "session-tn",
+      cwd: "/tmp/project", promptID: "p-tn", integrationID: nil, turnID: nil,
+      transcriptPath: transcriptURL.path)
+    XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(withUnrelatedTranscript))
+
+    // And with no transcript path at all.
+    let withoutTranscript = HookInput(
+      hookEventName: "UserPromptSubmit", prompt: notification, sessionID: "session-tn",
+      cwd: "/tmp/project", promptID: "p-tn", integrationID: nil, turnID: nil, transcriptPath: nil)
+    XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(withoutTranscript))
+  }
+
+  func testArrayStyleContentEntryIsMatchedAndClassified() throws {
+    // A transcript entry whose content is an array of text blocks must still be matched to the
+    // prompt (text reconstructed) and classified — here a sidechain sub-agent entry -> skip.
+    let prompt = "Investigate the failing test and report back."
+    let transcriptURL = temporaryDirectory("claude-transcript-arraycontent")
+      .appendingPathComponent("session.jsonl")
+    try FileManager.default.createDirectory(
+      at: transcriptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let entry: [String: Any] = [
+      "type": "user", "sessionId": "session-arr", "promptId": "p-arr", "isSidechain": true,
+      "message": ["role": "user", "content": [["type": "text", "text": prompt]]],
+    ]
+    var data = try JSONSerialization.data(withJSONObject: entry, options: [.sortedKeys])
+    data.append(0x0A)
+    try data.write(to: transcriptURL)
+
+    let input = HookInput(
+      hookEventName: "UserPromptSubmit", prompt: prompt, sessionID: "session-arr",
+      cwd: "/tmp/project", promptID: "p-arr", integrationID: nil, turnID: nil,
+      transcriptPath: transcriptURL.path)
+    XCTAssertTrue(ClaudePromptSource.isNonInteractivePrompt(input))
+  }
+
   func testGenuineTypedPromptIsGated() throws {
     let transcriptURL = temporaryDirectory("claude-transcript-typed")
       .appendingPathComponent("session.jsonl")
@@ -267,13 +320,11 @@ final class ClaudePromptSourceTests: XCTestCase {
       at: transcriptURL.deletingLastPathComponent(),
       withIntermediateDirectories: true
     )
-    let notification = """
-      <task-notification>
-      <task-id>agent-456</task-id>
-      </task-notification>
-      """
+    // A plain-text prompt (no injected wrapper prefix) so the transcript identity check is what
+    // decides the outcome, not the fast path.
+    let recordedPrompt = "Investigate the earlier failure and report back."
     try transcriptEntry(
-      prompt: notification,
+      prompt: recordedPrompt,
       sessionID: "different-session",
       promptID: "different-prompt",
       promptSource: "system",
@@ -282,7 +333,7 @@ final class ClaudePromptSourceTests: XCTestCase {
 
     let input = HookInput(
       hookEventName: "UserPromptSubmit",
-      prompt: notification,
+      prompt: recordedPrompt,
       sessionID: "session-456",
       cwd: "/tmp/project",
       promptID: "prompt-456",
@@ -295,7 +346,7 @@ final class ClaudePromptSourceTests: XCTestCase {
     // Same session and content, but a different promptId, is also an identity mismatch.
     let matchingSessionButDifferentPromptID = HookInput(
       hookEventName: "UserPromptSubmit",
-      prompt: notification,
+      prompt: recordedPrompt,
       sessionID: "different-session",
       cwd: "/tmp/project",
       promptID: "not-the-recorded-prompt-id",

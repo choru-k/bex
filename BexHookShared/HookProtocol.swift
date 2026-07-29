@@ -57,6 +57,24 @@ enum ClaudePromptSource {
   /// toward gating (`false`, "review it") whenever it cannot confidently match this prompt to a
   /// transcript entry, so a read failure or identity mismatch never silently skips a real prompt.
   static func isNonInteractivePrompt(_ input: HookInput) -> Bool {
+    // Fast path — classify by prompt text, no transcript needed. Some machine-injected prompts
+    // (task-notifications especially) fire the hook but are NOT recorded as a matchable
+    // transcript entry in current Claude Code, so the transcript lookup below can never classify
+    // them and would fall through to gating. They always arrive with a recognizable wrapper
+    // prefix, so recognize them directly. A genuine typed prompt never starts with these tags.
+    let trimmed = input.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    let injectedPrefixes = [
+      "<task-notification>",
+      "<command-name>",
+      "<command-message>",
+      "<local-command-stdout>",
+      "<local-command-caveat>",
+      "<system-reminder>",
+    ]
+    if injectedPrefixes.contains(where: { trimmed.hasPrefix($0) }) {
+      return true
+    }
+
     guard let transcriptPath = input.transcriptPath,
       !transcriptPath.isEmpty,
       let transcriptTail = try? readTranscriptTail(at: URL(fileURLWithPath: transcriptPath))
@@ -139,10 +157,24 @@ private struct ClaudeTranscriptEntry: Decodable {
       case content
     }
 
+    private struct Block: Decodable {
+      let type: String?
+      let text: String?
+    }
+
     init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       role = try? container.decode(String.self, forKey: .role)
-      content = try? container.decode(String.self, forKey: .content)
+      // Claude Code stores message content either as a plain string or as an array of blocks;
+      // reconstruct the text of the text blocks so identity matching works in both shapes.
+      if let string = try? container.decode(String.self, forKey: .content) {
+        content = string
+      } else if let blocks = try? container.decode([Block].self, forKey: .content) {
+        let text = blocks.compactMap { $0.type == "text" ? $0.text : nil }.joined()
+        content = text.isEmpty ? nil : text
+      } else {
+        content = nil
+      }
     }
   }
 }
