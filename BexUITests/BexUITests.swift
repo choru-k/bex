@@ -50,7 +50,7 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(corrected.waitForExistence(timeout: 5))
     XCTAssertEqual(corrected.value as? String, "this is a test")
     XCTAssertEqual(
-      app.staticTexts["quick-check-explanation"].value as? String,
+      app.staticTexts["quick-check-grammar-notes"].value as? String,
       "Changed subject-verb agreement."
     )
     let diffElement = app.descendants(matching: .any)["quick-check-diff"]
@@ -69,7 +69,7 @@ final class BexUITests: XCTestCase {
     )
     XCTAssertEqual(XCTWaiter.wait(for: [formalExpectation], timeout: 5), .completed)
     XCTAssertTrue(
-      ((app.staticTexts["quick-check-explanation"].value as? String) ?? "")
+      ((app.staticTexts["quick-check-grammar-notes"].value as? String) ?? "")
         .contains("Rewrite applied: More Formal")
     )
 

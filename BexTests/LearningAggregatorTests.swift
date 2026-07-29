@@ -124,6 +124,51 @@ final class LearningAggregatorTests: XCTestCase {
     XCTAssertEqual(LearningAggregator.parseConsiderSuggestions(from: explanation), [])
   }
 
+  // MARK: - explanationWithoutConsider
+
+  func testExplanationWithoutConsiderReturnsJustFixedSection() {
+    let explanation = """
+      Fixed:
+      [preposition] "arrive to" → "arrive at" — wrong preposition.
+
+      Consider:
+      "I am agree" → "I agree" — more natural.
+      """
+
+    XCTAssertEqual(
+      LearningAggregator.explanationWithoutConsider(from: explanation),
+      "Fixed:\n[preposition] \"arrive to\" → \"arrive at\" — wrong preposition."
+    )
+  }
+
+  func testExplanationWithoutConsiderEmptyWhenConsiderOnly() {
+    let explanation = """
+      Consider:
+      "I am agree" → "I agree" — more natural.
+      """
+
+    XCTAssertEqual(LearningAggregator.explanationWithoutConsider(from: explanation), "")
+  }
+
+  func testExplanationWithoutConsiderReturnsWholeExplanationWhenNoConsiderSection() {
+    let explanation = """
+      Fixed:
+      [plural] "two cat" → "two cats" — plural fix.
+      """
+
+    XCTAssertEqual(
+      LearningAggregator.explanationWithoutConsider(from: explanation),
+      "Fixed:\n[plural] \"two cat\" → \"two cats\" — plural fix."
+    )
+  }
+
+  func testExplanationWithoutConsiderHandlesNoChangesNeeded() {
+    XCTAssertEqual(
+      LearningAggregator.explanationWithoutConsider(from: "No changes needed."),
+      "No changes needed."
+    )
+  }
+
   // MARK: - recurringCounts
 
   func testRecurringCountsBreaksTiesAlphabetically() {

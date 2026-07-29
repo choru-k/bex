@@ -221,6 +221,26 @@ struct PromptGateView: View {
             }
         }
 
+        let betterExpressionSuggestions = LearningAggregator.parseConsiderSuggestions(
+          from: review.explanation
+        )
+        if !betterExpressionSuggestions.isEmpty {
+          VStack(alignment: .leading, spacing: 6) {
+            Label("Better expression", systemImage: "lightbulb")
+              .font(.headline)
+              .accessibilityAddTraits(.isHeader)
+              .accessibilityIdentifier("prompt-gate-better-expression")
+            ForEach(Array(betterExpressionSuggestions.enumerated()), id: \.offset) {
+              index, suggestion in
+              Text("• \(suggestion)")
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("prompt-gate-suggestion-\(index)")
+            }
+          }
+        }
+
         DisclosureGroup(isExpanded: $isOriginalExpanded) {
           Text(review.original)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -235,10 +255,11 @@ struct PromptGateView: View {
             .accessibilityIdentifier("prompt-gate-original-disclosure")
         }
 
-        if !review.explanation.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let grammarNotes = LearningAggregator.explanationWithoutConsider(from: review.explanation)
+        if !grammarNotes.isEmpty {
           DisclosureGroup(isExpanded: $isAINoteExpanded) {
             VStack(alignment: .leading, spacing: 6) {
-              Text(review.explanation)
+              Text(grammarNotes)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .accessibilityIdentifier("prompt-gate-explanation")
@@ -252,7 +273,7 @@ struct PromptGateView: View {
             }
             .padding(.top, 6)
           } label: {
-            Button("AI Note") { isAINoteExpanded.toggle() }
+            Button("Grammar notes") { isAINoteExpanded.toggle() }
               .buttonStyle(.plain)
               .accessibilityIdentifier("prompt-gate-ai-note-disclosure")
           }

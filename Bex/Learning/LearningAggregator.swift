@@ -91,6 +91,23 @@ enum LearningAggregator {
     linesInSection(named: "Consider:", of: explanation)
   }
 
+  /// The explanation text with the "Consider:" section (and its header) removed — i.e. the
+  /// "Fixed:" grammar notes only. Mirrors the case-insensitive header matching used by
+  /// `linesInSection`. Returns the whole explanation, trimmed, when there is no "Consider:"
+  /// header (including "No changes needed.").
+  static func explanationWithoutConsider(from explanation: String) -> String {
+    let lines = explanation.components(separatedBy: .newlines)
+    guard
+      let headerIndex = lines.firstIndex(where: {
+        $0.trimmingCharacters(in: .whitespaces).lowercased() == "consider:"
+      })
+    else {
+      return explanation.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return lines[..<headerIndex].joined(separator: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+  }
+
   /// Counts of each canonical grammar tag across many explanations, sorted by count
   /// descending (ties broken alphabetically by category for stable output).
   static func recurringCounts(explanations: [String]) -> [GrammarCategoryCount] {

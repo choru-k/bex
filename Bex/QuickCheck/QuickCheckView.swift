@@ -404,18 +404,43 @@ struct QuickCheckView: View {
           identifier: "quick-check-corrected",
           secondary: false
         )
-        resultTextSection(
-          title: "Explanation",
-          text: result.explanation,
-          identifier: "quick-check-explanation",
-          secondary: true
-        )
+        betterExpressionSection(for: result.explanation)
+        let grammarNotes = LearningAggregator.explanationWithoutConsider(from: result.explanation)
+        if !grammarNotes.isEmpty {
+          resultTextSection(
+            title: "Grammar notes",
+            text: grammarNotes,
+            identifier: "quick-check-grammar-notes",
+            secondary: true
+          )
+        }
         rewriteRow
         resultActionRow
       }
       .frame(maxWidth: .infinity, alignment: .leading)
       .accessibilityElement(children: .contain)
       .accessibilityLabel("Quick Check result section")
+    }
+  }
+
+  @ViewBuilder
+  private func betterExpressionSection(for explanation: String) -> some View {
+    let suggestions = LearningAggregator.parseConsiderSuggestions(from: explanation)
+    if !suggestions.isEmpty {
+      VStack(alignment: .leading, spacing: 5) {
+        Label("Better expression", systemImage: "lightbulb")
+          .font(.headline)
+          .accessibilityAddTraits(.isHeader)
+          .accessibilityIdentifier("quick-check-better-expression")
+        ForEach(Array(suggestions.enumerated()), id: \.offset) { index, suggestion in
+          Text("• \(suggestion)")
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .accessibilityIdentifier("quick-check-suggestion-\(index)")
+        }
+      }
     }
   }
 
