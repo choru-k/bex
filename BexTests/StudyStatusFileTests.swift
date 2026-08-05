@@ -63,16 +63,20 @@ final class StudyStatusFileTests: XCTestCase {
   }
 
   /// `lastResult` is how the bar shows the outcome of the click it just sent —
-  /// asserted on the encoded bytes for the same reason as `nextCard` above.
+  /// asserted on the encoded bytes for the same reason as `nextCard` above. Field
+  /// names `wasCorrect`/`correctAnswer` are asserted exactly, unchanged, since a shell
+  /// plugin parses them by name.
   func testEncodesLastResultFields() throws {
     let data = try StudyStatusFile.encode(
       StudyStatusFile.Status(
         dueCount: 1, updatedAt: "2026-08-05T09:00:00Z", severity: "normal", nextCard: nil,
-        lastResult: StudyStatusFile.LastResult(wasCorrect: false, correctAnswer: "the")))
+        lastResult: StudyStatusFile.LastResult(
+          wasCorrect: false, correctAnswer: "the", reason: "this is the correct article.")))
     let json = try XCTUnwrap(String(data: data, encoding: .utf8))
     XCTAssertTrue(json.contains("\"lastResult\":{"), json)
     XCTAssertTrue(json.contains("\"wasCorrect\":false"), json)
     XCTAssertTrue(json.contains("\"correctAnswer\":\"the\""), json)
+    XCTAssertTrue(json.contains("\"reason\":\"this is the correct article.\""), json)
   }
 
   /// A plugin distinguishes "no next card" / "no result yet" from a malformed value —
@@ -112,7 +116,8 @@ final class StudyStatusFileTests: XCTestCase {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     let nextCard = StudyStatusFile.NextCard(
       id: "article|a go|the went", prompt: "I need _____ to the store.", choices: ["a", "the"])
-    let lastResult = StudyStatusFile.LastResult(wasCorrect: true, correctAnswer: "the")
+    let lastResult = StudyStatusFile.LastResult(
+      wasCorrect: true, correctAnswer: "the", reason: "this is the correct article.")
     StudyStatusFile.write(
       dueCount: 5, severity: .behind, nextCard: nextCard, lastResult: lastResult, now: now,
       to: fileURL)

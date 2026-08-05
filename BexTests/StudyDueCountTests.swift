@@ -13,6 +13,7 @@ final class StudyDueCountTests: XCTestCase {
       category: "article",
       wrong: "a",
       correct: "the",
+      reason: "reason",
       sentence: "I saw a dog.",
       promptWithBlank: "I saw _____ dog.",
       choices: ["a", "the"],

@@ -21,6 +21,9 @@ enum StudyStatusFile {
   /// `StudyDailyPlan` itself. `choices` is passed through verbatim (same order as
   /// `StudyCard.choices`) because that order is exactly what `bex://answer?index=N`'s
   /// index refers to — see `AppDelegate`'s answer handler.
+  /// Deliberately excludes the card's `reason` (unlike `LastResult` below): this is
+  /// shown BEFORE the owner answers, and the reason explains why the correct choice is
+  /// correct — publishing it here would hand him the answer alongside the question.
   struct NextCard: Codable, Equatable, Sendable {
     let id: String
     let prompt: String
@@ -34,6 +37,13 @@ enum StudyStatusFile {
   struct LastResult: Codable, Equatable, Sendable {
     let wasCorrect: Bool
     let correctAnswer: String
+    /// The answered card's `StudyCard.reason` — the "Fixed:" line's explanation of WHY
+    /// the correction is right, e.g. "this is the correct preposition for this
+    /// meaning", so the bar can show more than a bare verdict. `""` when the source log
+    /// line carried no reason. Field name is new, unlike `wasCorrect`/`correctAnswer`
+    /// (kept exactly as-is — a shell plugin and tests parse those names), so an older
+    /// plugin that ignores unknown JSON keys keeps working unchanged.
+    let reason: String
   }
 
   struct Status: Codable, Equatable, Sendable {

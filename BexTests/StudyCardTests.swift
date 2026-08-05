@@ -56,6 +56,106 @@ final class StudyCardTests: XCTestCase {
     XCTAssertEqual(cards[0].correct, "agreed with")
   }
 
+  // MARK: - Reason parsing
+
+  func testReasonParsedFromEmDashLine() {
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with" — this is the correct preposition for this meaning.
+        """
+    )
+
+    let cards = StudyCardBuilder.cards(from: [sample])
+
+    XCTAssertEqual(cards.first?.reason, "this is the correct preposition for this meaning.")
+  }
+
+  func testReasonParsedFromDoubleHyphenLine() {
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with" -- this is the correct preposition for this meaning.
+        """
+    )
+
+    let cards = StudyCardBuilder.cards(from: [sample])
+
+    XCTAssertEqual(cards.first?.reason, "this is the correct preposition for this meaning.")
+  }
+
+  func testReasonParsedFromPlainHyphenLine() {
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with" - this is the correct preposition for this meaning.
+        """
+    )
+
+    let cards = StudyCardBuilder.cards(from: [sample])
+
+    XCTAssertEqual(cards.first?.reason, "this is the correct preposition for this meaning.")
+  }
+
+  func testLineWithNoReasonYieldsEmptyReasonAndStillProducesACard() {
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with"
+        """
+    )
+
+    let cards = StudyCardBuilder.cards(from: [sample])
+
+    XCTAssertEqual(cards.count, 1)
+    XCTAssertEqual(cards.first?.reason, "")
+  }
+
+  func testReasonIsNotPartOfId() {
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with" — this is the correct preposition for this meaning.
+        """
+    )
+
+    let cards = StudyCardBuilder.cards(from: [sample])
+
+    // Exact id string, deliberately: the reason must never leak into the persisted
+    // key, or a reworded explanation on a later log pass would orphan the owner's
+    // review progress on this card.
+    XCTAssertEqual(cards.first?.id, "preposition|agreed on|agreed with")
+    XCTAssertEqual(cards.first?.reason, "this is the correct preposition for this meaning.")
+  }
+
+  func testReasonWithInternalDashAndQuoteSurvivesIntact() {
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with" — more than one agent needs a plural noun - like "agents".
+        """
+    )
+
+    let cards = StudyCardBuilder.cards(from: [sample])
+
+    XCTAssertEqual(
+      cards.first?.reason,
+      "more than one agent needs a plural noun - like \"agents\"."
+    )
+  }
+
   // MARK: - Stable id
 
   func testStableIdIsPlainComposedString() {

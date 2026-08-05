@@ -696,7 +696,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // result on `self` rather than passing it through means that second, redundant
     // refresh still republishes it instead of overwriting it with `nil`.
     lastStudyResult = StudyStatusFile.LastResult(
-      wasCorrect: wasCorrect, correctAnswer: card.correct)
+      wasCorrect: wasCorrect, correctAnswer: card.correct, reason: card.reason)
     await refreshMenuBarBadge()
   }
 

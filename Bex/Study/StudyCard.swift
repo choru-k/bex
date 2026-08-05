@@ -26,12 +26,22 @@ struct StudyCard: Equatable, Sendable {
   /// already drilled. `category` is included because the same wrong/correct pair
   /// showing up under two different tags is still worth tracking as two cards — the
   /// grammar lesson differs even though the surface text collides.
+  ///
+  /// Deliberately excludes `reason`: the id keys persisted per-card review state
+  /// (box, due date, streak), and a model rewording the same explanation on a later
+  /// log pass must not orphan progress the owner already has on this card.
   let id: String
   /// The canonical `GrammarCategory` raw value (or `"other"` — see `GrammarCategory`
   /// canonicalization), never the raw bracket text from the log line.
   let category: String
   let wrong: String
   let correct: String
+  /// The free-text explanation that followed the `"wrong" → "correct"` pair on the
+  /// "Fixed:" line, e.g. "this is the correct preposition for this meaning" — see
+  /// `StudyCardBuilder.reason(after:)` for the exact separator-stripping rule. Empty
+  /// string (never `nil`) when the line carried no reason, so a reasonless line still
+  /// produces a usable card instead of being dropped.
+  let reason: String
   /// The original text the mistake came from, newlines collapsed to single spaces.
   /// Kept alongside `promptWithBlank` (which may be trimmed) so a UI that wants full
   /// context — e.g. "show me the whole thing" — still has it.
@@ -70,6 +80,7 @@ enum StudyCardBuilder {
     let category: String
     let wrong: String
     let correct: String
+    let reason: String
     let sentence: String
     let promptWithBlank: String
   }
@@ -94,6 +105,7 @@ enum StudyCardBuilder {
         category: base.category,
         wrong: base.wrong,
         correct: base.correct,
+        reason: base.reason,
         sentence: base.sentence,
         promptWithBlank: base.promptWithBlank,
         choices: choices(for: base),
@@ -133,6 +145,7 @@ enum StudyCardBuilder {
         category: parsed.category,
         wrong: parsed.wrong,
         correct: parsed.correct,
+        reason: parsed.reason,
         sentence: built.sentence,
         promptWithBlank: built.promptWithBlank
       )
@@ -243,8 +256,12 @@ enum StudyCardBuilder {
   /// The `"wrong" → "correct"` pair following a (possibly absent) tag prefix.
   /// Mirrors `LearningMetrics.suggestedPhrase`'s arrow/quote handling — same
   /// `→`-then-`->`-fallback arrow lookup, same "quoted text right after" extraction —
-  /// but pulls both sides of the arrow instead of only the suggestion.
-  private static func quotedPair(in text: Substring) -> (wrong: String, correct: String)? {
+  /// but pulls both sides of the arrow instead of only the suggestion. Also returns
+  /// everything after the closing quote of `correct`, unparsed, so the caller can pull
+  /// a trailing reason out of it without this function needing to know that syntax.
+  private static func quotedPair(in text: Substring) -> (
+    wrong: String, correct: String, trailing: Substring
+  )? {
     guard let wrongOpen = text.firstIndex(of: "\"") else { return nil }
     let afterWrongOpen = text[text.index(after: wrongOpen)...]
     guard let wrongClose = afterWrongOpen.firstIndex(of: "\"") else { return nil }
@@ -259,16 +276,38 @@ enum StudyCardBuilder {
     let afterCorrectOpen = afterArrow[afterArrow.index(after: correctOpen)...]
     guard let correctClose = afterCorrectOpen.firstIndex(of: "\"") else { return nil }
     let correct = String(afterCorrectOpen[..<correctClose])
+    let trailing = afterCorrectOpen[afterCorrectOpen.index(after: correctClose)...]
 
-    return (wrong, correct)
+    return (wrong, correct, trailing)
+  }
+
+  /// Strips exactly one leading separator (an em dash `—`, `--`, or a plain `-`) and
+  /// surrounding whitespace from the text after the `correct` quote, e.g.
+  /// ` — this is the correct preposition for this meaning.` becomes
+  /// `"this is the correct preposition for this meaning."`. When `text` carries no
+  /// reason at all (nothing but whitespace, or text with no separator), the trimmed
+  /// text is returned as-is rather than treated as a parse failure — a line with no
+  /// reason must still produce a card, just with `reason == ""`.
+  private static func reason(after text: Substring) -> String {
+    var rest = Substring(String(text).trimmingCharacters(in: .whitespaces))
+    if rest.hasPrefix("—") {
+      rest = rest.dropFirst()
+    } else if rest.hasPrefix("--") {
+      rest = rest.dropFirst(2)
+    } else if rest.hasPrefix("-") {
+      rest = rest.dropFirst()
+    }
+    return String(rest).trimmingCharacters(in: .whitespaces)
   }
 
   private static func parseFixedLine(_ line: String) -> (
-    category: String, wrong: String, correct: String
+    category: String, wrong: String, correct: String, reason: String
   )? {
     let (tag, rest) = leadingTag(in: Substring(line))
     guard let pair = quotedPair(in: rest) else { return nil }
-    return (category: tag, wrong: pair.wrong, correct: pair.correct)
+    return (
+      category: tag, wrong: pair.wrong, correct: pair.correct, reason: reason(after: pair.trailing)
+    )
   }
 
   // MARK: - Cloze construction
