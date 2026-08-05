@@ -636,6 +636,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     coordinator().showStudy()
   }
 
+  /// Handles `bex://study`, the URL an external status bar opens when its Study
+  /// indicator is clicked. A menu-bar app has no other way to be told "open this
+  /// window" from a shell script, and `open -a Bex` alone can only launch the app —
+  /// it cannot say which window to show. Unrecognized hosts are ignored rather than
+  /// treated as an error, so a future `bex://something` never crashes an old build.
+  func application(_ application: NSApplication, open urls: [URL]) {
+    for url in urls where url.scheme?.lowercased() == "bex" {
+      switch url.host?.lowercased() {
+      case "study":
+        coordinator().showStudy()
+      case "learning":
+        coordinator().showLearning()
+      default:
+        continue
+      }
+    }
+  }
+
   /// Observes both `.bexLearningLogDidChange` (posted by `LearningLogStore.append`) and
   /// `.bexStudyStateDidChange` (posted by `StudyStateStore.record`/`reset`) for the
   /// lifetime of the app and recomputes the combined badge whenever either source
@@ -697,6 +715,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     applyMenuBarBadge(StudyDueCount.badge(studyDue: studyDue, learning: learningStatus))
     learningMenuItem?.title = learningStatus.count > 0 ? "Learning (\(learningStatus.count))" : "Learning"
     await studyNotificationScheduler?.reschedule(dueCount: studyDue)
+    // Republish for external status bars (SketchyBar), which is where this count is
+    // actually visible — see `StudyStatusFile`.
+    StudyStatusFile.write(dueCount: studyDue, now: Date())
   }
 
   private func applyMenuBarBadge(_ badge: StudyDueCount.MenuBarBadge) {

@@ -26,6 +26,17 @@
     <string>public.app-category.productivity</string>
     <key>LSMinimumSystemVersion</key>
     <string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>Bex</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>bex</string>
+        </array>
+      </dict>
+    </array>
     <key>LSUIElement</key>
     <true/>
     <key>NSAllowsLocalNetworking</key>
