@@ -19,6 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// see `startMenuBarRefreshTimer()` for why hourly is the right grain.
   private var menuBarRefreshTimer: Timer?
   private var globalHotKey: GlobalHotKey?
+  /// The outcome of the most recent `bex://answer` click, published in the next status
+  /// file write so the bar can show "Correct" / "Wrong, it was X" alongside the new
+  /// card. Lives here (not passed as a one-shot argument) because
+  /// `.bexStudyStateDidChange` triggers its own `refreshMenuBarBadge()` call right
+  /// after the answer handler's — that second call must still see this result rather
+  /// than silently dropping it. Replaced by the next answer; otherwise persists.
+  private var lastStudyResult: StudyStatusFile.LastResult?
   private var shortcutMenuItems: [BexShortcut: [NSMenuItem]] = [:]
   private var shortcutChords: [BexShortcut: KeyChord] = [
     .quickCheck: .defaultQuickCheck,
@@ -636,11 +643,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     coordinator().showStudy()
   }
 
-  /// Handles `bex://study`, the URL an external status bar opens when its Study
-  /// indicator is clicked. A menu-bar app has no other way to be told "open this
-  /// window" from a shell script, and `open -a Bex` alone can only launch the app —
-  /// it cannot say which window to show. Unrecognized hosts are ignored rather than
-  /// treated as an error, so a future `bex://something` never crashes an old build.
+  /// Handles `bex://study`, `bex://learning`, and `bex://answer?index=N` — the URLs an
+  /// external status bar opens from a click. A menu-bar app has no other way to be
+  /// told "open this window" (or "here's an answer") from a shell script, and
+  /// `open -a Bex` alone can only launch the app — it cannot say which window to show
+  /// or carry a payload. Unrecognized hosts are ignored rather than treated as an
+  /// error, so a future `bex://something` never crashes an old build.
   func application(_ application: NSApplication, open urls: [URL]) {
     for url in urls where url.scheme?.lowercased() == "bex" {
       switch url.host?.lowercased() {
@@ -648,10 +656,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         coordinator().showStudy()
       case "learning":
         coordinator().showLearning()
+      case "answer":
+        guard
+          let indexString = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "index" })?.value,
+          let index = Int(indexString)
+        else { continue }
+        Task { [weak self] in
+          await self?.handleAnswer(index: index)
+        }
       default:
         continue
       }
     }
+  }
+
+  /// Resolves the card the bar is CURRENTLY showing and records an answer against it.
+  ///
+  /// The index refers to a position in that card's `choices`, not the card itself —
+  /// deliberately, the URL carries no card id. `StudyCard.id` is
+  /// `"\(category)|\(wrong)|\(correct)"` (see `StudyCard.id`'s doc comment), and a
+  /// `|`-containing id would need percent-encoding through a shell script's URL
+  /// construction to round-trip safely; recomputing "what's next" server-side sidesteps
+  /// that entirely, at the cost of redoing the plan computation once per click, which is
+  /// cheap next to a human clicking a menu bar.
+  private func handleAnswer(index: Int) async {
+    guard let services else { return }
+    let now = Date()
+    let (cards, plan, _) = await studyCardsAndPlan(services: services, now: now)
+    guard
+      let cardID = plan.cardIDs.first,
+      let card = cards.first(where: { $0.id == cardID }),
+      card.choices.indices.contains(index)
+    else { return }
+    let wasCorrect = card.choices[index] == card.correct
+    await services.studyState.record(cardID: card.id, correct: wasCorrect, now: now)
+    // `.bexStudyStateDidChange` (posted by `record` above) will also trigger a
+    // `refreshMenuBarBadge()` via `startObservingMenuBarBadgeSources()` — storing the
+    // result on `self` rather than passing it through means that second, redundant
+    // refresh still republishes it instead of overwriting it with `nil`.
+    lastStudyResult = StudyStatusFile.LastResult(
+      wasCorrect: wasCorrect, correctAnswer: card.correct)
+    await refreshMenuBarBadge()
   }
 
   /// Observes both `.bexLearningLogDidChange` (posted by `LearningLogStore.append`) and
@@ -708,24 +754,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func refreshMenuBarBadge() async {
     guard let services else { return }
     let now = Date()
-    let entries = await services.learningLog.readAll()
-    let samples = LearningLogSamples.parse(entries)
+    let (cards, plan, samples) = await studyCardsAndPlan(services: services, now: now)
 
     let lastViewedAt = await services.preferences.lastLearningViewedAt()
     let learningStatus = LearningBadge.status(samples: samples, lastViewedAt: lastViewedAt)
 
-    let cards = StudyCardBuilder.cards(from: samples)
-    let states = await services.studyState.states()
-    let plan = StudyDailyPlan.plan(cards: cards, states: states, now: now)
     let studyDue = plan.cardIDs.count
     let severity = StudyDueCount.severity(maxOverdueDays: plan.maxOverdueDays)
 
     applyMenuBarBadge(StudyDueCount.badge(studyDue: studyDue, learning: learningStatus))
     learningMenuItem?.title = learningStatus.count > 0 ? "Learning (\(learningStatus.count))" : "Learning"
     await studyNotificationScheduler?.reschedule(dueCount: studyDue)
+
+    let nextCard = plan.cardIDs.first
+      .flatMap { cardID in cards.first(where: { $0.id == cardID }) }
+      .map { card in
+        StudyStatusFile.NextCard(id: card.id, prompt: card.promptWithBlank, choices: card.choices)
+      }
     // Republish for external status bars (SketchyBar), which is where this count is
-    // actually visible — see `StudyStatusFile`.
-    StudyStatusFile.write(dueCount: studyDue, severity: severity, now: now)
+    // actually visible — see `StudyStatusFile`. `lastStudyResult` is read (not
+    // consumed) here so the second, notification-triggered refresh right after an
+    // answer still republishes the same result instead of losing it.
+    StudyStatusFile.write(
+      dueCount: studyDue, severity: severity, nextCard: nextCard, lastResult: lastStudyResult,
+      now: now)
+  }
+
+  /// Builds today's `[StudyCard]` and `StudyDailyPlan.Plan` from the learning log and
+  /// Study review state — the one place this computation happens, so
+  /// `refreshMenuBarBadge()` and the `bex://answer` handler can never disagree about
+  /// which card is "next". Also returns the parsed `[LearningSample]`s, since
+  /// `refreshMenuBarBadge` needs them again for `LearningBadge.status` and re-reading
+  /// the log a second time would risk that second read straddling a day boundary the
+  /// first one didn't.
+  private func studyCardsAndPlan(services: AppServices, now: Date) async -> (
+    cards: [StudyCard], plan: StudyDailyPlan.Plan, samples: [LearningSample]
+  ) {
+    let entries = await services.learningLog.readAll()
+    let samples = LearningLogSamples.parse(entries)
+    let cards = StudyCardBuilder.cards(from: samples)
+    let states = await services.studyState.states()
+    let plan = StudyDailyPlan.plan(cards: cards, states: states, now: now)
+    return (cards, plan, samples)
   }
 
   private func applyMenuBarBadge(_ badge: StudyDueCount.MenuBarBadge) {

@@ -16,6 +16,26 @@ import Foundation
 /// the count is zero — the reader needs "nothing due" stated, not inferred from a missing
 /// file.
 enum StudyStatusFile {
+  /// The card the bar should currently be offering, so a SketchyBar popup can render
+  /// its two choices as clickable rows without ever talking to `StudyCardBuilder` or
+  /// `StudyDailyPlan` itself. `choices` is passed through verbatim (same order as
+  /// `StudyCard.choices`) because that order is exactly what `bex://answer?index=N`'s
+  /// index refers to — see `AppDelegate`'s answer handler.
+  struct NextCard: Codable, Equatable, Sendable {
+    let id: String
+    let prompt: String
+    let choices: [String]
+  }
+
+  /// The outcome of the most recently answered card, so the bar can flash "Correct" /
+  /// "Wrong, it was X" right after a click, even though that click already caused a
+  /// new `nextCard` to be published. Absent until the first answer of the app's
+  /// lifetime; present and unchanging thereafter until the next answer replaces it.
+  struct LastResult: Codable, Equatable, Sendable {
+    let wasCorrect: Bool
+    let correctAnswer: String
+  }
+
   struct Status: Codable, Equatable, Sendable {
     let dueCount: Int
     /// ISO-8601 write time, so a reader can tell a genuine zero from a count left behind
@@ -26,6 +46,16 @@ enum StudyStatusFile {
     /// overdue-days math itself — see `StudyDueCount.severity` for why that escalation
     /// is reserved for `behind`/`late` rather than firing on any non-zero count.
     let severity: String
+    /// The card the bar should show next, or `nil` when nothing is due. `Optional`
+    /// fields are omitted from the JSON entirely when `nil` (Swift's synthesized
+    /// `Codable` uses `encodeIfPresent`/`decodeIfPresent` for `Optional`-typed stored
+    /// properties automatically) so the plugin can distinguish "no card" from a
+    /// malformed one rather than parsing an explicit `null`.
+    let nextCard: NextCard?
+    /// The result of the last `bex://answer` click, or `nil` before any answer has
+    /// been recorded this run. See `nextCard` above for why absence (not `null`)
+    /// is how "nothing to show" is represented.
+    let lastResult: LastResult?
   }
 
   static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
@@ -46,13 +76,17 @@ enum StudyStatusFile {
   static func write(
     dueCount: Int,
     severity: StudyDueCount.StudySeverity,
+    nextCard: NextCard?,
+    lastResult: LastResult?,
     now: Date,
     to url: URL = defaultURL
   ) {
     let status = Status(
       dueCount: dueCount,
       updatedAt: ISO8601DateFormatter().string(from: now),
-      severity: severity.rawValue
+      severity: severity.rawValue,
+      nextCard: nextCard,
+      lastResult: lastResult
     )
     do {
       try FileManager.default.createDirectory(
