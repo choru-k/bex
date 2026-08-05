@@ -53,6 +53,10 @@ struct LearningView: View {
               Text("Shown so a drop in mistakes isn't just shorter, simpler sentences.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+              Text("Sentence-start capitalization is excluded — it's a terminal typing habit, not an English mistake.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .accessibilityIdentifier("learning-capitalization-note")
             }
           }
         }

@@ -205,4 +205,20 @@ final class LearningAggregatorTests: XCTestCase {
   func testRecurringCountsEmptyForEmptyCorpus() {
     XCTAssertEqual(LearningAggregator.recurringCounts(explanations: []), [])
   }
+
+  func testRecurringCountsExcludesCapitalization() {
+    // Capitalization is a terminal typing habit, not an English weakness — it's parsed
+    // (parseFixedTags still returns it) but dropped from the aggregate signal.
+    let explanations = [
+      "Fixed:\n[capitalization] \"fix\" → \"Fix\" — start with a capital letter.",
+      "Fixed:\n[capitalization] \"is\" → \"Is\" — start with a capital letter.",
+      "Fixed:\n[article] \"a\" → \"the\" — reason.",
+    ]
+    XCTAssertEqual(
+      LearningAggregator.parseFixedTags(from: explanations[0]), ["capitalization"])
+    XCTAssertEqual(
+      LearningAggregator.recurringCounts(explanations: explanations),
+      [GrammarCategoryCount(category: "article", count: 1)]
+    )
+  }
 }

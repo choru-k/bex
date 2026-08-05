@@ -110,10 +110,17 @@ enum LearningAggregator {
 
   /// Counts of each canonical grammar tag across many explanations, sorted by count
   /// descending (ties broken alphabetically by category for stable output).
+  ///
+  /// `capitalization` is excluded: in a terminal-prompt corpus it is almost entirely
+  /// sentence-start lowercasing ("fix" → "Fix"), a typing habit rather than an English
+  /// weakness, and at ~60% of all tags it drowns the signal (articles, prepositions,
+  /// word order) the Learning window exists to surface. The raw tag stays in the log and
+  /// in `parseFixedTags`; only these aggregate stats drop it.
+  /// ponytail: whole-category exclusion; add sentence-start-vs-proper-noun detection only if real capitalization errors ever matter here.
   static func recurringCounts(explanations: [String]) -> [GrammarCategoryCount] {
     var counts: [String: Int] = [:]
     for explanation in explanations {
-      for tag in parseFixedTags(from: explanation) {
+      for tag in parseFixedTags(from: explanation) where tag != GrammarCategory.capitalization.rawValue {
         counts[tag, default: 0] += 1
       }
     }
