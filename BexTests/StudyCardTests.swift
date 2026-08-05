@@ -123,6 +123,38 @@ final class StudyCardTests: XCTestCase {
     XCTAssertEqual(StudyCardBuilder.cards(from: [sample]), [])
   }
 
+  func testPunctuationOnlyDifferenceIsFiltered() {
+    // Real example from the log: adding a trailing period teaches nothing about
+    // English, and a forgiving typed-mode comparison couldn't grade it anyway (see
+    // `StudyCardBuilder.isUsableCandidate`).
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "let's talk about this again",
+      explanation: """
+        Fixed:
+        [other] "again" → "again." — end with a period.
+        """
+    )
+
+    XCTAssertEqual(StudyCardBuilder.cards(from: [sample]), [])
+  }
+
+  func testPunctuationAndCapitalizationComboDifferenceIsFiltered() {
+    // "i mean" → "I mean," differs by both case and trailing punctuation — neither
+    // alone would necessarily be caught by a naive check, but the normalized
+    // comparison catches both at once.
+    let sample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "i mean it should be fine",
+      explanation: """
+        Fixed:
+        [other] "i mean" → "I mean," — start with a capital letter and add a comma.
+        """
+    )
+
+    XCTAssertEqual(StudyCardBuilder.cards(from: [sample]), [])
+  }
+
   func testConsiderSectionIgnoredAndNoChangesNeededYieldsNoCards() {
     let noChanges = LearningSample(
       date: Self.isoDate(2024, 1, 1),
@@ -242,6 +274,54 @@ final class StudyCardTests: XCTestCase {
     XCTAssertEqual(first.choices, ["agreed on", "agreed with"])
     XCTAssertFalse(first.choices.contains("waited for"))
     XCTAssertFalse(first.choices.contains("waited on"))
+  }
+
+  // MARK: - Answer mode
+
+  func testShortCorrectAnswerIsTypedMode() {
+    XCTAssertEqual(StudyCardBuilder.answerMode(for: "agreed with"), .typed)
+  }
+
+  func testSevenWordCorrectAnswerIsChoicesMode() {
+    XCTAssertEqual(
+      StudyCardBuilder.answerMode(for: "one two three four five six seven"), .choices)
+  }
+
+  func testExactlyFourWordsIsStillTypedMode() {
+    XCTAssertEqual(StudyCardBuilder.answerMode(for: "one two three four"), .typed)
+  }
+
+  func testFourWordsButOverCharacterBudgetIsChoicesMode() {
+    // 4 words, 43 characters — over `typedMaxCharacters` (40), so this must fall back
+    // to choices despite satisfying the word-count threshold alone.
+    let correct = "aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd"
+    XCTAssertEqual(correct.count, 43)
+    XCTAssertEqual(StudyCardBuilder.answerMode(for: correct), .choices)
+  }
+
+  func testCardBuiltEndToEndCarriesAnswerMode() {
+    let typedSample = LearningSample(
+      date: Self.isoDate(2024, 1, 1),
+      original: "I agreed on the terms yesterday",
+      explanation: """
+        Fixed:
+        [preposition] "agreed on" → "agreed with" — reason.
+        """
+    )
+    let choicesSample = LearningSample(
+      date: Self.isoDate(2024, 1, 2),
+      original: "please update the plan document sometime soon so we can proceed",
+      explanation: """
+        Fixed:
+        [other] "update the plan document sometime soon" → "please update the plan document at your earliest convenience" — too casual.
+        """
+    )
+
+    let typedCards = StudyCardBuilder.cards(from: [typedSample])
+    let choicesCards = StudyCardBuilder.cards(from: [choicesSample])
+
+    XCTAssertEqual(typedCards.first?.answerMode, .typed)
+    XCTAssertEqual(choicesCards.first?.answerMode, .choices)
   }
 
   // MARK: - Dedup by id

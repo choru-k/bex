@@ -6,6 +6,11 @@ import SwiftUI
 /// naming convention of `"study-*"` mirroring `"learning-*"`).
 struct StudyView: View {
   @ObservedObject var viewModel: StudyViewModel
+  /// Autofocuses the typed-answer field the moment a `.typed` card appears (see
+  /// `drill(for:)`'s `.onChange(of:)` below) so the owner can start typing immediately
+  /// — no click required. That's the whole point of typed mode for someone who lives
+  /// in a terminal all day.
+  @FocusState private var answerFieldFocused: Bool
 
   var body: some View {
     content
@@ -47,18 +52,19 @@ struct StudyView: View {
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("study-prompt")
 
-      VStack(alignment: .leading, spacing: 8) {
-        ForEach(Array(viewModel.choices.enumerated()), id: \.offset) { index, choice in
-          choiceButton(choice: choice, index: index, card: card)
+      if card.answerMode == .typed {
+        typedAnswerField(card: card)
+      } else {
+        VStack(alignment: .leading, spacing: 8) {
+          ForEach(Array(viewModel.choices.enumerated()), id: \.offset) { index, choice in
+            choiceButton(choice: choice, index: index, card: card)
+          }
         }
       }
       // The owner works in a terminal all day; a drill he can only answer by reaching
-      // for the mouse is a drill he will stop doing. 1-4 answer, Return advances.
-      Text(
-        viewModel.choices.count > 1
-          ? "Press 1-\(viewModel.choices.count) to answer, Return for the next card."
-          : "Return for the next card."
-      )
+      // for the mouse (or, for typed cards, that doesn't already have the cursor in the
+      // field) is a drill he will stop doing.
+      Text(keyHint(card: card))
         .font(.caption)
         .foregroundStyle(.tertiary)
         .accessibilityIdentifier("study-key-hint")
@@ -76,6 +82,45 @@ struct StudyView: View {
     }
     .padding(24)
     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    // Focus the typed-answer field the instant a new card is presented (including the
+    // very first one) so typing can start with no click. Keyed on `card.id` rather than
+    // a plain `.onAppear` because `drill(for:)` is re-invoked for every card without the
+    // enclosing view actually disappearing and reappearing.
+    .onChange(of: card.id) { _ in
+      answerFieldFocused = card.answerMode == .typed
+    }
+    .onAppear {
+      answerFieldFocused = card.answerMode == .typed
+    }
+  }
+
+  private func typedAnswerField(card: StudyCard) -> some View {
+    TextField("Type the correction…", text: $viewModel.typedAnswer)
+      .textFieldStyle(.roundedBorder)
+      .font(.title3)
+      .disabled(viewModel.answerRevealed)
+      .focused($answerFieldFocused)
+      .onSubmit {
+        Task { await viewModel.submitTypedAnswer() }
+      }
+      .accessibilityIdentifier("study-answer-field")
+  }
+
+  /// Per-mode key hint, and per-reveal-state within typed mode: before an answer is
+  /// submitted, Return checks it; after, Return is bound to "Next" instead (via
+  /// `.keyboardShortcut(.defaultAction)` on that button), so the same key never both
+  /// submits and advances in one press.
+  private func keyHint(card: StudyCard) -> String {
+    switch card.answerMode {
+    case .typed:
+      return viewModel.answerRevealed
+        ? "Return for the next card."
+        : "Type your answer, Return to check."
+    case .choices:
+      return viewModel.choices.count > 1
+        ? "Press 1-\(viewModel.choices.count) to answer, Return for the next card."
+        : "Return for the next card."
+    }
   }
 
   @ViewBuilder
@@ -128,18 +173,28 @@ struct StudyView: View {
     return AnyShapeStyle(.quaternary)
   }
 
-  /// Shows correct/incorrect for the choice just tapped, plus the original mistake
-  /// (`card.wrong`) as context — that's what the user actually wrote back when this
-  /// correction was logged, regardless of which choice they picked in the drill.
+  /// Shows correct/incorrect, plus context on what the user actually wrote. Reads
+  /// `viewModel.lastAnswerWasCorrect` rather than re-deriving correctness here — for
+  /// choice cards that could still be `selectedChoice == card.correct`, but typed cards
+  /// have no such equality to reuse (they're graded through `StudyAnswerCheck`), so both
+  /// modes read the one flag the view model already computed.
   private func feedback(for card: StudyCard) -> some View {
-    let isCorrect = viewModel.selectedChoice == card.correct
+    let isCorrect = viewModel.lastAnswerWasCorrect
     return VStack(alignment: .leading, spacing: 4) {
       Text(isCorrect ? "Correct!" : "Not quite — the answer is \"\(card.correct)\".")
         .font(.subheadline.weight(.semibold))
         .foregroundStyle(isCorrect ? .green : .red)
-      Text("You wrote: \(card.wrong)")
-        .font(.caption)
-        .foregroundStyle(.secondary)
+      if card.answerMode == .typed {
+        if !isCorrect {
+          Text("You typed: \(viewModel.typedAnswer)")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+      } else {
+        Text("You wrote: \(card.wrong)")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+      }
     }
     .accessibilityIdentifier("study-feedback")
   }

@@ -28,6 +28,16 @@ final class StudyViewModel: ObservableObject {
   @Published private(set) var choices: [String] = []
   @Published private(set) var selectedChoice: String?
   @Published private(set) var answerRevealed = false
+  /// Whether the just-graded answer was correct — the single source of truth the view
+  /// reads for feedback in BOTH modes. Choice cards could infer this by comparing
+  /// `selectedChoice` to `card.correct`, but typed cards have no such comparison to
+  /// reuse (typed answers are graded through `StudyAnswerCheck`, not exact equality),
+  /// so this flag exists once, set by the shared grading tail, instead of every call
+  /// site re-deriving it its own way.
+  @Published private(set) var lastAnswerWasCorrect = false
+  /// The `TextField` binding for `.typed` cards. Settable (unlike everything else here)
+  /// because SwiftUI needs a two-way binding for text input.
+  @Published var typedAnswer: String = ""
   /// Total cards currently due, uncapped — used to tell "nothing due" apart from "due,
   /// but this session only pulled in `sessionCap` of them".
   @Published private(set) var dueCount = 0
@@ -99,9 +109,28 @@ final class StudyViewModel: ObservableObject {
   func select(_ choice: String) async {
     guard let currentCard, !answerRevealed else { return }
     selectedChoice = choice
+    await finishGrading(correct: choice == currentCard.correct, cardID: currentCard.id)
+  }
+
+  /// Grades `typedAnswer` for `.typed` cards via `StudyAnswerCheck.matches` and follows
+  /// the same reveal/persist/count path `select(_:)` uses. A no-op when the answer is
+  /// already revealed (matches `select`'s double-submit guard) or when `typedAnswer` is
+  /// blank after trimming — otherwise a stray Return in an empty field would grade and
+  /// advance past a card the user never actually answered.
+  func submitTypedAnswer() async {
+    guard let currentCard, !answerRevealed else { return }
+    guard !typedAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let correct = StudyAnswerCheck.matches(typed: typedAnswer, correct: currentCard.correct)
+    await finishGrading(correct: correct, cardID: currentCard.id)
+  }
+
+  /// Shared grading tail for both `select(_:)` and `submitTypedAnswer()`: reveal,
+  /// persist through `studyState.record(...)`, bump the session's completed count, and
+  /// update the single `lastAnswerWasCorrect` flag the view reads for feedback.
+  private func finishGrading(correct: Bool, cardID: String) async {
+    lastAnswerWasCorrect = correct
     answerRevealed = true
-    let correct = choice == currentCard.correct
-    await studyState.record(cardID: currentCard.id, correct: correct, now: now())
+    await studyState.record(cardID: cardID, correct: correct, now: now())
     completedCount += 1
   }
 
@@ -117,6 +146,7 @@ final class StudyViewModel: ObservableObject {
       choices = []
       selectedChoice = nil
       answerRevealed = false
+      typedAnswer = ""
       return
     }
     let card = sessionQueue.removeFirst()
@@ -127,5 +157,6 @@ final class StudyViewModel: ObservableObject {
     choices = card.choices.shuffled()
     selectedChoice = nil
     answerRevealed = false
+    typedAnswer = ""
   }
 }

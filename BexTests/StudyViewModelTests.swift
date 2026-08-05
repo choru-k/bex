@@ -126,6 +126,89 @@ final class StudyViewModelTests: XCTestCase {
     XCTAssertEqual(states[id]?.dueAt, fixedNow.addingTimeInterval(86_400))
   }
 
+  func testSubmittingCorrectTypedAnswerRevealsAnswerAndPersistsPromotion() async {
+    let (learningLog, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+    let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    await viewModel.load()
+    XCTAssertEqual(viewModel.currentCard?.answerMode, .typed)
+
+    let id = cardID(wrong: "on", correct: "in")
+    viewModel.typedAnswer = " In. "
+    await viewModel.submitTypedAnswer()
+
+    XCTAssertTrue(viewModel.answerRevealed)
+    XCTAssertTrue(viewModel.lastAnswerWasCorrect)
+    XCTAssertEqual(viewModel.completedCount, 1)
+
+    let states = await studyState.states()
+    XCTAssertEqual(states[id]?.box, 1)
+    XCTAssertEqual(states[id]?.timesCorrect, 1)
+  }
+
+  func testSubmittingWrongTypedAnswerRevealsAndPersistsResetToBoxZero() async throws {
+    let (learningLog, studyState, directory, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+    let id = cardID(wrong: "on", correct: "in")
+
+    let farPast = Date(timeIntervalSince1970: 0)
+    let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+    try seedState(
+      directory: directory,
+      states: [id: StudyReviewState(box: 2, dueAt: farPast, timesSeen: 2, timesCorrect: 2)]
+    )
+
+    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    await viewModel.load()
+
+    viewModel.typedAnswer = "on"
+    await viewModel.submitTypedAnswer()
+
+    XCTAssertTrue(viewModel.answerRevealed)
+    XCTAssertFalse(viewModel.lastAnswerWasCorrect)
+    let states = await studyState.states()
+    XCTAssertEqual(states[id]?.box, 0)
+    XCTAssertEqual(states[id]?.dueAt, fixedNow.addingTimeInterval(86_400))
+  }
+
+  func testBlankTypedSubmitIsNoOp() async {
+    let (learningLog, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+
+    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    await viewModel.load()
+
+    viewModel.typedAnswer = "   "
+    await viewModel.submitTypedAnswer()
+
+    XCTAssertFalse(viewModel.answerRevealed)
+    XCTAssertEqual(viewModel.completedCount, 0)
+    let states = await studyState.states()
+    XCTAssertTrue(states.isEmpty)
+  }
+
+  func testTypedAnswerClearsBetweenCards() async {
+    let (learningLog, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+    await appendEntry(to: learningLog, wrong: "at", correct: "to")
+
+    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    await viewModel.load()
+
+    viewModel.typedAnswer = "in"
+    await viewModel.submitTypedAnswer()
+    XCTAssertFalse(viewModel.typedAnswer.isEmpty)
+
+    viewModel.advance()
+
+    XCTAssertEqual(viewModel.typedAnswer, "")
+  }
+
   func testAdvanceMovesToNextCardAndEventuallyFinishes() async {
     let (learningLog, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }

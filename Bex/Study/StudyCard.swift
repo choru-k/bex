@@ -1,5 +1,15 @@
 import Foundation
 
+/// How a drill card is answered. Decided once, at build time, from the shape of the
+/// correct answer (see `StudyCardBuilder.answerMode(for:)`) — never re-derived in the
+/// UI, so the view and the view model agree on it for free.
+enum StudyAnswerMode: String, Codable, Equatable, Sendable {
+  /// Free-text entry, graded by `StudyAnswerCheck`. Real recall instead of a 50/50 pick.
+  case typed
+  /// Today's two-button pick, kept for corrections too long to type comfortably.
+  case choices
+}
+
 /// One spaced-repetition drill built from a single past "Fixed:" correction in the
 /// learning log. Pure data — no scheduling, no persistence, no UI; `StudyCardBuilder`
 /// below is the only thing that constructs these, and it never touches the clock, RNG,
@@ -33,7 +43,13 @@ struct StudyCard: Equatable, Sendable {
   /// Always contains `correct` and `wrong`, plus up to two same-category distractors.
   /// Sorted alphabetically (case-insensitive) for a deterministic order — see
   /// `StudyCardBuilder.choices(for:among:)` for why shuffling does not belong here.
+  /// Populated regardless of `answerMode`: a `.typed` card still needs `wrong`/
+  /// `correct` available for feedback, and a future "reveal the options after a failed
+  /// attempt" needs no data change to build on top of this.
   let choices: [String]
+  /// Whether this card is a typed free-response drill or today's two-choice pick — see
+  /// `StudyCardBuilder.answerMode(for:)` for the thresholds that decide it.
+  let answerMode: StudyAnswerMode
 
   /// Friendly label for the drill UI, reusing `GrammarCategory`'s mapping so this
   /// stays in sync with the Learning window's category names for free.
@@ -80,9 +96,26 @@ enum StudyCardBuilder {
         correct: base.correct,
         sentence: base.sentence,
         promptWithBlank: base.promptWithBlank,
-        choices: choices(for: base)
+        choices: choices(for: base),
+        answerMode: answerMode(for: base.correct)
       )
     }
+  }
+
+  /// A correct answer short enough to type is worth typing — real recall beats a
+  /// 50/50 pick. Measured on the owner's real 136-card deck: an answer of at most
+  /// `typedMaxWords` words covers 104 of 136 cards (76%), so most drills exercise
+  /// actual recall, while the long tail (up to 17 words) stays a 2-choice pick rather
+  /// than a tedious transcription exercise. `typedMaxCharacters` guards against a
+  /// short-word-count answer that's still long to type (e.g. dense compound phrasing).
+  /// Both thresholds are named constants so they're tunable in one place.
+  static let typedMaxWords = 4
+  static let typedMaxCharacters = 40
+
+  static func answerMode(for correct: String) -> StudyAnswerMode {
+    let wordCount = correct.split(whereSeparator: \.isWhitespace).count
+    guard wordCount <= typedMaxWords, correct.count <= typedMaxCharacters else { return .choices }
+    return .typed
   }
 
   // MARK: - Per-sample candidate extraction
@@ -116,11 +149,26 @@ enum StudyCardBuilder {
   /// mis-tagged `[other]` rather than `[capitalization]`. Filtering by tag alone
   /// (`category != capitalization`) would miss those, so the case-insensitive string
   /// comparison runs regardless of what tag the line carries.
+  ///
+  /// The `StudyAnswerCheck.normalize` filter below catches a different, broader class:
+  /// punctuation/format-only diffs. On the same real 136-card deck, 10 cards differ
+  /// ONLY by trailing punctuation (`"again"` → `"again."`, `"status"` → `"status."`,
+  /// `"links"` → `"links?"`, `"i mean"` → `"I mean,"`). These are dropped for two
+  /// independent reasons: (a) they teach nothing about English — the same noise class
+  /// as the sentence-start capitalization filtered above; (b) typed mode cannot grade
+  /// them at all, because a forgiving comparison (trim/collapse-whitespace/lowercase/
+  /// strip-edge-punctuation) would accept the wrong answer as correct by construction —
+  /// there'd be nothing left to distinguish them. The explicit case-only check above
+  /// stays even though this normalized check subsumes it, for clarity about exactly
+  /// which real-world case it exists to catch.
   static func isUsableCandidate(wrong: String, correct: String, category: String) -> Bool {
     guard !wrong.isEmpty, !correct.isEmpty else { return false }
     guard wrong != correct else { return false }
     guard wrong.lowercased() != correct.lowercased() else { return false }
     guard category != GrammarCategory.capitalization.rawValue else { return false }
+    guard StudyAnswerCheck.normalize(wrong) != StudyAnswerCheck.normalize(correct) else {
+      return false
+    }
     return true
   }
 
