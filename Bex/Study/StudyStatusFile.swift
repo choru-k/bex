@@ -21,6 +21,11 @@ enum StudyStatusFile {
     /// ISO-8601 write time, so a reader can tell a genuine zero from a count left behind
     /// by a Bex that hasn't run in days.
     let updatedAt: String
+    /// `StudyDueCount.StudySeverity`'s raw value, so a SketchyBar plugin can color the
+    /// indicator (e.g. yellow/red) once genuinely behind, without reimplementing the
+    /// overdue-days math itself — see `StudyDueCount.severity` for why that escalation
+    /// is reserved for `behind`/`late` rather than firing on any non-zero count.
+    let severity: String
   }
 
   static let defaultURL = FileManager.default.homeDirectoryForCurrentUser
@@ -38,10 +43,16 @@ enum StudyStatusFile {
   /// Best-effort publish, matching `LearningLogStore.append`'s posture: a status file
   /// that fails to write must never disturb the app. Owner-only (0o600) like the rest of
   /// Bex's on-disk learning data; the reader runs as the same user.
-  static func write(dueCount: Int, now: Date, to url: URL = defaultURL) {
+  static func write(
+    dueCount: Int,
+    severity: StudyDueCount.StudySeverity,
+    now: Date,
+    to url: URL = defaultURL
+  ) {
     let status = Status(
       dueCount: dueCount,
-      updatedAt: ISO8601DateFormatter().string(from: now)
+      updatedAt: ISO8601DateFormatter().string(from: now),
+      severity: severity.rawValue
     )
     do {
       try FileManager.default.createDirectory(

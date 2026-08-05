@@ -283,18 +283,55 @@ final class StudyViewModelTests: XCTestCase {
     XCTAssertTrue(viewModel.isFinished)
   }
 
-  func testSessionCapRespectedWhenMoreCardsAreDue() async {
+  /// `StudyDailyPlan` always includes every due review (unlike new intake, which it
+  /// caps at `StudyDailyPlan.dailyNewCardLimit` per day), so a big backlog of cards
+  /// already in rotation is exactly the scenario `sessionCap` exists to bound: this
+  /// seeds 25 already-in-rotation, already-due cards (not new ones) so `dueCount`
+  /// reflects the full backlog while `sessionTotal` still gets truncated to
+  /// `sessionCap` for one sitting.
+  func testSessionCapRespectedWhenMoreDueReviewsThanCap() async throws {
+    let (learningLog, studyState, directory, cleanUp) = makeStores()
+    defer { cleanUp() }
+    let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
+    var states: [String: StudyReviewState] = [:]
+    for index in 0..<25 {
+      await appendEntry(to: learningLog, wrong: "wrong\(index)", correct: "correct\(index)")
+      let id = cardID(wrong: "wrong\(index)", correct: "correct\(index)")
+      states[id] = StudyReviewState(
+        box: 1,
+        dueAt: fixedNow.addingTimeInterval(-86_400),
+        timesSeen: 1,
+        timesCorrect: 1,
+        firstSeenAt: fixedNow.addingTimeInterval(-86_400 * 30)
+      )
+    }
+    try seedState(directory: directory, states: states)
+
+    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    await viewModel.load()
+
+    XCTAssertEqual(viewModel.dueCount, 25)
+    XCTAssertEqual(viewModel.sessionTotal, StudyViewModel.sessionCap)
+    XCTAssertEqual(viewModel.sessionTotal, 20)
+  }
+
+  /// THE headline behaviour this whole change exists for: a cold-start deck (here, 30
+  /// never-studied cards — standing in for the owner's real 120) must not dump its
+  /// entire size on one session. Today's plan caps new intake at
+  /// `StudyDailyPlan.dailyNewCardLimit`, so the session — and the badge/notification
+  /// count behind it — reads as a small, clearable 10, not an overwhelming 30.
+  func testColdStartSessionCapsNewCardsAtDailyLimitNotWholeDeck() async {
     let (learningLog, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
-    for index in 0..<25 {
+    for index in 0..<30 {
       await appendEntry(to: learningLog, wrong: "wrong\(index)", correct: "correct\(index)")
     }
 
     let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
     await viewModel.load()
 
-    XCTAssertEqual(viewModel.dueCount, 25)
-    XCTAssertEqual(viewModel.sessionTotal, StudyViewModel.sessionCap)
-    XCTAssertEqual(viewModel.sessionTotal, 20)
+    XCTAssertEqual(viewModel.dueCount, StudyDailyPlan.dailyNewCardLimit)
+    XCTAssertEqual(viewModel.sessionTotal, StudyDailyPlan.dailyNewCardLimit)
+    XCTAssertEqual(viewModel.sessionTotal, 10)
   }
 }

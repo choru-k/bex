@@ -117,6 +117,38 @@ final class StudySchedulerTests: XCTestCase {
     XCTAssertEqual(result.timesCorrect, 2)
   }
 
+  // MARK: - advance: firstSeenAt
+
+  func testAdvanceFromNilSetsFirstSeenAtToNow() {
+    let result = StudyScheduler.advance(nil, correct: true, now: fixedNow)
+    assertDates(result.firstSeenAt!, fixedNow)
+  }
+
+  func testAdvancePreservesExistingFirstSeenAtOnLaterAnswers() {
+    let originalFirstSeen = fixedNow.addingTimeInterval(-30 * dayInSeconds)
+    let existing = StudyReviewState(
+      box: 1, dueAt: fixedNow, timesSeen: 2, timesCorrect: 1, firstSeenAt: originalFirstSeen)
+
+    let result = StudyScheduler.advance(existing, correct: true, now: fixedNow)
+
+    assertDates(result.firstSeenAt!, originalFirstSeen)
+  }
+
+  /// A legacy state persisted before `firstSeenAt` existed decodes with `nil`. This
+  /// card is already in rotation (it has a real box/dueAt/history) — it was never
+  /// "new" to begin with, so answering it again must not retroactively stamp `now` as
+  /// though it just entered rotation today. That would wrongly make an
+  /// already-established card count against `StudyDailyPlan`'s "introduced today"
+  /// budget the moment it happens to be reviewed. `nil` stays `nil`.
+  func testAdvanceFromLegacyStateWithNilFirstSeenAtLeavesItNil() {
+    let legacy = StudyReviewState(
+      box: 1, dueAt: fixedNow, timesSeen: 2, timesCorrect: 1, firstSeenAt: nil)
+
+    let result = StudyScheduler.advance(legacy, correct: true, now: fixedNow)
+
+    XCTAssertNil(result.firstSeenAt)
+  }
+
   // MARK: - dueCards
 
   func testDueCardsPreservesInputOrderAndFiltersNonDue() {

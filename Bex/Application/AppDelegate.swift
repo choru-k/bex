@@ -696,12 +696,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   /// Reloads the learning log and Study review state, recomputes both
-  /// `LearningBadge.status` and `StudyDueCount`, applies whichever wins the single
-  /// menu-bar badge slot (`StudyDueCount.badge`), and reschedules the daily reminder
-  /// notification to match. Safe to call anytime after `installStatusItem`; a nil
-  /// `services` (shouldn't happen post-launch) is a no-op.
+  /// `LearningBadge.status` and today's `StudyDailyPlan`, applies whichever wins the
+  /// single menu-bar badge slot (`StudyDueCount.badge`), and reschedules the daily
+  /// reminder notification to match. Safe to call anytime after `installStatusItem`; a
+  /// nil `services` (shouldn't happen post-launch) is a no-op.
+  ///
+  /// The plan is computed exactly once and its `cardIDs.count`/`maxOverdueDays` feed
+  /// every downstream consumer (badge, notification, status file) — computing it twice
+  /// would risk two calls straddling a moment where "now" ticks into a new day and
+  /// disagreeing about today's new-card intake.
   private func refreshMenuBarBadge() async {
     guard let services else { return }
+    let now = Date()
     let entries = await services.learningLog.readAll()
     let samples = LearningLogSamples.parse(entries)
 
@@ -710,14 +716,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let cards = StudyCardBuilder.cards(from: samples)
     let states = await services.studyState.states()
-    let studyDue = StudyDueCount.count(cards: cards, states: states, now: Date())
+    let plan = StudyDailyPlan.plan(cards: cards, states: states, now: now)
+    let studyDue = plan.cardIDs.count
+    let severity = StudyDueCount.severity(maxOverdueDays: plan.maxOverdueDays)
 
     applyMenuBarBadge(StudyDueCount.badge(studyDue: studyDue, learning: learningStatus))
     learningMenuItem?.title = learningStatus.count > 0 ? "Learning (\(learningStatus.count))" : "Learning"
     await studyNotificationScheduler?.reschedule(dueCount: studyDue)
     // Republish for external status bars (SketchyBar), which is where this count is
     // actually visible — see `StudyStatusFile`.
-    StudyStatusFile.write(dueCount: studyDue, now: Date())
+    StudyStatusFile.write(dueCount: studyDue, severity: severity, now: now)
   }
 
   private func applyMenuBarBadge(_ badge: StudyDueCount.MenuBarBadge) {

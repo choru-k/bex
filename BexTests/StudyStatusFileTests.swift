@@ -25,20 +25,30 @@ final class StudyStatusFileTests: XCTestCase {
   /// breaks here rather than silently breaking the SketchyBar plugin.
   func testEncodesDueCountFieldExternalReadersParse() throws {
     let data = try StudyStatusFile.encode(
-      StudyStatusFile.Status(dueCount: 7, updatedAt: "2026-08-05T09:00:00Z"))
+      StudyStatusFile.Status(dueCount: 7, updatedAt: "2026-08-05T09:00:00Z", severity: "normal"))
     let json = try XCTUnwrap(String(data: data, encoding: .utf8))
     XCTAssertTrue(json.contains("\"dueCount\":7"), json)
     XCTAssertTrue(json.contains("\"updatedAt\":\"2026-08-05T09:00:00Z\""), json)
   }
 
+  /// A SketchyBar plugin wanting to color the indicator needs `severity` alongside
+  /// `dueCount` — asserted on the encoded bytes for the same reason as `dueCount` above.
+  func testEncodesSeverityFieldExternalReadersParse() throws {
+    let data = try StudyStatusFile.encode(
+      StudyStatusFile.Status(dueCount: 7, updatedAt: "2026-08-05T09:00:00Z", severity: "late"))
+    let json = try XCTUnwrap(String(data: data, encoding: .utf8))
+    XCTAssertTrue(json.contains("\"severity\":\"late\""), json)
+  }
+
   func testWriteRoundTripsAndIsOwnerOnly() throws {
     let now = Date(timeIntervalSince1970: 1_700_000_000)
-    StudyStatusFile.write(dueCount: 12, now: now, to: fileURL)
+    StudyStatusFile.write(dueCount: 12, severity: .normal, now: now, to: fileURL)
 
     let decoded = try JSONDecoder().decode(
       StudyStatusFile.Status.self, from: try Data(contentsOf: fileURL))
     XCTAssertEqual(decoded.dueCount, 12)
     XCTAssertFalse(decoded.updatedAt.isEmpty)
+    XCTAssertEqual(decoded.severity, "normal")
 
     let mode = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.posixPermissions]
       as? NSNumber
@@ -48,7 +58,7 @@ final class StudyStatusFileTests: XCTestCase {
   /// Zero must be published, not represented by an absent file — the reader needs
   /// "nothing due" stated so it can hide its indicator.
   func testZeroDueCountIsWrittenExplicitly() throws {
-    StudyStatusFile.write(dueCount: 0, now: Date(timeIntervalSince1970: 1), to: fileURL)
+    StudyStatusFile.write(dueCount: 0, severity: .normal, now: Date(timeIntervalSince1970: 1), to: fileURL)
     let decoded = try JSONDecoder().decode(
       StudyStatusFile.Status.self, from: try Data(contentsOf: fileURL))
     XCTAssertEqual(decoded.dueCount, 0)
@@ -56,7 +66,8 @@ final class StudyStatusFileTests: XCTestCase {
 
   func testWriteCreatesMissingParentDirectory() throws {
     let nested = directory.appendingPathComponent("a/b/study-status.json")
-    StudyStatusFile.write(dueCount: 3, now: Date(timeIntervalSince1970: 1), to: nested)
+    StudyStatusFile.write(
+      dueCount: 3, severity: .normal, now: Date(timeIntervalSince1970: 1), to: nested)
     XCTAssertTrue(FileManager.default.fileExists(atPath: nested.path))
   }
 
@@ -64,7 +75,7 @@ final class StudyStatusFileTests: XCTestCase {
   /// publishing a status file can't be allowed to disturb the app.
   func testUnwritableDestinationIsSilentlyIgnored() {
     StudyStatusFile.write(
-      dueCount: 1, now: Date(timeIntervalSince1970: 1),
+      dueCount: 1, severity: .normal, now: Date(timeIntervalSince1970: 1),
       to: URL(fileURLWithPath: "/System/nope/study-status.json"))
   }
 }

@@ -10,6 +10,14 @@ struct StudyReviewState: Codable, Equatable, Sendable {
   var dueAt: Date
   var timesSeen: Int
   var timesCorrect: Int
+  /// When this card was first ever answered — i.e. when it left the "new" pool and
+  /// entered rotation (see `StudyDailyPlan`, which uses this to cap how many new cards
+  /// are introduced on any one calendar day). `Optional` rather than defaulted, and
+  /// deliberately NOT backfilled for existing state: any `study-state.json` written
+  /// before this field existed must still decode, and a `nil` here correctly means
+  /// "we don't know when this card entered rotation" — `StudyDailyPlan` treats that as
+  /// not counting toward today's intake rather than guessing a date.
+  var firstSeenAt: Date?
 }
 
 /// Pure Leitner-box scheduling for Study Mode drills built from the user's own logged
@@ -59,6 +67,20 @@ enum StudyScheduler {
     let currentBox = state?.box ?? 0
     let timesSeen = (state?.timesSeen ?? 0) + 1
     let timesCorrect = (state?.timesCorrect ?? 0) + (correct ? 1 : 0)
+    // `nil` state means this is the card's first-ever answer, so it's entering
+    // rotation right now — stamp `now`. A non-nil `state` means the card is already in
+    // rotation, so its `firstSeenAt` (whatever it is, INCLUDING `nil` for a legacy
+    // state written before this field existed) is preserved as-is — deliberately not
+    // `state?.firstSeenAt ?? now`, which would flatten a legacy `nil` into `now` on
+    // this answer and wrongly make an already-in-rotation card look "introduced today"
+    // to `StudyDailyPlan`, eating into that day's new-card budget for a card that was
+    // never new to begin with.
+    let firstSeenAt: Date?
+    if let state {
+      firstSeenAt = state.firstSeenAt
+    } else {
+      firstSeenAt = now
+    }
 
     let newBox = correct ? min(currentBox + 1, intervalDays.count - 1) : 0
     let dueAt = now.addingTimeInterval(interval(forBox: newBox))
@@ -67,7 +89,8 @@ enum StudyScheduler {
       box: newBox,
       dueAt: dueAt,
       timesSeen: timesSeen,
-      timesCorrect: timesCorrect
+      timesCorrect: timesCorrect,
+      firstSeenAt: firstSeenAt
     )
   }
 

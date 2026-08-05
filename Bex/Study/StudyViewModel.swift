@@ -38,8 +38,9 @@ final class StudyViewModel: ObservableObject {
   /// The `TextField` binding for `.typed` cards. Settable (unlike everything else here)
   /// because SwiftUI needs a two-way binding for text input.
   @Published var typedAnswer: String = ""
-  /// Total cards currently due, uncapped — used to tell "nothing due" apart from "due,
-  /// but this session only pulled in `sessionCap` of them".
+  /// Today's actionable workload from `StudyDailyPlan.plan` (due reviews plus today's
+  /// capped new intake — see that type) — used to tell "nothing to study" apart from
+  /// "there's a plan, but this session only pulled in `sessionCap` of it".
   @Published private(set) var dueCount = 0
   /// Number of cards answered so far this session.
   @Published private(set) var completedCount = 0
@@ -90,10 +91,10 @@ final class StudyViewModel: ObservableObject {
     let cardsByID = Dictionary(cards.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
     let states = await studyState.states()
-    let dueIDs = StudyScheduler.dueCards(ids: cards.map(\.id), states: states, now: now())
-    dueCount = dueIDs.count
+    let planIDs = StudyDailyPlan.plan(cards: cards, states: states, now: now()).cardIDs
+    dueCount = planIDs.count
 
-    sessionQueue = dueIDs.prefix(Self.sessionCap).compactMap { cardsByID[$0] }
+    sessionQueue = planIDs.prefix(Self.sessionCap).compactMap { cardsByID[$0] }
     sessionTotal = sessionQueue.count
     completedCount = 0
     presentNextCard()

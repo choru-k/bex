@@ -7,17 +7,42 @@ import Foundation
 /// here is a deterministic function of its arguments and unit-testable without mocking
 /// the clock or touching disk.
 enum StudyDueCount {
-  /// How many of `cards` are currently due, given `states` and `now`. A thin
-  /// pass-through to `StudyScheduler.dueCards` — kept as its own entry point (rather
-  /// than calling the scheduler directly from `AppDelegate`) so the badge-precedence
-  /// decision below and the due-count computation live in one file with one doc
-  /// comment about determinism.
+  /// Today's actionable Study workload — NOT the total backlog. A thin pass-through to
+  /// `StudyDailyPlan.plan`, which is what actually decides "reviews always, new cards
+  /// capped at `StudyDailyPlan.dailyNewCardLimit` per day" (see that file for why).
+  /// This used to report the raw `StudyScheduler.dueCards` count, which for a
+  /// never-studied deck means "every card" — a number that never shrinks day to day
+  /// and reads as a permanent, unclearable backlog. Reporting today's small, capped
+  /// plan instead is what makes the menu-bar badge and daily notification a number
+  /// worth looking at rather than a source of dread.
   static func count(
     cards: [StudyCard],
     states: [String: StudyReviewState],
     now: Date
   ) -> Int {
-    StudyScheduler.dueCards(ids: cards.map(\.id), states: states, now: now).count
+    StudyDailyPlan.plan(cards: cards, states: states, now: now).cardIDs.count
+  }
+
+  /// How urgently the badge's color should escalate, driven by `maxOverdueDays` from
+  /// `StudyDailyPlan.Plan` (0 for a plan with no reviews, or reviews that are all still
+  /// on schedule). Deliberately NOT "any overdue card → red": if the badge turns red
+  /// every single day (which it would, the moment even one review lands a day late),
+  /// red stops meaning anything and becomes wallpaper the owner learns to ignore —
+  /// exactly the "unclearable pressure" this whole feature exists to avoid. Reserving
+  /// the strongest color for genuinely-behind (2+ days overdue) keeps it a real signal;
+  /// today's ordinary on-time batch reads as `.normal` even though it's non-empty.
+  enum StudySeverity: String, Codable, Equatable, Sendable {
+    case normal
+    case behind
+    case late
+  }
+
+  static func severity(maxOverdueDays: Int) -> StudySeverity {
+    switch maxOverdueDays {
+    case 0: return .normal
+    case 1: return .behind
+    default: return .late
+    }
   }
 
   /// What the single menu-bar status-item title should show. `AppDelegate` has exactly

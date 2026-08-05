@@ -92,4 +92,25 @@ final class StudyDueCountTests: XCTestCase {
     XCTAssertFalse(badge.isVisible)
     XCTAssertEqual(badge.text, "")
   }
+
+  // MARK: - severity
+
+  /// 0 overdue days is the ordinary case — including a perfectly normal, non-empty
+  /// daily batch — and must read as `.normal`, not escalate just because there's
+  /// something to do today.
+  func testSeverityNormalWhenNothingOverdue() {
+    XCTAssertEqual(StudyDueCount.severity(maxOverdueDays: 0), .normal)
+  }
+
+  func testSeverityBehindAtOneOverdueDay() {
+    XCTAssertEqual(StudyDueCount.severity(maxOverdueDays: 1), .behind)
+  }
+
+  func testSeverityLateAtTwoOverdueDays() {
+    XCTAssertEqual(StudyDueCount.severity(maxOverdueDays: 2), .late)
+  }
+
+  func testSeverityLateAtFiveOverdueDays() {
+    XCTAssertEqual(StudyDueCount.severity(maxOverdueDays: 5), .late)
+  }
 }
