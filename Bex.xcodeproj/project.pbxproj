@@ -21,6 +21,7 @@
 		A0000000000000000000005C /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000065 /* Network.framework */; };
 		A0000000000000000000005D /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000066 /* CryptoKit.framework */; };
 		A0000000000000000000005E /* bex-hook in Embed Helpers */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* bex-hook */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A0000000000000000000005F /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006A /* UserNotifications.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +62,7 @@
 		A00000000000000000000067 /* Carbon.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Carbon.framework; path = System/Library/Frameworks/Carbon.framework; sourceTree = SDKROOT; };
 		A00000000000000000000068 /* OSLog.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OSLog.framework; path = System/Library/Frameworks/OSLog.framework; sourceTree = SDKROOT; };
 		A00000000000000000000069 /* ApplicationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ApplicationServices.framework; path = System/Library/Frameworks/ApplicationServices.framework; sourceTree = SDKROOT; };
+		A0000000000000000000006A /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -105,6 +107,7 @@
 				A00000000000000000000057 /* Carbon.framework in Frameworks */,
 				A00000000000000000000058 /* OSLog.framework in Frameworks */,
 				A00000000000000000000059 /* ApplicationServices.framework in Frameworks */,
+				A0000000000000000000005F /* UserNotifications.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -172,6 +175,7 @@
 				A00000000000000000000067 /* Carbon.framework */,
 				A00000000000000000000068 /* OSLog.framework */,
 				A00000000000000000000069 /* ApplicationServices.framework */,
+				A0000000000000000000006A /* UserNotifications.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";

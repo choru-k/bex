@@ -66,8 +66,12 @@ Quick Check also supports three in-place rewrites:
 The Bex menu opens the management windows only when needed:
 
 - **History** — search and filter prior checks, inspect their diffs, reuse an input, or delete entries
+- **Learning** — once enough Prompt Gate corrections have accumulated, review the recurring grammar patterns Bex has noticed in your own writing; a menu-bar badge lights up when there is something new to see
+- **Study** — spaced-repetition drills built from your own past Prompt Gate corrections (a "Fixed: 'a' → 'the'" becomes a fill-in-the-blank card). Cards you get right come back less often, cards you miss come back tomorrow — the same idea as a Leitner flashcard box, sized for one person's own mistakes rather than a shared deck
 - **Profiles** — a profile is a saved writing-context prompt (tone, audience, house style) that Quick Check applies automatically while active; you can maintain profiles by hand or generate one with an AI wizard
 - **Settings** — choose providers, models, and reasoning effort (see [Providers](#providers)), manage credentials, validate Ollama, and select system, light, or dark appearance
+
+Study and Learning share one menu-bar badge: whenever any Study cards are due, the badge shows that count (it is the more time-sensitive of the two); otherwise it falls back to the Learning count when there is new material to review. Bex also asks, once, for permission to send a daily notification reminding you how many Study cards are due — tapping it opens the drill directly. This permission is optional: if you decline or later revoke it in **System Settings → Notifications**, the reminder simply never appears, but the badge and the Study window keep working exactly the same.
 
 ### Troubleshooting
 

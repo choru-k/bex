@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import OSLog
+import UserNotifications
 
 @MainActor
 @main
@@ -11,6 +12,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var statusMenu: NSMenu?
   private var learningMenuItem: NSMenuItem?
   private var learningLogChangeTask: Task<Void, Never>?
+  private var studyStateChangeTask: Task<Void, Never>?
+  private var studyNotificationScheduler: StudyNotificationScheduler?
+  /// Coarse recompute so the badge/notification don't go stale if the app is left
+  /// running for days without any correction or Study answer to trigger a refresh —
+  /// see `startMenuBarRefreshTimer()` for why hourly is the right grain.
+  private var menuBarRefreshTimer: Timer?
   private var globalHotKey: GlobalHotKey?
   private var shortcutMenuItems: [BexShortcut: [NSMenuItem]] = [:]
   private var shortcutChords: [BexShortcut: KeyChord] = [
@@ -101,12 +108,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     openPromptGate: Bool = false,
     showWelcomeIfNeeded: Bool = true
   ) {
+    // Set early, before anything else touches windows: this is the delegate that
+    // handles a tap on the daily Study reminder, and it must be in place before macOS
+    // can hand us a notification response.
+    UNUserNotificationCenter.current().delegate = self
+
     let coordinator = installCoordinator(services: services)
     installMainMenu()
     installStatusItem()
-    startObservingLearningLog()
+    startObservingMenuBarBadgeSources()
+    startMenuBarRefreshTimer()
     Task { [weak self] in
-      await self?.refreshLearningBadge()
+      // Badge first (fast, no system UI) so the menu bar reflects reality immediately;
+      // the one-time authorization prompt (which can sit unanswered indefinitely) must
+      // never gate that.
+      await self?.refreshMenuBarBadge()
+      await self?.studyNotificationScheduler?.requestAuthorizationIfNeeded()
     }
     #if DEBUG
       installUITestingCommands()
@@ -207,10 +224,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = WindowCoordinator(services: services)
     self.services = services
     windowCoordinator = coordinator
+    studyNotificationScheduler = StudyNotificationScheduler()
     coordinator.applyStoredAppearance()
     coordinator.onLearningViewed = { [weak self] in
       Task { [weak self] in
-        await self?.refreshLearningBadge()
+        await self?.refreshMenuBarBadge()
       }
     }
     return coordinator
@@ -220,6 +238,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     BexShortcutBridge.updater = nil
     globalHotKey?.unregisterAll()
     learningLogChangeTask?.cancel()
+    studyStateChangeTask?.cancel()
+    menuBarRefreshTimer?.invalidate()
     #if DEBUG
       DistributedNotificationCenter.default().removeObserver(self)
     #endif
@@ -356,6 +376,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     toolsMenu.addItem(.separator())
     toolsMenu.addItem(command("History", "openHistory", target: target))
     toolsMenu.addItem(command("Learning", "openLearning", target: target))
+    toolsMenu.addItem(command("Study", "openStudy", target: target))
     toolsMenu.addItem(command("Writing Styles", "openProfiles", target: target))
     mainMenu.addItem(rootItem(title: "Tools", submenu: toolsMenu))
 
@@ -436,6 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let learningItem = command("Learning", "openLearning", target: target)
     learningItem.identifier = NSUserInterfaceItemIdentifier("bex-learning-status-item")
     menu.addItem(learningItem)
+    menu.addItem(command("Study", "openStudy", target: target))
     menu.addItem(command("Writing Styles", "openProfiles", target: target))
     menu.addItem(command("Settings…", "openSettings", target: target))
     menu.addItem(.separator())
@@ -610,43 +632,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     coordinator().showLearning()
   }
 
-  /// Observes `.bexLearningLogDidChange` (posted by `LearningLogStore.append`) for the
-  /// lifetime of the app and recomputes the badge on each correction. Mirrors
-  /// `HistoryViewModel.startObservingIfNeeded`'s `for await` pattern; `AppDelegate` is
-  /// `@MainActor`, so the loop body runs on the main actor.
-  private func startObservingLearningLog() {
+  @objc private func openStudy() {
+    coordinator().showStudy()
+  }
+
+  /// Observes both `.bexLearningLogDidChange` (posted by `LearningLogStore.append`) and
+  /// `.bexStudyStateDidChange` (posted by `StudyStateStore.record`/`reset`) for the
+  /// lifetime of the app and recomputes the combined badge whenever either source
+  /// changes. Mirrors `HistoryViewModel.startObservingIfNeeded`'s `for await` pattern;
+  /// `AppDelegate` is `@MainActor`, so each loop body runs on the main actor.
+  private func startObservingMenuBarBadgeSources() {
     learningLogChangeTask = Task { [weak self] in
       for await _ in NotificationCenter.default.notifications(named: .bexLearningLogDidChange) {
         guard !Task.isCancelled, let self else { return }
-        await self.refreshLearningBadge()
+        await self.refreshMenuBarBadge()
+      }
+    }
+    studyStateChangeTask = Task { [weak self] in
+      for await _ in NotificationCenter.default.notifications(named: .bexStudyStateDidChange) {
+        guard !Task.isCancelled, let self else { return }
+        await self.refreshMenuBarBadge()
       }
     }
   }
 
-  /// Reloads the learning log, recomputes `LearningBadge.status`, and applies it to the
-  /// status item + "Learning" menu item. Safe to call anytime after `installStatusItem`;
-  /// a nil `services` (shouldn't happen post-launch) is a no-op.
-  private func refreshLearningBadge() async {
+  /// Coarse periodic recompute so the badge/notification don't go stale purely from the
+  /// passage of time — e.g. a card silently becoming due, or a day rolling over — while
+  /// the app sits open for days with no correction or Study answer to trigger the
+  /// notification-based refresh above.
+  //
+  // ponytail: a plain repeating `Timer`, not a scheduler that wakes exactly at local
+  // midnight or exactly when the next card becomes due. Study's due-ness is computed
+  // in whole days (`StudyScheduler.intervalDays`), so "check roughly once an hour" is
+  // already far finer-grained than the thing it's checking; a precise wake-at-midnight
+  // scheduler would add real complexity for zero user-visible improvement. Ceiling: if
+  // Study ever needs sub-day due granularity, replace this with a `Calendar`-driven
+  // one-shot timer that reschedules itself for the next relevant boundary.
+  private func startMenuBarRefreshTimer() {
+    menuBarRefreshTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) {
+      [weak self] _ in
+      Task { @MainActor [weak self] in
+        await self?.refreshMenuBarBadge()
+      }
+    }
+  }
+
+  /// Reloads the learning log and Study review state, recomputes both
+  /// `LearningBadge.status` and `StudyDueCount`, applies whichever wins the single
+  /// menu-bar badge slot (`StudyDueCount.badge`), and reschedules the daily reminder
+  /// notification to match. Safe to call anytime after `installStatusItem`; a nil
+  /// `services` (shouldn't happen post-launch) is a no-op.
+  private func refreshMenuBarBadge() async {
     guard let services else { return }
     let entries = await services.learningLog.readAll()
     let samples = LearningLogSamples.parse(entries)
+
     let lastViewedAt = await services.preferences.lastLearningViewedAt()
-    let status = LearningBadge.status(samples: samples, lastViewedAt: lastViewedAt)
-    applyLearningBadge(status)
+    let learningStatus = LearningBadge.status(samples: samples, lastViewedAt: lastViewedAt)
+
+    let cards = StudyCardBuilder.cards(from: samples)
+    let states = await services.studyState.states()
+    let studyDue = StudyDueCount.count(cards: cards, states: states, now: Date())
+
+    applyMenuBarBadge(StudyDueCount.badge(studyDue: studyDue, learning: learningStatus))
+    learningMenuItem?.title = learningStatus.count > 0 ? "Learning (\(learningStatus.count))" : "Learning"
+    await studyNotificationScheduler?.reschedule(dueCount: studyDue)
   }
 
-  private func applyLearningBadge(_ status: LearningBadge.Status) {
-    if status.shouldShow {
-      statusItem?.button?.title = "\(status.count)"
+  private func applyMenuBarBadge(_ badge: StudyDueCount.MenuBarBadge) {
+    if badge.isVisible {
+      statusItem?.button?.title = badge.text
       statusItem?.button?.imagePosition = .imageLeft
-      statusItem?.button?.setAccessibilityLabel(
-        "Bex — \(status.count) new correction\(status.count == 1 ? "" : "s") to review")
     } else {
       statusItem?.button?.title = ""
       statusItem?.button?.imagePosition = .imageOnly
-      statusItem?.button?.setAccessibilityLabel("Bex")
     }
-    learningMenuItem?.title = status.count > 0 ? "Learning (\(status.count))" : "Learning"
+    statusItem?.button?.setAccessibilityLabel(badge.accessibilityLabel)
   }
 
   @objc private func openProfiles() {
@@ -663,5 +724,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   @objc private func quit() {
     NSApp.terminate(nil)
+  }
+}
+
+/// Handles a tap on the daily Study reminder notification. `UNUserNotificationCenter`
+/// invokes delegate methods off the main actor, so these are `nonisolated` and hop back
+/// via `Task { @MainActor in ... }` for the one thing that needs it — opening the Study
+/// window through the existing coordinator, exactly like the "Study" menu command does.
+extension AppDelegate: UNUserNotificationCenterDelegate {
+  nonisolated func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    defer { completionHandler() }
+    guard
+      response.notification.request.content.categoryIdentifier
+        == StudyNotificationPlan.categoryIdentifier
+    else { return }
+    Task { @MainActor [weak self] in
+      self?.coordinator().showStudy()
+    }
+  }
+
+  /// Without this, macOS suppresses the reminder's banner whenever Bex is the active
+  /// app (e.g. the Study or Settings window has focus) — exactly the moments a
+  /// menu-bar app is most likely to be "foreground". Explicitly opting into
+  /// `.banner`/`.sound` keeps the reminder visible regardless of what's focused.
+  nonisolated func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    completionHandler([.banner, .sound])
   }
 }
