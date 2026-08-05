@@ -20,6 +20,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   private var welcomeWindowController: NSWindowController?
   private var historyWindowController: NSWindowController?
   private var learningWindowController: NSWindowController?
+  private var studyWindowController: NSWindowController?
   private var profilesWindowController: NSWindowController?
   private var settingsWindowController: NSWindowController?
   private var settingsViewModel: SettingsViewModel?
@@ -51,6 +52,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     defaultContentSize: NSSize(width: 620, height: 520),
     minimumContentSize: NSSize(width: 480, height: 360),
     frameAutosaveName: "Bex.LearningWindow"
+  )
+  static let studyWindowConfiguration = StandardWindowConfiguration(
+    title: "Study",
+    defaultContentSize: NSSize(width: 620, height: 520),
+    minimumContentSize: NSSize(width: 480, height: 360),
+    frameAutosaveName: "Bex.StudyWindow"
   )
   static let writingStylesWindowConfiguration = StandardWindowConfiguration(
     title: "Writing Styles",
@@ -290,6 +297,21 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
   }
 
+  /// Opens the Study drill window. Unlike `showLearning()`, there is no "viewed"
+  /// badge to clear here — Study Mode has no ambient badge semantics of its own yet.
+  func showStudy() {
+    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
+    if studyWindowController == nil {
+      let viewModel = StudyViewModel(learningLog: services.learningLog, studyState: services.studyState)
+      studyWindowController = Self.makeWindowController(
+        configuration: Self.studyWindowConfiguration,
+        rootView: StudyView(viewModel: viewModel),
+        delegate: self
+      )
+    }
+    show(studyWindowController)
+  }
+
   private func replaceQuickCheckDraftFromHistory(with text: String) {
     showQuickCheck(draft: text)
   }
@@ -431,6 +453,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       historyWindowController = nil
     } else if window === learningWindowController?.window {
       learningWindowController = nil
+    } else if window === studyWindowController?.window {
+      studyWindowController = nil
     } else if window === profilesWindowController?.window {
       profilesWindowController = nil
     } else if window === settingsWindowController?.window {

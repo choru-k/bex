@@ -6,6 +6,7 @@ final class AppServices {
   let keychain: KeychainStore
   let data: BexDataStore
   let learningLog: LearningLogStore
+  let studyState: StudyStateStore
   let grammar: any GrammarServicing
   let promptGrammar: any PromptGrammarServicing
   let pasteboard: any PasteboardWriting
@@ -21,6 +22,7 @@ final class AppServices {
     keychain: KeychainStore,
     data: BexDataStore,
     learningLog: LearningLogStore,
+    studyState: StudyStateStore,
     grammar: any GrammarServicing,
     promptGrammar: any PromptGrammarServicing,
     pasteboard: any PasteboardWriting,
@@ -35,6 +37,7 @@ final class AppServices {
     self.keychain = keychain
     self.data = data
     self.learningLog = learningLog
+    self.studyState = studyState
     self.grammar = grammar
     self.promptGrammar = promptGrammar
     self.pasteboard = pasteboard
@@ -51,6 +54,7 @@ final class AppServices {
     let keychain = KeychainStore()
     let data = BexDataStore()
     let learningLog = LearningLogStore()
+    let studyState = StudyStateStore()
     let transport = URLSessionTransport()
     let factory = ProviderClientFactory(
       preferences: preferences,
@@ -65,6 +69,7 @@ final class AppServices {
       keychain: keychain,
       data: data,
       learningLog: learningLog,
+      studyState: studyState,
       grammar: grammar,
       promptGrammar: grammar,
       pasteboard: pasteboard,
