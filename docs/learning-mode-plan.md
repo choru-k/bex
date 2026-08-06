@@ -1,4 +1,38 @@
-# Bex — Learning Mode Plan (v6.2)
+# Bex — Learning Mode Plan (v7)
+
+> **v7 — expression is promoted to the main event (owner decision, 2026-08-06):**
+>
+> Triggered by a concrete failure. The owner typed *"What is your plan for fixing this issue?"* and
+> Bex answered `No changes needed.` — correct (the sentence is fine) and useless. The owner wanted
+> to know how it differs from *"What is your plan to fix this issue?"*, and Bex had **no channel to
+> say "this is right, and here is what the alternative implies."** It could only change the text or
+> stay silent, and nuance is neither.
+>
+> - **Consider is now ALWAYS present**, reversing v6's "silence is the default." Rationale, in the
+>   owner's words: *"consider가 항상 보여야 돼. 그래야 내가 고민을 하지."* The point is not to receive
+>   a verdict — it is to be handed a choice worth thinking about.
+> - **Consider offers 2-3 candidates and must NOT rank them.** The prompt describes how each
+>   alternative differs in meaning, tone, or register, then closes with a `Which fits?` line naming
+>   the question the owner should be asking. Bex never names a winner; the owner decides. This is
+>   a genuine behavior change, not a volume knob: the old Consider was a *recommendation* engine
+>   ("shorter or plainer, never longer or more formal"), the new one is a *comparison* engine.
+> - **`Fixed:` now lists only what the owner did not KNOW — not every error.** This is the v7
+>   change that matters most, and it is a new *criterion*, not a filter on the old one. Owner:
+>   *"중요한건 사소한게 아니라, 내가 모르는 단어, 표현 이런것들이야. 예를 들어 whta 이라고 내가
+>   쓴다고, 그건 오타이지 내가 모르는게 아니잖아... 점점 나의 수준을 ai 가 판단해서 아 오타구나라고
+>   인지를 해야지."* A typo is a finger slip by someone who knows the word; drilling it teaches
+>   nothing. **The model is asked to judge slip-vs-gap from the writer's evident level**, using the
+>   whole text as evidence (a word used correctly once was not "unknown" where it was mistyped).
+>   A plausible-sounding misspelling of a word never written correctly is still a real gap and is
+>   still listed.
+> - **`[article]` and `[plural]` are excluded on top of that**, by preference rather than by the
+>   knowledge-gap test — Korean has no articles, so they *are* a genuine gap, but the owner does
+>   not want lines spent on them: *"관사나 복수형 같은 사소한 실수는 보여주지 않아도 돼. 그냥
+>   고치기만 하면 되고."* The word-level diff already shows them.
+> - **This trades away measured signal, knowingly** — see "v7 costs" below. v6 tuned these exact
+>   rules *down* after a 25-case eval showed noise polluting the Learning counts. v7 accepts more
+>   noise in exchange for the expression layer actually being useful. If it turns out to be wrong,
+>   the fix is to re-tighten Consider, not to re-silence it.
 
 > **v6.2 — Phase 1 corpus-source correction + v1 scope:**
 > - **Phase 1 aggregates the LEARNING LOG, not `HistoryViewModel.entries`.** v6.1 moved the primary
@@ -61,9 +95,9 @@
 | | Fix Broken English | Better Expression |
 | --- | --- | --- |
 | Nature | binary right/wrong | spectrum, many valid |
-| Tool behavior | correct it + short why | offer alternative + why; owner chooses |
+| Tool behavior | correct it silently; explain only what was not known *(v7)* | always offer 2–3 unranked alternatives + how they differ *(v7)*; owner chooses |
 | Level | level-independent | level-tuned (only immediately usable) |
-| Tracked / measured? | yes (recurring types, rate) | no metric; one uptake tripwire only |
+| Tracked / measured? | yes (recurring types, rate) — v7 narrows the corpus to knowledge gaps | no metric; the one uptake tripwire is weakened by v7 (see costs) |
 | Where reviewed | inline (existing gate) | deferred study session |
 
 ## The real target behind both: speaking, not writing
@@ -101,16 +135,111 @@ immediately** — not polished prose. Bex only sees his *writing*, so it is scop
 
 Every correction's `explanation` carries two labeled sections:
 
-- **✅ Fixed (broken English):** all grammar/spelling corrections + a short *why*, each tagged with
-  a canonical grammar category. Reviewed **inline** through the Prompt-Gate step the owner already
-  uses and accepts (the re-read that "doesn't break flow"). Trivial fixes listed minimally.
-- **💡 Consider (better expression):** 0–N level-appropriate natural alternatives + *why*, **omitted
-  entirely when nothing is genuinely better** (silence is default). **Never blocks a send.** It is
-  surfaced for real engagement in the **deferred study session**, not at the shipping moment.
+- **✅ Fixed (broken English):** *(v7)* only the corrections the owner **plausibly did not know**,
+  each tagged with a canonical grammar category + a short *why*. Everything else — typos, slips,
+  articles, plurals — is corrected in `corrected` but **never listed**; the word-level diff is the
+  change log, this section is the study material. Reviewed **inline** through the Prompt-Gate step
+  the owner already uses and accepts (the re-read that "doesn't break flow").
+- **💡 Consider (better expression):** *(v7)* **always present**, 2–3 level-appropriate alternatives
+  for the one phrase whose wording is most open + how each differs in meaning/tone/register, closed
+  by a `Which fits?` line. **Deliberately unranked** — Bex never names a winner. **Never blocks a
+  send.** It is surfaced for real engagement in the **deferred study session**, not at the shipping
+  moment.
 
 **Non-blocking guarantee:** the inline moment never adds a confirm step beyond the existing gate;
 the expression layer in particular is passive and dismissable. Gating the owner's core workflow
 (shipping a prompt) is the fastest way to get the tool disabled.
+
+## v7.1 — the three alignment decisions (2026-08-06, SHIPPED)
+
+v7 changed what Bex *says*. Reviewing it surfaced that the rest of the pipeline had not moved with
+it, and three decisions followed. All three are built, plus the badge fix they unblocked:
+
+| Decision | Landed as |
+| --- | --- |
+| 1. Tap to choose an alternative | `Bex/Learning/ConsiderTapStore.swift`, `LearningAggregator.parseSuggestionLine`, `LearningLogSamples.merged`, the button in `LearningView.suggestionRow` |
+| 2. Background level profile | `Bex/Learning/WriterLevelProfile.swift`, `GrammarService.refreshWriterLevel`, `GrammarPrompts.withWriterLevel`, `AppDelegate.refreshWriterLevelIfNeeded` |
+| 3. Prompt Gate keeps always-on `Consider` | no change — `editingRules` stays shared, as intended |
+| (unblocked) Badge counts untapped alternatives | `LearningBadge.status(samples:tappedIDs:lastViewedAt:)` |
+
+Deleted rather than kept: `LearningMetrics.uptake`, `UptakeDetail`, `suggestedPhrase`, and their
+tests. The reappearance proxy has a replacement now, and leaving a broken metric in place that still
+renders a number would be worse than having no number.
+
+### 1. `Consider` gets a per-alternative "I'd use this" tap → it becomes the deck's real source
+
+**The misalignment this fixes.** `StudyCardBuilder` reads `Fixed:` lines only
+(`Bex/Study/StudyCard.swift:92`), so the deck drills **grammar errors exclusively**. But the owner's
+v7 statement of what matters is *"내가 모르는 단어, 표현"* — and expressions live only in
+`Consider:`, which never becomes a card. Vocabulary reaches the deck only through a manual **Save to
+Study** on a Look Up. So the deck was drilling the owner's own lowest priority.
+
+One affordance fixes two separate holes, which is why it wins over either fix alone:
+
+- **A card needs a right answer.** Three unranked alternatives have none by construction — that is
+  the whole point of v7's Consider. The tap supplies it: the alternative the owner chose *is* the
+  answer, so the existing cloze machinery works unchanged.
+- **`uptake` needs ground truth.** `LearningMetrics.uptake` currently *infers* adoption by watching
+  for the phrase to reappear in later writing — a proxy that v7 broke (see costs, below). A tap is
+  a direct signal and does not care how the suggestion was phrased.
+
+Note this reverses the v6.1 rule that expression alternatives are *"never auto-applied"* only in
+part: tapping records a choice and creates a card, it still must **not** rewrite `corrected`.
+
+### 2. The level judgment gets a background profile (implements the "점점")
+
+v7's prompt asks the model to judge slip-vs-gap from *"the writer's evident level"* — but it sees
+**one text at a time**, so it can only use evidence inside that text. The owner's word was **점점**
+(*gradually*), which means accumulation the current prompt structurally cannot do. A word learned
+last month is still treated as new.
+
+Build it where `StudyPattern` classification already runs: a **background job over the learning
+log** producing a compact profile ("already reliable on X; still misses Y"), injected into the
+system prompt as pre-computed text. **The latency constraint is absolute and decides the design** —
+owner: *"the quick check latency is most important; if something is running in the background, we
+can do anything and we don't care about latency."* So the correction request itself never does the
+analysis and never pays for it; it only carries a summary computed earlier, exactly like
+`GrammarService.classifyStudyPatterns`.
+
+### 3. Prompt Gate keeps always-on `Consider` too — one shared prompt, deliberately
+
+Considered splitting `editingRules` so the ⌘⇧P send path stayed lean. **Rejected.** The terminal
+prompts are the main corpus (see "Corpus reality"), so suppressing Consider there would starve the
+expression layer of most of its material to protect a flow the owner is not complaining about.
+`system` and `promptSafeSystem` stay unsplit, as their doc comment intends.
+
+## v7 costs (accepted knowingly — none of these are bugs)
+
+v7 buys usefulness with measurability. Recording what it spends, so nobody "fixes" these later
+without knowing they were chosen:
+
+1. **The goal-2 uptake tripwire is largely spent.** `LearningMetrics.uptake` counts every `Consider`
+   line as a suggestion and asks whether the phrase later reappears in the owner's own writing.
+   That test assumed suggestions were *recommendations*. v7's are *unranked alternatives* — when
+   three are offered, at most one can be adopted, and often none should be. The denominator inflates
+   and the adoption rate collapses **for reasons unrelated to whether the layer works**, so
+   "near-zero uptake ⇒ feel-good input" no longer follows. **RESOLVED by v7.1 decision 1** — the
+   tap replaces the reappearance proxy with a direct signal. Until it ships, treat the uptake number
+   in the Learning window as meaningless rather than alarming.
+2. **The Learning badge would have fired on nearly every check — FIXED with v7.1.** It counted
+   whole entries, and v7 puts a `Consider` section on nearly all of them, so it degraded into a
+   count of prompts sent. It now counts distinct *untapped* alternatives, so it measures a real
+   backlog and can reach zero. Same lesson v0.6's daily plan already learned: an unclearable
+   pressure signal reads as hopeless rather than motivating.
+   **Still carried:** the activation *volume* gate (`substantiveCount >= 20`) accepts an entry
+   carrying only a suggestion, which before v7 was a meaningful distinction and now means it is
+   close to "≥20 prompts sent". Deliberately left alone — the recurrence gate is the load-bearing
+   half, and retuning a threshold baselined on the pre-v7 corpus belongs to the re-baselining pass
+   in item 3, not to a badge fix.
+3. **The Study deck gets thinner and harder.** `StudyCardBuilder` builds only from `Fixed:` lines.
+   Dropping typos, articles, and plurals removes what is plausibly most of the current card volume.
+   That is the intent — those cards taught nothing — but the deck may be near-empty for a while, and
+   the v6 recurrence gate (≥2 categories recurring ≥3× across ≥20 corrections) was calibrated on the
+   *old*, noisier corpus. **Re-baseline it before reading it as a signal.**
+4. **Slip-vs-gap is a model judgment with no ground truth.** There is no way to verify Bex called a
+   typo correctly, it will vary by provider, and small local Ollama models will likely do it badly.
+   Accepted: the alternative (a rule the owner writes by hand) cannot track their level, which was
+   the whole point of asking the model to judge.
 
 ## Deferred study session (the home of expression + calibration)
 
@@ -141,6 +270,13 @@ paste; `promptSafeSystem` for Claude Code/Codex) to output the two sections:
   fixed list (`[article]`, `[verb-tense]`, `[subject-verb-agreement]`, `[preposition]`,
   `[word-order]`, `[plural]`, `[spelling]`, `[capitalization]`, `[other]`). Canonical from day one.
 - **Consider:** apply the level + conversational constraint; omit when nothing is genuinely better.
+
+> **Superseded by v7.** Both bullets above describe the shipped v6 prompt and are kept for
+> history. Live behavior: `Fixed:` lists only knowledge gaps and emits neither `[article]` nor
+> `[plural]`, so the prompt's tag list is now a deliberate **subset** of `GrammarCategory`. The enum
+> keeps all cases regardless — `LearningAggregator` and `StudyCardBuilder` still parse logs written
+> before v7, and `.vocabulary` is written directly by `DictionaryLookup`, never by this prompt.
+> Deleting a case would break old data, not just new output. `Consider:` is always present.
 
 No schema/parser/UI change. Downstream is safe (verified): `WordDiff`/diff read only
 `original`/`corrected`; history search is substring `contains`; `explanation` renders as plain text;
