@@ -58,6 +58,11 @@ struct BexHookMain {
         return
       }
 
+      if KoreanPrompt.isMainlyKorean(input.prompt) {
+        try? writeHeartbeat(client: client, integrationID: input.integrationID)
+        return
+      }
+
       let approvalStore = PromptApprovalStore()
       if try await approvalStore.consume(
         client: client,
@@ -124,6 +129,13 @@ struct BexHookMain {
         throw HookIPCError.invalidResponse
       }
       integrationID = input.integrationID
+
+      if KoreanPrompt.isMainlyKorean(input.text) {
+        try writeFrame(OMPPromptGateFrame.allow(integrationID: integrationID))
+        decisionWritten = true
+        try writeHeartbeat(client: .ohMyPi, integrationID: integrationID)
+        return
+      }
 
       let approvalStore = PromptApprovalStore()
       if try await approvalStore.consume(

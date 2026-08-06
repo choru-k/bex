@@ -18,6 +18,121 @@ enum HookProtocolConstants {
   static let promptGateCapability = "prompt-gate-v1"
 }
 
+/// Recognizes a prompt written in Korean, which Bex has nothing useful to say about.
+///
+/// Two shapes have to be told apart, and counting characters cannot do it — measured on
+/// 422 real prompts, every ratio metric overlaps:
+///
+///   - `rebase 하고 나서 deploy 해줘` is Korean. The English words are English words, not
+///     the user's English. Only 33% of its letters are Hangul.
+///   - `Fix the 권한 문제.` is English with a Korean noun the user did not know. 40% of its
+///     letters are Hangul — *more* than the Korean sentence above.
+///
+/// What actually separates them is which language frames the sentence: Korean marks its
+/// frame with particles (`prod 랑`, `au 는?`) and verb-final endings (`…해줘`, `…않아?`),
+/// and an English sentence borrowing a Korean noun has neither.
+///
+/// ponytail: a hand-listed set of endings and particles, not a language model or
+/// `NLLanguageRecognizer` — it scores 54/55 on the real corpus, and the one miss
+/// (`변경 폐기 후 pull`, a verbless noun phrase) merely gets reviewed as if it were
+/// English. Widen the lists if real misses show up.
+enum KoreanPrompt {
+  /// Korean verb-final endings, taken from what the real corpus ends sentences with.
+  private static let endings = [
+    "줘", "줄래", "래", "해", "봐", "돼", "되", "야", "어", "아", "지", "네", "죠",
+    "까", "잖아", "구나", "군요", "세요", "어요", "아요", "예요", "합니다", "습니다",
+    "니다", "겠네", "겠어", "겠지", "더라", "자", "해서", "부터", "까지", "하고", "이고",
+  ]
+
+  /// Particles. These attach to any word, including English ones, and are the only
+  /// Korean signal in a prompt with no verb at all ("prod eu, uw1, au 는?").
+  private static let particles = [
+    "은", "는", "이", "가", "을", "를", "에", "에서", "으로", "로", "와", "과",
+    "랑", "이랑", "도", "만", "부터", "까지", "보다", "처럼", "의", "께", "한테",
+  ]
+
+  /// A run of this many consecutive plain English words means the user wrote English
+  /// here, whatever else surrounds it, so the prompt must still be reviewed. Without
+  /// this, a Korean instruction followed by an English draft — "slack draft 을 작성해줘.
+  /// ---- i have talked with jachan…" — would be skipped in full.
+  private static let englishRunLimit = 5
+
+  static func isMainlyKorean(_ text: String) -> Bool {
+    guard text.unicodeScalars.contains(where: isHangul) else { return false }
+    if longestEnglishRun(in: text) >= englishRunLimit { return false }
+    return hasKoreanGrammar(text) || hangulShare(text) >= 0.8
+  }
+
+  private static func isHangul(_ scalar: Unicode.Scalar) -> Bool {
+    (0xAC00...0xD7A3).contains(scalar.value)  // syllables
+      || (0x1100...0x11FF).contains(scalar.value)  // jamo
+      || (0x3130...0x318F).contains(scalar.value)  // compatibility jamo
+  }
+
+  private static func tokens(_ text: String) -> [String] {
+    text.split(whereSeparator: \.isWhitespace).map {
+      $0.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,;:()[]{}\"'…~>=/-"))
+    }
+  }
+
+  private static func hasKoreanGrammar(_ text: String) -> Bool {
+    for token in tokens(text) {
+      guard token.unicodeScalars.contains(where: isHangul) else { continue }
+      if endings.contains(where: token.hasSuffix) { return true }
+      let tail = String(token.unicodeScalars.filter(isHangul).map(Character.init))
+      if particles.contains(tail) { return true }
+      if tail.count <= 3, particles.contains(where: tail.hasSuffix) { return true }
+    }
+    return false
+  }
+
+  /// Longest run of consecutive plain English words. A Hangul token breaks the run;
+  /// numbers, URLs and identifiers neither extend nor break it.
+  private static func longestEnglishRun(in text: String) -> Int {
+    var best = 0
+    var run = 0
+    for token in tokens(text) {
+      if token.count > 1, token.allSatisfy({ $0.isASCII && $0.isLetter }) {
+        run += 1
+        best = max(best, run)
+      } else if token.unicodeScalars.contains(where: isHangul) {
+        run = 0
+      }
+    }
+    return best
+  }
+
+  /// Hangul weighted 2.5x (one syllable carries about that many Latin letters' worth),
+  /// averaged with the share of whole tokens that are Korean. Only decides prompts with
+  /// no grammatical marker at all, e.g. a bare noun list.
+  private static func hangulShare(_ text: String) -> Double {
+    var hangul = 0
+    var latin = 0
+    for scalar in text.unicodeScalars {
+      if isHangul(scalar) {
+        hangul += 1
+      } else if ("a"..."z").contains(String(scalar)) || ("A"..."Z").contains(String(scalar)) {
+        latin += 1
+      }
+    }
+    guard hangul + latin > 0 else { return 0 }
+    let weighted = Double(hangul) * 2.5 / (Double(hangul) * 2.5 + Double(latin))
+
+    var koreanTokens = 0
+    var englishTokens = 0
+    for token in tokens(text) {
+      if token.unicodeScalars.contains(where: isHangul) {
+        koreanTokens += 1
+      } else if token.contains(where: { $0.isASCII && $0.isLetter }) {
+        englishTokens += 1
+      }
+    }
+    let total = koreanTokens + englishTokens
+    let byToken = total > 0 ? Double(koreanTokens) / Double(total) : 0
+    return (weighted + byToken) / 2
+  }
+}
+
 struct HookInput: Decodable, Sendable {
   let hookEventName: String
   let prompt: String

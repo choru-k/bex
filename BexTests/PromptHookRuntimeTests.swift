@@ -443,6 +443,70 @@ final class ClaudePromptSourceTests: XCTestCase {
   }
 }
 
+/// Fixtures are real prompts harvested from Claude Code transcripts, not invented ones —
+/// an earlier hand-written sample set scored 30/30 for a rule that then scored 22/55 on
+/// these. See `KoreanPrompt` for why counting Hangul characters cannot do this job.
+final class KoreanPromptTests: XCTestCase {
+  func testKoreanRequestsAreSkippedEvenWhenFullOfEnglishTechnicalWords() {
+    let korean = [
+      "rebase 하고 나서 deploy 해줘",
+      "latest 만 비교해도 충분할까?",
+      "draft PR 잇지 않아?",
+      "jira comment 에도 상황을 남기고, close 하면 되는걸까?",
+      "GrammarPrompts.swift 에서 promptSafeSystem 고쳐줘",
+      "PromptTechnicalSpanProtector 테스트 추가해줘",
+      "codex 왤케 안되고 잇어",
+      "ce gcp 을 disable 할래",
+      "https://github.com/clumio/cdf/pull/69237 은 머지 되엇어.",
+      "모델을 terra로 바꾸고 effort는 low로 설정해줘",
+    ]
+    for prompt in korean {
+      XCTAssertTrue(KoreanPrompt.isMainlyKorean(prompt), "should skip: \(prompt)")
+    }
+  }
+
+  /// Verbless prompts: particles on English words are the only Korean signal here.
+  func testParticlesAloneMarkAPromptAsKorean() {
+    XCTAssertTrue(KoreanPrompt.isMainlyKorean("prod 랑 stage 만."))
+    XCTAssertTrue(KoreanPrompt.isMainlyKorean("prod eu, uw1, au 는?"))
+    XCTAssertTrue(KoreanPrompt.isMainlyKorean("바로 옵션 b"))
+  }
+
+  func testEnglishBorrowingAKoreanNounIsStillChecked() {
+    let english = [
+      "Could you check the 잔여 items in the list?",
+      "Please add a 검증 step before the deploy.",
+      "The build is failing because of a 권한 issue.",
+      "Is there any 부작용 if I change the default model?",
+      "CCM은 arena별로 개별 토글 => why should we do this? is it aws way?",
+      "confirm the KMS binding with gcloud. 그런데 지금 배포하는거랑도 관련잇어?",
+      "yes, create PR and close #68969. 그리고 다시 파이프라인을 돌려야 하지 않아?",
+    ]
+    for prompt in english {
+      XCTAssertFalse(KoreanPrompt.isMainlyKorean(prompt), "should gate: \(prompt)")
+    }
+  }
+
+  /// The failure that matters: a Korean instruction wrapping a block of the user's own
+  /// English must still reach Bex, or the English is silently never checked.
+  func testKoreanInstructionAroundAnEnglishDraftIsStillChecked() {
+    let prompt = """
+      봐봐. slack draft 을 작성해줘.
+      ----
+      i have talked with jachan.
+      1. They just want to use "claude -p" in the jenkins pipeline.
+      2. The claude does not need any permision and any tokens.
+      """
+    XCTAssertFalse(KoreanPrompt.isMainlyKorean(prompt))
+  }
+
+  func testTextWithoutHangulIsNeverTreatedAsKorean() {
+    XCTAssertFalse(KoreanPrompt.isMainlyKorean("Fix the deploy pipeline please."))
+    XCTAssertFalse(KoreanPrompt.isMainlyKorean(""))
+    XCTAssertFalse(KoreanPrompt.isMainlyKorean("git rebase -i main && git push"))
+  }
+}
+
 final class PromptGateIPCServerTests: XCTestCase {
   func testAuthenticatedReviewApprovalAndAcknowledgementRoundTrip() async throws {
     let rendezvous = temporaryDirectory("ipc")
