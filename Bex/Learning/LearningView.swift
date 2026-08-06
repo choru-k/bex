@@ -77,26 +77,46 @@ struct LearningView: View {
         if viewModel.uptakeSuggested > 0 {
           Section {
             VStack(alignment: .leading, spacing: 2) {
-              Text("Expression suggestions adopted: \(viewModel.uptakeAdopted) of \(viewModel.uptakeSuggested)")
+              Text("Expression suggestions chosen: \(viewModel.uptakeAdopted) of \(viewModel.uptakeSuggested)")
                 .accessibilityIdentifier("learning-uptake")
-              Text("An early signal — adoption only shows once you reuse a suggested phrase later.")
+              Text("Counts the alternatives you picked below — not a guess at whether you reused them.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
           }
         }
-        if !viewModel.recentSuggestions.isEmpty {
-          Section("Recent suggestions") {
-            ForEach(Array(viewModel.recentSuggestions.enumerated()), id: \.offset) { index, suggestion in
-              Text(suggestion)
-                .textSelection(.enabled)
-                .accessibilityIdentifier("learning-suggestion-\(index)")
+        if !viewModel.suggestions.isEmpty {
+          Section {
+            ForEach(viewModel.suggestions) { suggestion in
+              suggestionRow(suggestion)
             }
+          } header: {
+            Text("Recent suggestions")
+          } footer: {
+            Text("Bex won't tell you which is better. Pick the one you'd actually say — it becomes a Study card.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
           }
         }
       }
       .listStyle(.inset)
     }
+  }
+
+  /// One suggestion plus the button that makes it a drill. The button is the only write
+  /// action in this window — everything else here is read-only aggregation.
+  private func suggestionRow(_ suggestion: ConsiderSuggestion) -> some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text(suggestion.displayLine)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      Button(suggestion.isTapped ? "Chosen" : "I'd use this") {
+        Task { await viewModel.chooseSuggestion(suggestion) }
+      }
+      .disabled(suggestion.isTapped)
+      .accessibilityIdentifier("learning-suggestion-choose-\(suggestion.id)")
+    }
+    .accessibilityIdentifier("learning-suggestion-\(suggestion.id)")
   }
 
   /// Trims a trailing ".0" so whole numbers read as "12 words" rather than "12.0 words".

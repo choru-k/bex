@@ -5,17 +5,20 @@ import XCTest
 
 @MainActor
 final class LearningViewModelTests: XCTestCase {
-  private func makeStore() -> (store: LearningLogStore, cleanUp: () -> Void) {
+  private func makeStore() -> (
+    store: LearningLogStore, taps: ConsiderTapStore, cleanUp: () -> Void
+  ) {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("LearningViewModelTests-\(UUID().uuidString)", isDirectory: true)
     let store = LearningLogStore(directoryURL: directory)
-    return (store, { try? FileManager.default.removeItem(at: directory) })
+    let taps = ConsiderTapStore(directoryURL: directory)
+    return (store, taps, { try? FileManager.default.removeItem(at: directory) })
   }
 
   func testLoadIsEmptyWhenLogHasNoEntries() async {
-    let (store, cleanUp) = makeStore()
+    let (store, taps, cleanUp) = makeStore()
     defer { cleanUp() }
-    let viewModel = LearningViewModel(learningLog: store)
+    let viewModel = LearningViewModel(learningLog: store, considerTaps: taps)
 
     XCTAssertTrue(viewModel.isLoading)
     await viewModel.load()
@@ -23,11 +26,11 @@ final class LearningViewModelTests: XCTestCase {
     XCTAssertFalse(viewModel.isLoading)
     XCTAssertTrue(viewModel.isEmpty)
     XCTAssertEqual(viewModel.recurringMistakes, [])
-    XCTAssertEqual(viewModel.recentSuggestions, [])
+    XCTAssertEqual(viewModel.suggestions, [])
   }
 
   func testLoadAggregatesRecurringMistakesAndRecentSuggestions() async {
-    let (store, cleanUp) = makeStore()
+    let (store, taps, cleanUp) = makeStore()
     defer { cleanUp() }
 
     await store.append(
@@ -57,7 +60,7 @@ final class LearningViewModelTests: XCTestCase {
       model: "gpt-5.6-sol"
     )
 
-    let viewModel = LearningViewModel(learningLog: store)
+    let viewModel = LearningViewModel(learningLog: store, considerTaps: taps)
     await viewModel.load()
 
     XCTAssertFalse(viewModel.isEmpty)
@@ -68,7 +71,13 @@ final class LearningViewModelTests: XCTestCase {
         GrammarCategoryCount(category: "article", count: 1),
       ]
     )
-    XCTAssertEqual(viewModel.recentSuggestions, ["\"he go\" → \"he went\" — more natural."])
+    XCTAssertEqual(viewModel.suggestions.map(\.phrase), ["he go"])
+    XCTAssertEqual(viewModel.suggestions.map(\.alternative), ["he went"])
+    XCTAssertEqual(viewModel.suggestions.map(\.reason), ["more natural."])
+    XCTAssertEqual(viewModel.suggestions.map(\.isTapped), [false])
+    // The source text has to survive the parse — without it `StudyCardBuilder` has no
+    // sentence to blank the phrase inside, so the tap could never become a card.
+    XCTAssertEqual(viewModel.suggestions.map(\.sourceOriginal), ["he go store"])
   }
 
   func testLoadComputesMetricsFromParsedSamples() async {
@@ -77,6 +86,7 @@ final class LearningViewModelTests: XCTestCase {
     defer { try? FileManager.default.removeItem(at: directory) }
     let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
     let store = LearningLogStore(directoryURL: directory, now: { fixedNow })
+    let taps = ConsiderTapStore(directoryURL: directory)
 
     await store.append(
       client: "claude-code",
@@ -93,7 +103,7 @@ final class LearningViewModelTests: XCTestCase {
       model: "gpt-5.6-sol"
     )
 
-    let viewModel = LearningViewModel(learningLog: store)
+    let viewModel = LearningViewModel(learningLog: store, considerTaps: taps)
     await viewModel.load()
 
     XCTAssertEqual(viewModel.categoryRates.map(\.category), ["verb-tense"])

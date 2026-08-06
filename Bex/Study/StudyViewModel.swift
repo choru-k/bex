@@ -49,16 +49,19 @@ final class StudyViewModel: ObservableObject {
   @Published private(set) var sessionTotal = 0
 
   private let learningLog: LearningLogStore
+  private let considerTaps: ConsiderTapStore
   private let studyState: StudyStateStore
   private let now: () -> Date
   private var sessionQueue: [StudyCard] = []
 
   init(
     learningLog: LearningLogStore,
+    considerTaps: ConsiderTapStore,
     studyState: StudyStateStore,
     now: @escaping () -> Date = { Date() }
   ) {
     self.learningLog = learningLog
+    self.considerTaps = considerTaps
     self.studyState = studyState
     self.now = now
   }
@@ -82,7 +85,7 @@ final class StudyViewModel: ObservableObject {
   func load() async {
     isLoading = true
     let entries = await learningLog.readAll()
-    let samples = LearningLogSamples.parse(entries)
+    let samples = LearningLogSamples.merged(entries, taps: await considerTaps.taps())
     let cards = StudyCardBuilder.cards(from: samples)
     // `uniquingKeysWith` rather than `uniqueKeysWithValues`: the latter traps on a
     // duplicate id, which would turn a card-builder regression in another file into a

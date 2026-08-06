@@ -13,4 +13,26 @@ enum LearningLogSamples {
       return LearningSample(date: date, original: entry.original, explanation: entry.explanation)
     }
   }
+
+  /// Log entries plus tapped "Consider" alternatives, oldest first — the card-building
+  /// corpus (docs/learning-mode-plan.md, v7.1 decision 1).
+  ///
+  /// Only `StudyCardBuilder` callers use this. `LearningMetrics` deliberately keeps reading
+  /// `parse` alone, because a tap is a choice made while reviewing, not text the owner
+  /// wrote, and counting its words would dilute the per-100-words error rates.
+  ///
+  /// The sort is required, not tidiness: `cards(from:)` dedups first-occurrence-wins and
+  /// `StudyDailyPlan` takes new cards in list order, so appending taps after the log would
+  /// park every chosen expression permanently behind the entire backlog.
+  static func merged(
+    _ entries: [LearningLogStore.Entry], taps: [ConsiderTap]
+  ) -> [LearningSample] {
+    let formatter = ISO8601DateFormatter()
+    let tapSamples = taps.compactMap { tap -> LearningSample? in
+      guard let date = formatter.date(from: tap.timestamp) else { return nil }
+      return LearningSample(
+        date: date, original: tap.sourceOriginal, explanation: tap.learningLogExplanation)
+    }
+    return (parse(entries) + tapSamples).sorted { $0.date < $1.date }
+  }
 }

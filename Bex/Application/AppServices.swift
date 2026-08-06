@@ -7,6 +7,7 @@ final class AppServices {
   let data: BexDataStore
   let learningLog: LearningLogStore
   let studyState: StudyStateStore
+  let considerTaps: ConsiderTapStore
   let studyPatterns: StudyPatternStore
   let grammar: any GrammarServicing
   let promptGrammar: any PromptGrammarServicing
@@ -24,6 +25,7 @@ final class AppServices {
     data: BexDataStore,
     learningLog: LearningLogStore,
     studyState: StudyStateStore,
+    considerTaps: ConsiderTapStore,
     studyPatterns: StudyPatternStore,
     grammar: any GrammarServicing,
     promptGrammar: any PromptGrammarServicing,
@@ -40,6 +42,7 @@ final class AppServices {
     self.data = data
     self.learningLog = learningLog
     self.studyState = studyState
+    self.considerTaps = considerTaps
     self.studyPatterns = studyPatterns
     self.grammar = grammar
     self.promptGrammar = promptGrammar
@@ -58,6 +61,7 @@ final class AppServices {
     let data = BexDataStore()
     let learningLog = LearningLogStore()
     let studyState = StudyStateStore()
+    let considerTaps = ConsiderTapStore()
     let studyPatterns = StudyPatternStore()
     let transport = URLSessionTransport()
     let factory = ProviderClientFactory(
@@ -74,6 +78,7 @@ final class AppServices {
       data: data,
       learningLog: learningLog,
       studyState: studyState,
+      considerTaps: considerTaps,
       studyPatterns: studyPatterns,
       grammar: grammar,
       promptGrammar: grammar,

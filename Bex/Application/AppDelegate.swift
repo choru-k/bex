@@ -796,8 +796,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     cards: [StudyCard], plan: StudyDailyPlan.Plan, samples: [LearningSample]
   ) {
     let entries = await services.learningLog.readAll()
+    // Two corpora on purpose: cards drill tapped "Consider" alternatives too, but the
+    // returned `samples` feed `LearningBadge`, which must keep meaning "new material to
+    // review" — a tap is material already reviewed. See `LearningLogSamples.merged`.
     let samples = LearningLogSamples.parse(entries)
-    let cards = StudyCardBuilder.cards(from: samples)
+    let cards = StudyCardBuilder.cards(
+      from: LearningLogSamples.merged(entries, taps: await services.considerTaps.taps()))
     let states = await services.studyState.states()
     let verdicts = await services.studyPatterns.verdicts()
     let plan = StudyDailyPlan.plan(
@@ -832,7 +836,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     else { return }
 
     let entries = await services.learningLog.readAll()
-    let cards = StudyCardBuilder.cards(from: LearningLogSamples.parse(entries))
+    let cards = StudyCardBuilder.cards(
+      from: LearningLogSamples.merged(entries, taps: await services.considerTaps.taps()))
     let pendingIDs = Set(await services.studyPatterns.unclassifiedIDs(among: cards))
     guard !pendingIDs.isEmpty else { return }
 

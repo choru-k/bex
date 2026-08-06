@@ -281,7 +281,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   func showLearning() {
     quickCheckViewModel?.dismiss(.auxiliaryNavigation)
     if learningWindowController == nil {
-      let viewModel = LearningViewModel(learningLog: services.learningLog)
+      let viewModel = LearningViewModel(
+        learningLog: services.learningLog, considerTaps: services.considerTaps)
       learningWindowController = Self.makeWindowController(
         configuration: Self.learningWindowConfiguration,
         rootView: LearningView(viewModel: viewModel),
@@ -303,7 +304,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   func showStudy() {
     quickCheckViewModel?.dismiss(.auxiliaryNavigation)
     if studyWindowController == nil {
-      let viewModel = StudyViewModel(learningLog: services.learningLog, studyState: services.studyState)
+      let viewModel = StudyViewModel(
+        learningLog: services.learningLog,
+        considerTaps: services.considerTaps,
+        studyState: services.studyState)
       studyWindowController = Self.makeWindowController(
         configuration: Self.studyWindowConfiguration,
         rootView: StudyView(viewModel: viewModel),

@@ -4,14 +4,38 @@ import Foundation
 /// stored limit — the underlying log keeps everything.
 private let recentSuggestionsLimit = 20
 
-/// Read-only aggregation of the learning log for the Phase 1 v1 Learning window
-/// (docs/learning-mode-plan.md). No delete/edit/undo, no live notification observation —
-/// data is loaded once when the window opens.
+/// One tappable "Consider" alternative, ready for the list.
+///
+/// Carries `sourceOriginal` because that is what makes it drillable: `StudyCardBuilder`
+/// blanks `phrase` inside it to build the cloze, so a suggestion divorced from the text it
+/// was made about cannot become a card.
+struct ConsiderSuggestion: Identifiable, Equatable, Sendable {
+  let sourceOriginal: String
+  let phrase: String
+  let alternative: String
+  let reason: String
+  /// Whether the owner already chose this one. Matches `ConsiderTap.id`, so re-opening the
+  /// window shows previous picks as taken.
+  let isTapped: Bool
+
+  var id: String { "\(phrase)|\(alternative)" }
+
+  /// The line as the model wrote it, reassembled for display.
+  var displayLine: String {
+    let suffix = reason.isEmpty ? "" : " — \(reason)"
+    return "\"\(phrase)\" → \"\(alternative)\"\(suffix)"
+  }
+}
+
+/// Aggregation of the learning log for the Learning window (docs/learning-mode-plan.md).
+/// Read-only except for one action — tapping a "Consider" alternative — which is the
+/// deferred review session's entire point: expression is reviewed here, off the shipping
+/// flow, and a tap is what turns exposure into a drill.
 @MainActor
 final class LearningViewModel: ObservableObject {
   @Published private(set) var isLoading = true
   @Published private(set) var recurringMistakes: [GrammarCategoryCount] = []
-  @Published private(set) var recentSuggestions: [String] = []
+  @Published private(set) var suggestions: [ConsiderSuggestion] = []
   @Published private(set) var categoryRates: [CategoryRate] = []
   @Published private(set) var medianSentenceLength: Double = 0
   @Published private(set) var weeklyRates: [WeeklyRate] = []
@@ -19,34 +43,85 @@ final class LearningViewModel: ObservableObject {
   @Published private(set) var uptakeSuggested: Int = 0
 
   private let learningLog: LearningLogStore
+  private let considerTaps: ConsiderTapStore
 
-  init(learningLog: LearningLogStore) {
+  init(learningLog: LearningLogStore, considerTaps: ConsiderTapStore) {
     self.learningLog = learningLog
+    self.considerTaps = considerTaps
   }
 
   var isEmpty: Bool {
-    !isLoading && recurringMistakes.isEmpty && recentSuggestions.isEmpty
+    !isLoading && recurringMistakes.isEmpty && suggestions.isEmpty
   }
 
   func load() async {
     isLoading = true
     let entries = await learningLog.readAll()
+    let tappedIDs = await considerTaps.tappedIDs()
     let explanations = entries.map(\.explanation)
     recurringMistakes = LearningAggregator.recurringCounts(explanations: explanations)
-    recentSuggestions = Array(
-      entries.reversed()
-        .flatMap { LearningAggregator.parseConsiderSuggestions(from: $0.explanation) }
-        .prefix(recentSuggestionsLimit)
-    )
+
+    // Newest first, and deduplicated by `phrase|alternative`: since v7 the same
+    // alternative recurs across many corrections, and a list showing it twenty times is a
+    // list nobody scrolls. First occurrence wins, so the newest context is the one kept.
+    var seen = Set<String>()
+    var collected: [ConsiderSuggestion] = []
+    for entry in entries.reversed() {
+      for line in LearningAggregator.parseConsiderSuggestions(from: entry.explanation) {
+        guard let parsed = LearningAggregator.parseSuggestionLine(line) else { continue }
+        let suggestion = ConsiderSuggestion(
+          sourceOriginal: entry.original,
+          phrase: parsed.phrase,
+          alternative: parsed.alternative,
+          reason: parsed.reason,
+          isTapped: tappedIDs.contains("\(parsed.phrase)|\(parsed.alternative)")
+        )
+        guard seen.insert(suggestion.id).inserted else { continue }
+        collected.append(suggestion)
+        if collected.count == recentSuggestionsLimit { break }
+      }
+      if collected.count == recentSuggestionsLimit { break }
+    }
+    suggestions = collected
 
     let samples = LearningLogSamples.parse(entries)
     categoryRates = LearningMetrics.categoryRates(samples: samples)
     medianSentenceLength = LearningMetrics.medianSentenceLength(originals: samples.map(\.original))
     weeklyRates = LearningMetrics.weeklyRates(samples: samples)
-    let uptake = LearningMetrics.uptake(samples: samples)
-    uptakeAdopted = uptake.adopted
-    uptakeSuggested = uptake.suggested
+
+    // Goal-2 uptake, now measured rather than inferred: how many distinct alternatives were
+    // offered across the whole log, and how many the owner actually picked.
+    uptakeSuggested = Set(
+      entries.flatMap { entry in
+        LearningAggregator.parseConsiderSuggestions(from: entry.explanation)
+          .compactMap { LearningAggregator.parseSuggestionLine($0) }
+          .map { "\($0.phrase)|\($0.alternative)" }
+      }
+    ).count
+    uptakeAdopted = tappedIDs.count
 
     isLoading = false
+  }
+
+  /// Records the owner's choice and mints a Study card from it. Deliberately does NOT
+  /// rewrite anything already corrected — v6.1's rule that expression alternatives are
+  /// never auto-applied still holds; a tap says "drill me on this", not "change my text".
+  func chooseSuggestion(_ suggestion: ConsiderSuggestion) async {
+    guard !suggestion.isTapped else { return }
+    await considerTaps.record(
+      sourceOriginal: suggestion.sourceOriginal,
+      phrase: suggestion.phrase,
+      alternative: suggestion.alternative,
+      reason: suggestion.reason
+    )
+    guard let index = suggestions.firstIndex(where: { $0.id == suggestion.id }) else { return }
+    suggestions[index] = ConsiderSuggestion(
+      sourceOriginal: suggestion.sourceOriginal,
+      phrase: suggestion.phrase,
+      alternative: suggestion.alternative,
+      reason: suggestion.reason,
+      isTapped: true
+    )
+    uptakeAdopted += 1
   }
 }

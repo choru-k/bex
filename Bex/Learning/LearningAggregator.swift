@@ -18,6 +18,12 @@ enum GrammarCategory: String, CaseIterable, Sendable {
   /// exists to keep vocabulary out of the grammar stats (see `recurringCounts`) while
   /// still letting `StudyCardBuilder` drill it like any other card.
   case vocabulary
+  /// A "Consider" alternative the owner tapped in the Learning window, not a mistake he
+  /// made. `GrammarPrompts` never emits this tag either — only
+  /// `ConsiderTap.learningLogExplanation` does — so like `vocabulary` it exists to keep a
+  /// deliberate choice out of the grammar stats while still letting `StudyCardBuilder`
+  /// drill it. See docs/learning-mode-plan.md v7.1 decision 1.
+  case expression
   case other
 
   /// Friendly label for the Learning window.
@@ -32,6 +38,7 @@ enum GrammarCategory: String, CaseIterable, Sendable {
     case .spelling: return "Spelling"
     case .capitalization: return "Capitalization"
     case .vocabulary: return "Vocabulary"
+    case .expression: return "Expression"
     case .other: return "Other"
     }
   }
@@ -97,6 +104,49 @@ enum LearningAggregator {
     linesInSection(named: "Consider:", of: explanation)
   }
 
+  /// Splits one "Consider" line — `"original" → "alternative" — reason` — into its parts.
+  /// `->` is tolerated in place of `→` because models produce both.
+  ///
+  /// Returns `nil` for any line that is not an alternative, which is load-bearing rather
+  /// than defensive: since v7 the section ends with a plain `Which fits? …` prose line, and
+  /// that line having no arrow is exactly what keeps it out of the tappable list without
+  /// the caller needing to recognize it. Prose in, nothing out.
+  static func parseSuggestionLine(_ line: String) -> (
+    phrase: String, alternative: String, reason: String
+  )? {
+    let text = stripLeadingListMarker(Substring(line))
+    guard let phraseOpen = text.firstIndex(of: "\"") else { return nil }
+    let afterPhraseOpen = text[text.index(after: phraseOpen)...]
+    guard let phraseClose = afterPhraseOpen.firstIndex(of: "\"") else { return nil }
+    let phrase = String(afterPhraseOpen[..<phraseClose])
+
+    let afterPhrase = afterPhraseOpen[afterPhraseOpen.index(after: phraseClose)...]
+    guard let arrow = afterPhrase.range(of: "→") ?? afterPhrase.range(of: "->") else { return nil }
+    let afterArrow = afterPhrase[arrow.upperBound...]
+    guard let altOpen = afterArrow.firstIndex(of: "\"") else { return nil }
+    let afterAltOpen = afterArrow[afterArrow.index(after: altOpen)...]
+    guard let altClose = afterAltOpen.firstIndex(of: "\"") else { return nil }
+    let alternative = String(afterAltOpen[..<altClose])
+
+    guard !phrase.isEmpty, !alternative.isEmpty else { return nil }
+    let trailing = afterAltOpen[afterAltOpen.index(after: altClose)...]
+    return (phrase, alternative, strippedReason(trailing))
+  }
+
+  /// Drops one leading separator (`—`, `--`, `-`) and surrounding whitespace from the text
+  /// after the alternative's closing quote. Mirrors `StudyCardBuilder.reason(after:)`.
+  private static func strippedReason(_ text: Substring) -> String {
+    var rest = Substring(String(text).trimmingCharacters(in: .whitespaces))
+    if rest.hasPrefix("—") {
+      rest = rest.dropFirst()
+    } else if rest.hasPrefix("--") {
+      rest = rest.dropFirst(2)
+    } else if rest.hasPrefix("-") {
+      rest = rest.dropFirst()
+    }
+    return String(rest).trimmingCharacters(in: .whitespaces)
+  }
+
   /// The explanation text with the "Consider:" section (and its header) removed — i.e. the
   /// "Fixed:" grammar notes only. Mirrors the case-insensitive header matching used by
   /// `linesInSection`. Returns the whole explanation, trimmed, when there is no "Consider:"
@@ -124,14 +174,16 @@ enum LearningAggregator {
   /// in `parseFixedTags`; only these aggregate stats drop it.
   /// ponytail: whole-category exclusion; add sentence-start-vs-proper-noun detection only if real capitalization errors ever matter here.
   ///
-  /// `vocabulary` is excluded for a different reason: a saved dictionary lookup is a word
-  /// the owner chose to learn, not a mistake he made. Counting it would inflate the
-  /// per-100-words error rates in `LearningMetrics` — which read straight from this
-  /// function — every time he looks something up, making the gate he already passed
-  /// depend on how curious he was that week.
+  /// `vocabulary` and `expression` are excluded for a different reason: a saved dictionary
+  /// lookup is a word the owner chose to learn, and a tapped "Consider" alternative is a
+  /// rephrasing he chose to adopt — neither is a mistake he made. Counting them would
+  /// inflate the per-100-words error rates in `LearningMetrics` — which read straight from
+  /// this function — every time he looks something up or picks an alternative, making the
+  /// gate he already passed depend on how curious he was that week.
   static let statisticsExcludedCategories: Set<String> = [
     GrammarCategory.capitalization.rawValue,
     GrammarCategory.vocabulary.rawValue,
+    GrammarCategory.expression.rawValue,
   ]
 
   static func recurringCounts(explanations: [String]) -> [GrammarCategoryCount] {

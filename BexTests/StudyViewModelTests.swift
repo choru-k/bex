@@ -6,14 +6,18 @@ import XCTest
 @MainActor
 final class StudyViewModelTests: XCTestCase {
   private func makeStores() -> (
-    learningLog: LearningLogStore, studyState: StudyStateStore, directory: URL,
-    cleanUp: () -> Void
+    learningLog: LearningLogStore, considerTaps: ConsiderTapStore,
+    studyState: StudyStateStore, directory: URL, cleanUp: () -> Void
   ) {
     let directory = FileManager.default.temporaryDirectory
       .appendingPathComponent("StudyViewModelTests-\(UUID().uuidString)", isDirectory: true)
     let learningLog = LearningLogStore(directoryURL: directory)
+    let considerTaps = ConsiderTapStore(directoryURL: directory)
     let studyState = StudyStateStore(directoryURL: directory)
-    return (learningLog, studyState, directory, { try? FileManager.default.removeItem(at: directory) })
+    return (
+      learningLog, considerTaps, studyState, directory,
+      { try? FileManager.default.removeItem(at: directory) }
+    )
   }
 
   /// Appends one "Fixed:" correction that `StudyCardBuilder` can turn into a drillable
@@ -51,11 +55,11 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testLoadPopulatesCurrentCardAndDueCountForDrillableMistakes() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
 
     XCTAssertFalse(viewModel.isLoading)
@@ -66,10 +70,10 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testLoadIsEmptyForEmptyLog() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
 
     XCTAssertTrue(viewModel.isEmpty)
@@ -80,11 +84,11 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testSelectingCorrectChoiceRevealsAnswerAndPersistsPromotion() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState, now: { fixedNow })
     await viewModel.load()
 
     let id = cardID(wrong: "on", correct: "in")
@@ -100,7 +104,7 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testSelectingWrongChoiceRevealsAndPersistsResetToBoxZero() async throws {
-    let (learningLog, studyState, directory, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, directory, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     let id = cardID(wrong: "on", correct: "in")
@@ -114,7 +118,7 @@ final class StudyViewModelTests: XCTestCase {
       states: [id: StudyReviewState(box: 2, dueAt: farPast, timesSeen: 2, timesCorrect: 2)]
     )
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState, now: { fixedNow })
     await viewModel.load()
     XCTAssertEqual(viewModel.currentCard?.id, id)
 
@@ -127,11 +131,11 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testSubmittingCorrectTypedAnswerRevealsAnswerAndPersistsPromotion() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState, now: { fixedNow })
     await viewModel.load()
     XCTAssertEqual(viewModel.currentCard?.answerMode, .typed)
 
@@ -149,7 +153,7 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testSubmittingWrongTypedAnswerRevealsAndPersistsResetToBoxZero() async throws {
-    let (learningLog, studyState, directory, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, directory, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     let id = cardID(wrong: "on", correct: "in")
@@ -161,7 +165,7 @@ final class StudyViewModelTests: XCTestCase {
       states: [id: StudyReviewState(box: 2, dueAt: farPast, timesSeen: 2, timesCorrect: 2)]
     )
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState, now: { fixedNow })
     await viewModel.load()
 
     viewModel.typedAnswer = "on"
@@ -175,11 +179,11 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testBlankTypedSubmitIsNoOp() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
 
     viewModel.typedAnswer = "   "
@@ -192,12 +196,12 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testTypedAnswerClearsBetweenCards() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     await appendEntry(to: learningLog, wrong: "at", correct: "to")
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
 
     viewModel.typedAnswer = "in"
@@ -210,12 +214,12 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testAdvanceMovesToNextCardAndEventuallyFinishes() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     await appendEntry(to: learningLog, wrong: "at", correct: "to")
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
     XCTAssertEqual(viewModel.sessionTotal, 2)
 
@@ -235,7 +239,7 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testCardsScheduledInTheFutureAreExcludedFromSession() async throws {
-    let (learningLog, studyState, directory, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, directory, cleanUp) = makeStores()
     defer { cleanUp() }
     await appendEntry(to: learningLog, wrong: "on", correct: "in")
     await appendEntry(to: learningLog, wrong: "at", correct: "to")
@@ -252,7 +256,7 @@ final class StudyViewModelTests: XCTestCase {
       ]
     )
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState, now: { fixedNow })
     await viewModel.load()
 
     XCTAssertEqual(viewModel.dueCount, 1)
@@ -261,13 +265,13 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   func testChoicesAlwaysContainCorrectAnswerAfterPresentation() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     for index in 0..<10 {
       await appendEntry(to: learningLog, wrong: "wrong\(index)", correct: "correct\(index)")
     }
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
 
     for _ in 0..<10 {
@@ -290,7 +294,7 @@ final class StudyViewModelTests: XCTestCase {
   /// reflects the full backlog while `sessionTotal` still gets truncated to
   /// `sessionCap` for one sitting.
   func testSessionCapRespectedWhenMoreDueReviewsThanCap() async throws {
-    let (learningLog, studyState, directory, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, directory, cleanUp) = makeStores()
     defer { cleanUp() }
     let fixedNow = Date(timeIntervalSince1970: 1_700_000_000)
     var states: [String: StudyReviewState] = [:]
@@ -307,7 +311,7 @@ final class StudyViewModelTests: XCTestCase {
     }
     try seedState(directory: directory, states: states)
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState, now: { fixedNow })
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState, now: { fixedNow })
     await viewModel.load()
 
     XCTAssertEqual(viewModel.dueCount, 25)
@@ -321,13 +325,13 @@ final class StudyViewModelTests: XCTestCase {
   /// `StudyDailyPlan.newCardBatchSize`, so the session — and the badge/notification
   /// count behind it — reads as a small, clearable 10, not an overwhelming 30.
   func testColdStartSessionCapsNewCardsAtDailyLimitNotWholeDeck() async {
-    let (learningLog, studyState, _, cleanUp) = makeStores()
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
     defer { cleanUp() }
     for index in 0..<30 {
       await appendEntry(to: learningLog, wrong: "wrong\(index)", correct: "correct\(index)")
     }
 
-    let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
+    let viewModel = StudyViewModel(learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
     await viewModel.load()
 
     XCTAssertEqual(viewModel.dueCount, StudyDailyPlan.newCardBatchSize)

@@ -1035,6 +1035,7 @@
       let learningLogDirectory = directory.appendingPathComponent("LearningLog", isDirectory: true)
       let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
       let studyState = StudyStateStore(directoryURL: learningLogDirectory)
+      let considerTaps = ConsiderTapStore(directoryURL: learningLogDirectory)
       let studyPatterns = StudyPatternStore(directoryURL: learningLogDirectory)
 
       let keychain = KeychainStore(
@@ -1063,6 +1064,7 @@
         data: data,
         learningLog: learningLog,
         studyState: studyState,
+        considerTaps: considerTaps,
         studyPatterns: studyPatterns,
         grammar: grammar,
         promptGrammar: grammar,
