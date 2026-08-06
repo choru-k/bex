@@ -762,7 +762,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let (cards, plan, samples) = await studyCardsAndPlan(services: services, now: now)
 
     let lastViewedAt = await services.preferences.lastLearningViewedAt()
-    let learningStatus = LearningBadge.status(samples: samples, lastViewedAt: lastViewedAt)
+    let learningStatus = LearningBadge.status(
+      samples: samples,
+      tappedIDs: await services.considerTaps.tappedIDs(),
+      lastViewedAt: lastViewedAt)
 
     let studyDue = plan.cardIDs.count
     let severity = StudyDueCount.severity(maxOverdueDays: plan.maxOverdueDays)
