@@ -129,7 +129,12 @@ final class ProviderParserDiffStorageTests: XCTestCase {
         preferences: preferences,
         keychain: keychain,
         transport: transport
-      )
+      ),
+      // Hermetic: an empty temp directory means no profile exists, so prompts are the
+      // no-writer-level form these tests assert on.
+      writerLevel: WriterLevelStore(
+        directoryURL: FileManager.default.temporaryDirectory
+          .appendingPathComponent("WriterLevel-\(UUID().uuidString)", isDirectory: true))
     )
 
     _ = try await service.check(

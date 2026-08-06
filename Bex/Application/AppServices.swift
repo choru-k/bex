@@ -8,6 +8,7 @@ final class AppServices {
   let learningLog: LearningLogStore
   let studyState: StudyStateStore
   let considerTaps: ConsiderTapStore
+  let writerLevel: WriterLevelStore
   let studyPatterns: StudyPatternStore
   let grammar: any GrammarServicing
   let promptGrammar: any PromptGrammarServicing
@@ -26,6 +27,7 @@ final class AppServices {
     learningLog: LearningLogStore,
     studyState: StudyStateStore,
     considerTaps: ConsiderTapStore,
+    writerLevel: WriterLevelStore,
     studyPatterns: StudyPatternStore,
     grammar: any GrammarServicing,
     promptGrammar: any PromptGrammarServicing,
@@ -43,6 +45,7 @@ final class AppServices {
     self.learningLog = learningLog
     self.studyState = studyState
     self.considerTaps = considerTaps
+    self.writerLevel = writerLevel
     self.studyPatterns = studyPatterns
     self.grammar = grammar
     self.promptGrammar = promptGrammar
@@ -62,6 +65,7 @@ final class AppServices {
     let learningLog = LearningLogStore()
     let studyState = StudyStateStore()
     let considerTaps = ConsiderTapStore()
+    let writerLevel = WriterLevelStore()
     let studyPatterns = StudyPatternStore()
     let transport = URLSessionTransport()
     let factory = ProviderClientFactory(
@@ -69,7 +73,7 @@ final class AppServices {
       keychain: keychain,
       transport: transport
     )
-    let grammar = GrammarService(factory: factory)
+    let grammar = GrammarService(factory: factory, writerLevel: writerLevel)
     let pasteboard = SystemPasteboard()
     let promptGateIPC = PromptGateIPCServer()
     return AppServices(
@@ -79,6 +83,7 @@ final class AppServices {
       learningLog: learningLog,
       studyState: studyState,
       considerTaps: considerTaps,
+      writerLevel: writerLevel,
       studyPatterns: studyPatterns,
       grammar: grammar,
       promptGrammar: grammar,

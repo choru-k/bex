@@ -136,6 +136,14 @@ actor QuickCheckGrammarStub: GrammarServicing {
     [:]
   }
 
+  func refreshWriterLevel(
+    samples: [LearningSample],
+    destination: OutboundDestination,
+    now: Date
+  ) async throws -> WriterLevelProfile {
+    throw BexError.invalidResponse
+  }
+
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

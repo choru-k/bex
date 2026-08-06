@@ -60,9 +60,13 @@ struct ProviderClientFactory: Sendable {
 
 actor GrammarService: GrammarServicing, PromptGrammarServicing {
   private let factory: ProviderClientFactory
+  /// Read on the interactive path, so it must stay cheap — `WriterLevelStore` caches in
+  /// memory after the first read for exactly this reason.
+  private let writerLevel: WriterLevelStore
 
-  init(factory: ProviderClientFactory) {
+  init(factory: ProviderClientFactory, writerLevel: WriterLevelStore) {
     self.factory = factory
+    self.writerLevel = writerLevel
   }
 
   func check(
@@ -78,7 +82,8 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
     return try await client.check(
       text: text,
       model: destination.model,
-      systemPrompt: GrammarPrompts.buildSystemPrompt(profilePrompt: profilePrompt),
+      systemPrompt: GrammarPrompts.buildSystemPrompt(
+        profilePrompt: profilePrompt, writerLevel: await writerLevel.summary()),
       effort: effort
     )
   }
@@ -106,7 +111,8 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
     let result = try await client.check(
       text: protectedText.masked,
       model: destination.model,
-      systemPrompt: GrammarPrompts.promptSafeSystem,
+      systemPrompt: GrammarPrompts.buildPromptSafeSystem(
+        writerLevel: await writerLevel.summary()),
       effort: effort
     )
     return GrammarResult(
@@ -173,6 +179,33 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
       effort: effort
     )
     return try StudyPattern.parseClassification(output, for: cards)
+  }
+
+  /// Recomputes the writer-level profile from the whole logged corpus, in one call.
+  ///
+  /// Background-only, for the same reason as `classifyStudyPatterns` directly above: this
+  /// ships up to 200 past corrections to the provider and takes as long as it takes. It
+  /// must never run on the correction path — the whole design is that the interactive
+  /// request carries a summary computed earlier, not the analysis itself.
+  func refreshWriterLevel(
+    samples: [LearningSample],
+    destination: OutboundDestination,
+    now: Date = Date()
+  ) async throws -> WriterLevelProfile {
+    let message = WriterLevelProfile.profilingMessage(samples: samples)
+    guard !message.isEmpty else { throw BexError.emptyInput }
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
+    let output = try await client.generate(
+      text: message,
+      model: destination.model,
+      systemPrompt: WriterLevelProfile.systemPrompt,
+      effort: effort
+    )
+    let profile = try WriterLevelProfile.parse(
+      output, generatedAt: now, sampleCount: samples.count)
+    await writerLevel.store(profile)
+    return profile
   }
 
   func generateProfile(

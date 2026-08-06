@@ -87,13 +87,39 @@ enum GrammarPrompts {
     Respond with rewritten text only (no markdown, no explanation).
     """
 
-  static func buildSystemPrompt(profilePrompt: String?) -> String {
+  /// What Bex has learned about this writer over time, appended to a base prompt.
+  ///
+  /// This is the accumulating half of the v7 slip-vs-gap test (see `editingRules`): the
+  /// request itself sees one text, so without this it can only judge "did they know it"
+  /// from evidence inside that text. `WriterLevelStore` computes the summary in the
+  /// background — nothing here costs the correction any extra tokens beyond the text
+  /// itself, which is the owner's latency constraint (docs/learning-mode-plan.md v7.1).
+  private static func withWriterLevel(_ base: String, _ writerLevel: String?) -> String {
+    guard let writerLevel,
+      !writerLevel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      return base
+    }
+    return """
+      \(base)
+
+      What you already know about this writer, from their past corrections. Use it only to tell a slip from a genuine gap; never mention it, and never let it stop you making a correction the text needs:
+      \(writerLevel)
+      """
+  }
+
+  static func buildSystemPrompt(profilePrompt: String?, writerLevel: String? = nil) -> String {
+    let base = withWriterLevel(system, writerLevel)
     guard let profilePrompt,
       !profilePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
-      return system
+      return base
     }
-    return "\(system)\n\nAdditional context from the user:\n\(profilePrompt)"
+    return "\(base)\n\nAdditional context from the user:\n\(profilePrompt)"
+  }
+
+  static func buildPromptSafeSystem(writerLevel: String? = nil) -> String {
+    withWriterLevel(promptSafeSystem, writerLevel)
   }
 
   static func rewriteSystemPrompt(intent: RewriteIntent) -> String {

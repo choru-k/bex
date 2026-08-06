@@ -582,6 +582,16 @@
       [:]
     }
 
+    /// UI tests must not depend on a background provider call, so the profile stays absent
+    /// and prompts fall back to their no-writer-level form.
+    func refreshWriterLevel(
+      samples: [LearningSample],
+      destination: OutboundDestination,
+      now: Date
+    ) async throws -> WriterLevelProfile {
+      throw BexError.invalidResponse
+    }
+
     func generateProfile(
       context: ProfileContext,
       destination: OutboundDestination
@@ -1036,6 +1046,7 @@
       let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
       let studyState = StudyStateStore(directoryURL: learningLogDirectory)
       let considerTaps = ConsiderTapStore(directoryURL: learningLogDirectory)
+      let writerLevel = WriterLevelStore(directoryURL: learningLogDirectory)
       let studyPatterns = StudyPatternStore(directoryURL: learningLogDirectory)
 
       let keychain = KeychainStore(
@@ -1065,6 +1076,7 @@
         learningLog: learningLog,
         studyState: studyState,
         considerTaps: considerTaps,
+        writerLevel: writerLevel,
         studyPatterns: studyPatterns,
         grammar: grammar,
         promptGrammar: grammar,

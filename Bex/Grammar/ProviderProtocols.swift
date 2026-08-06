@@ -56,6 +56,11 @@ protocol GrammarServicing: Sendable {
     cards: [StudyCard],
     destination: OutboundDestination
   ) async throws -> [String: StudyPattern.Verdict]
+  func refreshWriterLevel(
+    samples: [LearningSample],
+    destination: OutboundDestination,
+    now: Date
+  ) async throws -> WriterLevelProfile
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

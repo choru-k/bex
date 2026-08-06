@@ -134,6 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       // Last: this one makes a network call. Everything the user can see is already
       // correct without it, and it republishes the badge itself once it finishes.
       await self?.classifyStudyPatternsIfNeeded()
+      await self?.refreshWriterLevelIfNeeded()
       await self?.refreshMenuBarBadge()
     }
     #if DEBUG
@@ -741,6 +742,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       [weak self] _ in
       Task { @MainActor [weak self] in
         await self?.classifyStudyPatternsIfNeeded()
+      await self?.refreshWriterLevelIfNeeded()
         await self?.refreshMenuBarBadge()
       }
     }
@@ -850,6 +852,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cards: pending, destination: destination)
     else { return }
     await services.studyPatterns.assign(assignments)
+  }
+
+  /// Recomputes what Bex knows about the owner's level, on the same launch + hourly tick as
+  /// pattern classification and under the same rules: off the interactive path, gated on
+  /// the outbound disclosure they already accepted, failures swallowed and retried next
+  /// tick. See `WriterLevelRefresh` for why it runs at most daily rather than every tick.
+  ///
+  /// This is the "점점" in the owner's ask — the correction prompt sees one text and cannot
+  /// accumulate, so the accumulating happens here (docs/learning-mode-plan.md v7.1).
+  private func refreshWriterLevelIfNeeded() async {
+    guard let services else { return }
+    guard let destination = try? await services.preferences.outboundDestination(),
+      await services.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+    else { return }
+
+    let entries = await services.learningLog.readAll()
+    let samples = LearningLogSamples.parse(entries)
+    let current = await services.writerLevel.current()
+    guard
+      WriterLevelRefresh.shouldRefresh(
+        current: current, correctionCount: samples.count, now: Date())
+    else { return }
+
+    _ = try? await services.grammar.refreshWriterLevel(
+      samples: samples, destination: destination, now: Date())
   }
 
   private func applyMenuBarBadge(_ badge: StudyDueCount.MenuBarBadge) {
