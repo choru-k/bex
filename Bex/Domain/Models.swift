@@ -30,10 +30,25 @@ public enum LLMProvider: String, Codable, CaseIterable, Sendable {
   public var defaultModel: String {
     switch self {
     case .openAI: "gpt-5.6-sol"
-    case .openAICodex: "gpt-5.6-sol"
+    // Measured on Bex's own grammar prompt: terra answers in ~2s spending no reasoning
+    // tokens, against ~5s for sol and ~7s for luna, with identical corrections.
+    case .openAICodex: "gpt-5.6-terra"
     case .claude: "claude-opus-4-8"
     case .gemini: "gemini-3.5-flash"
     case .ollama: "llama3.3"
+    }
+  }
+
+  /// Reasoning effort to use when the user has not chosen one.
+  ///
+  /// ponytail: grammar checking does not need reasoning — on a 25-case eval, terra at
+  /// `.low` scored the same as every higher setting while spending zero reasoning tokens.
+  /// Only the provider that was actually measured drops to `.low`; lower the others once
+  /// someone benchmarks them.
+  public var defaultEffort: ReasoningEffort {
+    switch self {
+    case .openAICodex: .low
+    case .openAI, .claude, .gemini, .ollama: .medium
     }
   }
 }

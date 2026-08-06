@@ -132,7 +132,7 @@ actor PreferencesStore {
       let rawValue = defaults.string(forKey: key),
       let effort = ReasoningEffort(rawValue: rawValue)
     else {
-      return .medium
+      return provider.defaultEffort
     }
     return effort
   }

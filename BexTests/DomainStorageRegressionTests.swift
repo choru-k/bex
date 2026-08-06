@@ -19,7 +19,7 @@ final class DomainStorageRegressionTests: XCTestCase {
 
   func testProviderDefaultsUseRequestedFrontierModels() {
     XCTAssertEqual(LLMProvider.openAI.defaultModel, "gpt-5.6-sol")
-    XCTAssertEqual(LLMProvider.openAICodex.defaultModel, "gpt-5.6-sol")
+    XCTAssertEqual(LLMProvider.openAICodex.defaultModel, "gpt-5.6-terra")
     XCTAssertEqual(LLMProvider.claude.defaultModel, "claude-opus-4-8")
     XCTAssertEqual(LLMProvider.gemini.defaultModel, "gemini-3.5-flash")
     XCTAssertEqual(LLMProvider.ollama.defaultModel, "llama3.3")
@@ -33,6 +33,8 @@ final class DomainStorageRegressionTests: XCTestCase {
 
     let defaultOpenAIEffort = await preferences.selectedEffort(for: .openAI)
     XCTAssertEqual(defaultOpenAIEffort, .medium)
+    let defaultCodexEffort = await preferences.selectedEffort(for: .openAICodex)
+    XCTAssertEqual(defaultCodexEffort, .low)
 
     await preferences.setSelectedEffort(.high, for: .openAI)
     await preferences.setSelectedEffort(.low, for: .gemini)
