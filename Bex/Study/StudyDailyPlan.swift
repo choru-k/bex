@@ -1,6 +1,6 @@
 import Foundation
 
-/// Computes what Study Mode should actually put in front of the owner *today* — the
+/// Computes what Study Mode should actually put in front of the owner *right now* — the
 /// fix for the cold-start problem where a deck with zero review history has every
 /// single card "due" at once (`StudyScheduler.isDue` treats "never studied" as due).
 /// `StudyScheduler.dueCards` answers "which cards are eligible right now", which for a
@@ -14,29 +14,43 @@ import Foundation
 ///     are few (they only exist once the owner has actually started them) and
 ///     time-sensitive, so all of them are always included.
 ///   - **New intake**: cards never studied before. There is no schedule pressure on
-///     these yet — they can enter rotation whenever — so how many enter *per day* is a
-///     policy knob (`dailyNewCardLimit`), not a fact derived from the data. Capping it
+///     these yet — they can enter rotation whenever — so how many enter *at a time* is a
+///     policy knob (`newCardBatchSize`), not a fact derived from the data. Capping it
 ///     is what makes the badge a small, clearable number instead of "the whole
-///     backlog": today's workload is bounded by policy, and it's the same bound
+///     backlog": the visible workload is bounded by policy, and it's the same bound
 ///     whether the deck has 12 cards or 1200.
 ///
 /// Pure and deterministic like `StudyScheduler`/`LearningBadge`: no `Date()` inside, no
 /// RNG, `now` and `calendar` both injected so "which day is it" is never ambient state.
 enum StudyDailyPlan {
-  /// How many brand-new cards may enter rotation on any one calendar day. Chosen so a
-  /// cold-start deck (or any backlog) turns into a small, steady, clearable daily
-  /// batch instead of dumping its entire size on the owner at once — see the file doc
-  /// comment for why that distinction is the whole point of this type.
-  static let dailyNewCardLimit = 10
+  /// How many brand-new cards may be on offer at once. Chosen so a cold-start deck (or
+  /// any backlog) turns into a small, clearable batch instead of dumping its entire size
+  /// on the owner at once — see the file doc comment for why that distinction is the
+  /// whole point of this type.
+  static let newCardBatchSize = 10
 
-  /// Today's actionable Study workload, already split into reviews-vs-new and ordered
+  /// How long after a card enters rotation before its slot frees up for a new one.
+  ///
+  /// This used to be "per calendar day", which the owner hit immediately: he cleared the
+  /// ten, wanted to keep going, and got nothing until the next morning. A cap meant to
+  /// stop a backlog from feeling hopeless had turned into a ceiling on wanting to study,
+  /// which is the opposite problem.
+  ///
+  /// An hour keeps the property that actually mattered — never more than
+  /// `newCardBatchSize` new cards visible at any moment, so the badge stays small and
+  /// reachable — while letting someone who finishes come back to a fresh batch instead of
+  /// a locked door. Finishing ten and stopping looks exactly like it did before; the
+  /// difference only shows up for someone who wants more.
+  static let newCardRefillInterval: TimeInterval = 3600
+
+  /// The actionable Study workload right now, already split into reviews-vs-new and ordered
   /// for presentation.
   struct Plan: Equatable, Sendable {
-    /// What to study right now, in order: due reviews first, then today's new intake.
+    /// What to study right now, in order: due reviews first, then this batch's new cards.
     let cardIDs: [String]
     /// How many of `cardIDs` are due cards already in rotation.
     let reviewCount: Int
-    /// How many of `cardIDs` are brand-new cards introduced today.
+    /// How many of `cardIDs` are brand-new cards entering rotation now.
     let newCount: Int
     /// The largest whole-day overdue gap across the included reviews, or 0 when
     /// nothing is overdue (including when the plan has no reviews at all). Drives
@@ -45,7 +59,7 @@ enum StudyDailyPlan {
     let maxOverdueDays: Int
   }
 
-  /// Builds today's plan from the full card list, the persisted review states, and
+  /// Builds the current plan from the full card list, the persisted review states, and
   /// "now". `cards` is expected in `StudyCardBuilder.cards(from:)`'s oldest-log-entry-
   /// first order — that ordering is what makes "take the first `allowedNew`" mean
   /// "the owner's oldest mistakes get introduced first" rather than an arbitrary pick.
@@ -67,22 +81,22 @@ enum StudyDailyPlan {
       maxOverdueDays = max(maxOverdueDays, max(0, overdueDays))
     }
 
-    // New intake: cards with no state at all, capped by how many already entered
-    // rotation today. A `nil` `firstSeenAt` (state written before this field existed)
-    // deliberately does NOT count toward today's intake — we have no evidence it was
-    // introduced today, and undercounting here only means the cap is a little more
-    // permissive on the day this ships, never a correctness problem.
-    let introducedToday = states.values.filter { state in
+    // New intake: cards with no state at all, capped by how many entered rotation inside
+    // the last `newCardRefillInterval`. A `nil` `firstSeenAt` (state written before this
+    // field existed) deliberately does NOT count against the batch — we have no evidence
+    // of when it was introduced, and undercounting here only means the cap is a little
+    // more permissive on the day this ships, never a correctness problem.
+    let introducedRecently = states.values.filter { state in
       guard let firstSeenAt = state.firstSeenAt else { return false }
-      return calendar.isDate(firstSeenAt, inSameDayAs: now)
+      return now.timeIntervalSince(firstSeenAt) < newCardRefillInterval
     }.count
-    let allowedNew = max(0, dailyNewCardLimit - introducedToday)
+    let allowedNew = max(0, newCardBatchSize - introducedRecently)
 
     // Higher-priority cards enter rotation first, oldest-first within a tier (both
-    // filters preserve `cards`' order). With a daily cap the intake order decides what
+    // filters preserve `cards`' order). With a capped batch the intake order decides what
     // the owner actually ever sees, so it has to be "the mistakes worth fixing" rather
     // than "whatever was logged first" — an obvious `"sub agent"` → `"sub agents"` tap
-    // is not worth one of today's ten slots while word order and prepositions wait.
+    // is not worth one of the ten slots while word order and prepositions wait.
     let unseen: [StudyCard] = cards.filter { states[$0.id] == nil }
     let ordered: [StudyCard] =
       unseen.filter { $0.priority == .high } + unseen.filter { $0.priority == .low }

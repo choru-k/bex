@@ -284,7 +284,7 @@ final class StudyViewModelTests: XCTestCase {
   }
 
   /// `StudyDailyPlan` always includes every due review (unlike new intake, which it
-  /// caps at `StudyDailyPlan.dailyNewCardLimit` per day), so a big backlog of cards
+  /// caps at `StudyDailyPlan.newCardBatchSize` at a time), so a big backlog of cards
   /// already in rotation is exactly the scenario `sessionCap` exists to bound: this
   /// seeds 25 already-in-rotation, already-due cards (not new ones) so `dueCount`
   /// reflects the full backlog while `sessionTotal` still gets truncated to
@@ -318,7 +318,7 @@ final class StudyViewModelTests: XCTestCase {
   /// THE headline behaviour this whole change exists for: a cold-start deck (here, 30
   /// never-studied cards — standing in for the owner's real 120) must not dump its
   /// entire size on one session. Today's plan caps new intake at
-  /// `StudyDailyPlan.dailyNewCardLimit`, so the session — and the badge/notification
+  /// `StudyDailyPlan.newCardBatchSize`, so the session — and the badge/notification
   /// count behind it — reads as a small, clearable 10, not an overwhelming 30.
   func testColdStartSessionCapsNewCardsAtDailyLimitNotWholeDeck() async {
     let (learningLog, studyState, _, cleanUp) = makeStores()
@@ -330,8 +330,8 @@ final class StudyViewModelTests: XCTestCase {
     let viewModel = StudyViewModel(learningLog: learningLog, studyState: studyState)
     await viewModel.load()
 
-    XCTAssertEqual(viewModel.dueCount, StudyDailyPlan.dailyNewCardLimit)
-    XCTAssertEqual(viewModel.sessionTotal, StudyDailyPlan.dailyNewCardLimit)
+    XCTAssertEqual(viewModel.dueCount, StudyDailyPlan.newCardBatchSize)
+    XCTAssertEqual(viewModel.sessionTotal, StudyDailyPlan.newCardBatchSize)
     XCTAssertEqual(viewModel.sessionTotal, 10)
   }
 }

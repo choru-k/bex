@@ -16,7 +16,7 @@ struct StudyReviewState: Codable, Equatable, Sendable {
   /// deliberately NOT backfilled for existing state: any `study-state.json` written
   /// before this field existed must still decode, and a `nil` here correctly means
   /// "we don't know when this card entered rotation" — `StudyDailyPlan` treats that as
-  /// not counting toward today's intake rather than guessing a date.
+  /// not counting against the current new-card batch rather than guessing a date.
   var firstSeenAt: Date?
 }
 

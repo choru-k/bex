@@ -47,19 +47,19 @@ final class StudyDailyPlanTests: XCTestCase {
   // MARK: - Cold start
 
   /// THE headline behaviour: a 120-card deck with zero review history must not present
-  /// all 120 at once — only `dailyNewCardLimit` enter rotation today.
+  /// all 120 at once — only `newCardBatchSize` enter rotation today.
   func testColdStartCapsAtDailyNewCardLimitNotTheWholeDeck() {
     let plan = StudyDailyPlan.plan(
       cards: cards(120), states: [:], now: day(0), calendar: calendar)
 
-    XCTAssertEqual(plan.cardIDs.count, StudyDailyPlan.dailyNewCardLimit)
+    XCTAssertEqual(plan.cardIDs.count, StudyDailyPlan.newCardBatchSize)
     XCTAssertEqual(plan.cardIDs.count, 10)
     XCTAssertEqual(plan.newCount, 10)
     XCTAssertEqual(plan.reviewCount, 0)
   }
 
   /// Oldest mistakes come first: `cards` is oldest-log-entry-first, so the first
-  /// `dailyNewCardLimit` ids taken must be exactly the first `dailyNewCardLimit` cards
+  /// `newCardBatchSize` ids taken must be exactly the first `newCardBatchSize` cards
   /// in that order.
   func testColdStartTakesTheOldestCardsFirst() {
     let deck = cards(120)
@@ -111,6 +111,61 @@ final class StudyDailyPlanTests: XCTestCase {
     XCTAssertEqual(plan.cardIDs.count, 20)
   }
 
+  // MARK: - Hourly refill
+
+  /// The behaviour the owner asked for after clearing his first batch: finishing ten
+  /// should not lock the door until tomorrow.
+  func testFinishingABatchRefillsAfterTheRefillInterval() {
+    let deck = cards(120)
+    let finishedAt = day(0)
+    var states: [String: StudyReviewState] = [:]
+    for card in deck.prefix(10) {
+      states[card.id] = StudyReviewState(
+        box: 1, dueAt: finishedAt.addingTimeInterval(dayInSeconds), timesSeen: 1, timesCorrect: 1,
+        firstSeenAt: finishedAt)
+    }
+
+    // Immediately after: nothing new, the batch is spent (and none of the ten are due).
+    let rightAfter = StudyDailyPlan.plan(
+      cards: deck, states: states, now: finishedAt.addingTimeInterval(60), calendar: calendar)
+    XCTAssertEqual(rightAfter.newCount, 0)
+    XCTAssertEqual(rightAfter.cardIDs, [])
+
+    // One minute before the interval elapses: still spent.
+    let justBefore = StudyDailyPlan.plan(
+      cards: deck, states: states,
+      now: finishedAt.addingTimeInterval(StudyDailyPlan.newCardRefillInterval - 60),
+      calendar: calendar)
+    XCTAssertEqual(justBefore.newCount, 0)
+
+    // Once the interval has passed, a fresh full batch is on offer — and it is a batch,
+    // not the rest of the deck.
+    let afterRefill = StudyDailyPlan.plan(
+      cards: deck, states: states,
+      now: finishedAt.addingTimeInterval(StudyDailyPlan.newCardRefillInterval + 1),
+      calendar: calendar)
+    XCTAssertEqual(afterRefill.newCount, StudyDailyPlan.newCardBatchSize)
+    XCTAssertEqual(afterRefill.reviewCount, 0)
+    XCTAssertFalse(afterRefill.cardIDs.contains(where: { states[$0] != nil }))
+  }
+
+  /// A partly-finished batch does not refill early: three cards in, seven are on offer,
+  /// and that stays seven until the first three age out.
+  func testPartialBatchOffersOnlyTheRemainingSlots() {
+    let deck = cards(120)
+    let now = day(0)
+    var states: [String: StudyReviewState] = [:]
+    for card in deck.prefix(3) {
+      states[card.id] = StudyReviewState(
+        box: 1, dueAt: now.addingTimeInterval(dayInSeconds), timesSeen: 1, timesCorrect: 1,
+        firstSeenAt: now.addingTimeInterval(-60))
+    }
+
+    let plan = StudyDailyPlan.plan(cards: deck, states: states, now: now, calendar: calendar)
+
+    XCTAssertEqual(plan.newCount, StudyDailyPlan.newCardBatchSize - 3)
+  }
+
   // MARK: - Reviews always included
 
   func testDueReviewsAreAlwaysIncludedEvenWhenNewIntakeIsExhausted() {
@@ -154,9 +209,9 @@ final class StudyDailyPlanTests: XCTestCase {
 
     let plan = StudyDailyPlan.plan(cards: deck, states: states, now: now, calendar: calendar)
 
-    // None of those legacy cards count toward today's intake, so the full daily limit
+    // None of those legacy cards count against the current batch, so the full batch
     // of NEW cards is still available (from the remaining 110 never-touched cards).
-    XCTAssertEqual(plan.newCount, StudyDailyPlan.dailyNewCardLimit)
+    XCTAssertEqual(plan.newCount, StudyDailyPlan.newCardBatchSize)
   }
 
   // MARK: - Ordering
@@ -177,7 +232,7 @@ final class StudyDailyPlanTests: XCTestCase {
 
     XCTAssertEqual(plan.cardIDs.first, reviewCard.id)
     // The remaining new cards follow `cards` order (excluding the review card).
-    let expectedNew = deck.filter { $0.id != reviewCard.id }.prefix(StudyDailyPlan.dailyNewCardLimit)
+    let expectedNew = deck.filter { $0.id != reviewCard.id }.prefix(StudyDailyPlan.newCardBatchSize)
     XCTAssertEqual(Array(plan.cardIDs.dropFirst()), expectedNew.map(\.id))
   }
 

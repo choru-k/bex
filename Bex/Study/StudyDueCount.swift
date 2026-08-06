@@ -9,7 +9,7 @@ import Foundation
 enum StudyDueCount {
   /// Today's actionable Study workload — NOT the total backlog. A thin pass-through to
   /// `StudyDailyPlan.plan`, which is what actually decides "reviews always, new cards
-  /// capped at `StudyDailyPlan.dailyNewCardLimit` per day" (see that file for why).
+  /// capped at `StudyDailyPlan.newCardBatchSize` at a time" (see that file for why).
   /// This used to report the raw `StudyScheduler.dueCards` count, which for a
   /// never-studied deck means "every card" — a number that never shrinks day to day
   /// and reads as a permanent, unclearable backlog. Reporting today's small, capped
