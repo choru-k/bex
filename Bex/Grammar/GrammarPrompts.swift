@@ -22,8 +22,21 @@ enum GrammarPrompts {
   ///   "is this error type important" but "was this a knowledge gap or a finger slip" — a
   ///   typo like "whta" teaches nothing, because the writer knows the word. The model is
   ///   asked to judge that from the writer's evident level, which is the point: the deck
-  ///   should track what they are actually missing, not what they mistyped. `[article]` and
-  ///   `[plural]` are excluded on top of that test, by owner preference, even when genuine.
+  ///   should track what they are actually missing, not what they mistyped.
+  ///
+  ///   Correcting and teaching are separate jobs, and teaching is the higher priority —
+  ///   the owner's framing, and the reason the silent list can grow without limit:
+  ///   `corrected` still fixes everything, so nothing is lost by not listing it. Articles,
+  ///   plurals, capitalization, and punctuation are all silent. The last two were measured,
+  ///   not guessed: a real-corpus eval had capitalization lines in 3/11 (`gpt-5.6-terra`) and
+  ///   5/11 (`gpt-5.6-sol`) outputs, and `statisticsExcludedCategories` plus
+  ///   `StudyCardBuilder.isUsableCandidate` already threw every one of them away — so they
+  ///   only ever reached the owner's eyes as noise, crowding out the material that teaches.
+  ///
+  ///   The same eval found lines quoting an entire sentence as the "original phrase", which
+  ///   is worse than noise: `StudyCardBuilder.cloze` blanks that span inside the sentence,
+  ///   so a whole-sentence quote produces a card that is nothing but a blank. Hence the
+  ///   shortest-span rule.
   ///
   /// So the `[tag]` list below is deliberately a SUBSET of `GrammarCategory`: the enum keeps
   /// `.article`, `.plural`, and `.vocabulary` because `LearningAggregator` and
@@ -34,7 +47,7 @@ enum GrammarPrompts {
   private static let editingRules = """
     Edit the text under these rules:
 
-    1. Fix every genuine error: verb tense, articles, subject-verb agreement, prepositions, word order, plurals, spelling, capitalization, punctuation.
+    1. Fix every genuine error: verb tense, articles, subject-verb agreement, prepositions, word order, plurals, spelling, capitalization, punctuation. Every one of them, every time. Later you will be told to keep several of these OUT of the explanation — that instruction is about what to explain, never about what to fix. A correction you are not going to mention still has to be in "corrected".
     2. Change nothing else. Keep the user's own words, tone, line breaks, list markers, and Markdown exactly. If a phrase is already correct, leave it alone even when you would have written it differently.
     3. Leave technical vocabulary alone: product names, code identifiers, file names, commands, and everyday developer words ("deploy", "repo", "PR", "prod", "spec") are correct as written.
     4. If the whole text is already correct, return it byte-for-byte unchanged.
@@ -45,12 +58,17 @@ enum GrammarPrompts {
     Build "explanation" from up to two labeled sections, in this order.
 
     Fixed:
-    This section is study material, not a change log — the diff already shows every edit. List a change ONLY when the writer plausibly did not KNOW the correct form. Fix the rest silently and never list it:
+    Correcting and teaching are separate jobs, and teaching is the more important one. "corrected" is where you correct: it must come back fully correct, with every error above fixed, including all the ones you are told not to list here. This section is only study material — a short list of what the writer can LEARN from. Never treat it as a change log; the diff already shows every edit.
+
+    So list a change ONLY when the writer plausibly did not KNOW the correct form. Fix everything else silently, and never list it under any tag:
     - Typos and slips. A transposed, doubled, or dropped letter ("whta", "teh", "adn") is a finger slip by someone who knows the word perfectly well. Judge from the whole text and from the writer's evident level: if they use a word or form correctly anywhere, they did not "not know" it where they mistyped it. A genuine misspelling is different — a plausible-sounding wrong spelling of a word they have clearly never written correctly is a real gap; list that.
-    - Article and plural fixes. Never list these, under any tag, even when they are a real gap. The reader has asked not to spend lines on them.
-    Whatever survives is something worth learning. One line each, in the order they appear, starting with exactly one tag: [verb-tense] [subject-verb-agreement] [preposition] [word-order] [spelling] [capitalization] [other]. Use [other] for punctuation and anything else. Format:
+    - Articles and plurals, even when they are a real gap.
+    - Capitalization of any kind: sentence starts, the pronoun "I", product names, abbreviations.
+    - Punctuation, spacing, and formatting, including a missing or changed final mark.
+    All four are still corrected in "corrected" — they are silent, not skipped. And silence is by category, not by label: a line is banned because of what it fixes, so tagging an article fix [other] does not make it listable. If the only thing a line teaches is one of the four above, drop the line.
+    Whatever survives is something worth learning. One line each, in the order they appear, starting with exactly one tag: [verb-tense] [subject-verb-agreement] [preposition] [word-order] [spelling] [other]. Format:
     [tag] "original phrase" → "corrected phrase" — short simple reason.
-    The "original phrase" must be copied from the input text, character for character. Never list a change you did not make, and never invent a phrase that is not in the input. Omit this whole section entirely when nothing survives the test above.
+    Quote the SHORTEST span that contains the error — a few words, never a whole sentence or clause. The reader studies these as fill-in-the-blank drills, so a phrase long enough to swallow the sentence leaves nothing to recall. If one line would need to quote most of the sentence, quote only the part that was actually wrong. The "original phrase" must be copied from the input text, character for character, and must differ from the "corrected phrase" by more than case or punctuation. Never list a change you did not make, and never invent a phrase that is not in the input. Omit this whole section entirely when nothing survives the test above.
 
     Consider:
     Always include this section, even when the text is already correct — this is the part the reader wants most. Pick the ONE phrase whose wording is most genuinely open to choice, and offer 2-3 alternatives for that phrase. Never offer an alternative to technical vocabulary. One line per alternative:
