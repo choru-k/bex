@@ -25,7 +25,7 @@ final class StudyDailyPlanTests: XCTestCase {
     return calendar.date(from: components)!
   }
 
-  private func card(_ id: String) -> StudyCard {
+  private func card(_ id: String, priority: StudyCardPriority = .high) -> StudyCard {
     StudyCard(
       id: id,
       category: "article",
@@ -35,7 +35,8 @@ final class StudyDailyPlanTests: XCTestCase {
       sentence: "I saw a dog.",
       promptWithBlank: "I saw _____ dog.",
       choices: ["a", "the"],
-      answerMode: .typed
+      answerMode: .typed,
+      priority: priority
     )
   }
 

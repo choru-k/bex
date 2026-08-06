@@ -17,7 +17,8 @@ final class StudyDueCountTests: XCTestCase {
       sentence: "I saw a dog.",
       promptWithBlank: "I saw _____ dog.",
       choices: ["a", "the"],
-      answerMode: .typed
+      answerMode: .typed,
+      priority: .high
     )
   }
 

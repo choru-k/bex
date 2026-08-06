@@ -78,12 +78,15 @@ enum StudyDailyPlan {
     }.count
     let allowedNew = max(0, dailyNewCardLimit - introducedToday)
 
-    var newIDs: [String] = []
-    for card in cards {
-      guard newIDs.count < allowedNew else { break }
-      guard states[card.id] == nil else { continue }
-      newIDs.append(card.id)
-    }
+    // Higher-priority cards enter rotation first, oldest-first within a tier (both
+    // filters preserve `cards`' order). With a daily cap the intake order decides what
+    // the owner actually ever sees, so it has to be "the mistakes worth fixing" rather
+    // than "whatever was logged first" — an obvious `"sub agent"` → `"sub agents"` tap
+    // is not worth one of today's ten slots while word order and prepositions wait.
+    let unseen: [StudyCard] = cards.filter { states[$0.id] == nil }
+    let ordered: [StudyCard] =
+      unseen.filter { $0.priority == .high } + unseen.filter { $0.priority == .low }
+    let newIDs: [String] = ordered.prefix(allowedNew).map(\.id)
 
     return Plan(
       cardIDs: reviewIDs + newIDs,

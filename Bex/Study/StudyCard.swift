@@ -60,6 +60,10 @@ struct StudyCard: Equatable, Sendable {
   /// Whether this card is a typed free-response drill or today's two-choice pick — see
   /// `StudyCardBuilder.answerMode(for:)` for the thresholds that decide it.
   let answerMode: StudyAnswerMode
+  /// How much this correction is worth drilling, from `StudyCardQuality.priority`. Never
+  /// `.junk` — those are rejected in `StudyCardBuilder.isUsableCandidate` and never
+  /// become cards. `StudyDailyPlan` uses this to order new-card intake.
+  let priority: StudyCardPriority
 
   /// Friendly label for the drill UI, reusing `GrammarCategory`'s mapping so this
   /// stays in sync with the Learning window's category names for free.
@@ -109,7 +113,8 @@ enum StudyCardBuilder {
         sentence: base.sentence,
         promptWithBlank: base.promptWithBlank,
         choices: choices(for: base),
-        answerMode: answerMode(for: base.correct)
+        answerMode: answerMode(for: base.correct),
+        priority: StudyCardQuality.priority(wrong: base.wrong, correct: base.correct)
       )
     }
   }
@@ -180,6 +185,12 @@ enum StudyCardBuilder {
     guard wrong.lowercased() != correct.lowercased() else { return false }
     guard category != GrammarCategory.capitalization.rawValue else { return false }
     guard StudyAnswerCheck.normalize(wrong) != StudyAnswerCheck.normalize(correct) else {
+      return false
+    }
+    // The quality gate: keyboard typos, punctuation-only diffs, and parse debris are not
+    // English mistakes. See `StudyCardQuality` for each rule and what it dropped from the
+    // real log.
+    guard StudyCardQuality.priority(wrong: wrong, correct: correct) != .junk else {
       return false
     }
     return true
