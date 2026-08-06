@@ -99,8 +99,23 @@ enum StudyDailyPlan {
     // than "whatever was logged first" — an obvious `"sub agent"` → `"sub agents"` tap
     // is not worth one of the ten slots while word order and prepositions wait.
     let unseen: [StudyCard] = cards.filter { states[$0.id] == nil }
+
+    // A card the classifier examined and found no rule for teaches nothing, so it goes
+    // behind every real lesson. This is a stronger signal than `StudyCardQuality`'s
+    // letter heuristics can produce and it is worth trusting: measured on the real deck,
+    // the classifier labelled 12 cards `unclassified` — fragments of mangled prompts like
+    // `"story. use"` → `"story"` and `"frm"` → `"now"` — and because they are (correctly)
+    // exempt from grouping, they otherwise filled 6 of the 10 slots in a batch and held it
+    // at 5 distinct lessons. Deprioritizing them takes the same batch to 8.
+    //
+    // `nil` is deliberately NOT treated the same way: it means "not classified yet", not
+    // "no rule applies", and penalizing it would push every card to the back of the deck
+    // until the background pass has run.
+    func teachesNoRule(_ card: StudyCard) -> Bool { patterns[card.id] == .unclassified }
     let ordered: [StudyCard] =
-      unseen.filter { $0.priority == .high } + unseen.filter { $0.priority == .low }
+      unseen.filter { $0.priority == .high && !teachesNoRule($0) }
+      + unseen.filter { $0.priority == .low && !teachesNoRule($0) }
+      + unseen.filter { teachesNoRule($0) }
 
     // One card per pattern. 34 of the owner's cards are examples of the same determiner
     // rule, so an unfiltered batch of ten was five or six repeats of two or three lessons:

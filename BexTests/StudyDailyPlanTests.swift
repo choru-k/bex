@@ -219,6 +219,41 @@ final class StudyDailyPlanTests: XCTestCase {
     XCTAssertEqual(plan.cardIDs, ["tagged-other"])
   }
 
+  /// A card the classifier examined and found no rule for goes behind every real lesson.
+  /// Without this, those cards (12 on the real deck, mostly fragments of mangled prompts)
+  /// filled 6 of 10 slots, because being exempt from grouping means nothing limits how
+  /// many can appear.
+  func testCardsTheClassifierFoundNoRuleForAreDrilledLast() {
+    let deck = [
+      card("no-rule", category: "other"),
+      card("real-lesson", category: "other"),
+    ]
+    let patterns: [String: StudyPattern] = [
+      "no-rule": .unclassified,
+      "real-lesson": .phrasing,
+    ]
+
+    let plan = StudyDailyPlan.plan(
+      cards: deck, states: [:], now: day(0), calendar: calendar, patterns: patterns)
+
+    XCTAssertEqual(plan.cardIDs, ["real-lesson", "no-rule"])
+  }
+
+  /// ...but "not classified yet" is not the same claim as "no rule applies". An absent
+  /// assignment must not be penalized, or the entire deck sits at the back until the
+  /// background pass has run.
+  func testUnclassifiedCardsAreNotPenalizedBeforeTheClassifierRuns() {
+    let deck = [
+      card("not-yet-classified", category: "other"),
+      card("known-lesson", category: "article"),
+    ]
+
+    let plan = StudyDailyPlan.plan(
+      cards: deck, states: [:], now: day(0), calendar: calendar, patterns: [:])
+
+    XCTAssertEqual(plan.cardIDs, ["not-yet-classified", "known-lesson"])
+  }
+
   /// Unclassified cards are never held back — otherwise the whole untagged remainder of
   /// the deck (43 of 139 cards before the classifier runs) would count as one lesson and
   /// starve the batch to a single card.
