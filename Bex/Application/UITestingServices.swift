@@ -573,6 +573,15 @@
       )
     }
 
+    /// UI tests never exercise the background classifier — it makes no network call here,
+    /// so every card keeps its `GrammarCategory`-derived fallback pattern.
+    func classifyStudyPatterns(
+      cards: [StudyCard],
+      destination: OutboundDestination
+    ) async throws -> [String: StudyPattern] {
+      [:]
+    }
+
     func generateProfile(
       context: ProfileContext,
       destination: OutboundDestination
@@ -1026,6 +1035,7 @@
       let learningLogDirectory = directory.appendingPathComponent("LearningLog", isDirectory: true)
       let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
       let studyState = StudyStateStore(directoryURL: learningLogDirectory)
+      let studyPatterns = StudyPatternStore(directoryURL: learningLogDirectory)
 
       let keychain = KeychainStore(
         service: "com.bex.desktop.credentials.ui-testing",
@@ -1053,6 +1063,7 @@
         data: data,
         learningLog: learningLog,
         studyState: studyState,
+        studyPatterns: studyPatterns,
         grammar: grammar,
         promptGrammar: grammar,
         pasteboard: pasteboard,

@@ -52,6 +52,10 @@ protocol GrammarServicing: Sendable {
     text: String,
     destination: OutboundDestination
   ) async throws -> DictionaryLookup
+  func classifyStudyPatterns(
+    cards: [StudyCard],
+    destination: OutboundDestination
+  ) async throws -> [String: StudyPattern]
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

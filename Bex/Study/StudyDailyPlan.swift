@@ -67,7 +67,8 @@ enum StudyDailyPlan {
     cards: [StudyCard],
     states: [String: StudyReviewState],
     now: Date,
-    calendar: Calendar = .current
+    calendar: Calendar = .current,
+    patterns: [String: StudyPattern] = [:]
   ) -> Plan {
     // Reviews: every in-rotation (has a state) card that's due. Unconditional — see
     // the file doc comment on why reviews never get capped.
@@ -100,7 +101,29 @@ enum StudyDailyPlan {
     let unseen: [StudyCard] = cards.filter { states[$0.id] == nil }
     let ordered: [StudyCard] =
       unseen.filter { $0.priority == .high } + unseen.filter { $0.priority == .low }
-    let newIDs: [String] = ordered.prefix(allowedNew).map(\.id)
+
+    // One card per pattern. 34 of the owner's cards are examples of the same determiner
+    // rule, so an unfiltered batch of ten was five or six repeats of two or three lessons:
+    // the rule gets taught by the first card and the rest of the batch is spent. Spreading
+    // them means a batch is ten different lessons, and the other 33 determiner examples
+    // still arrive over following batches — spaced, which is how a rule is actually learned
+    // rather than a phrase memorized.
+    //
+    // Cards whose pattern is unknown are never held back (`groupsCards`): until the
+    // background classifier has labelled them their pattern falls back to a
+    // `GrammarCategory` tag, and `other`/`spelling` describe no lesson, so treating them as
+    // one group would starve the batch down to a single card from the whole remainder.
+    var usedPatterns = Set<StudyPattern>()
+    var newIDs: [String] = []
+    for card in ordered {
+      guard newIDs.count < allowedNew else { break }
+      let pattern = patterns[card.id] ?? StudyPattern.fromCategory(card.category)
+      if pattern.groupsCards {
+        guard !usedPatterns.contains(pattern) else { continue }
+        usedPatterns.insert(pattern)
+      }
+      newIDs.append(card.id)
+    }
 
     return Plan(
       cardIDs: reviewIDs + newIDs,

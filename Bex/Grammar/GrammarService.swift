@@ -152,6 +152,29 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
     return try DictionaryLookup.parse(output)
   }
 
+  /// Labels each of `cards` with the `StudyPattern` it is an example of, in one call.
+  ///
+  /// Background-only by design. The owner's constraint is that a Quick Check must answer
+  /// in about two seconds, so classification is deliberately *not* folded into the
+  /// correction prompt — it runs later, off the interactive path, where latency costs
+  /// nothing. Callers are expected to pass only cards that have never been classified
+  /// (`StudyPatternStore.unclassifiedIDs`), which keeps the steady-state cost at zero.
+  func classifyStudyPatterns(
+    cards: [StudyCard],
+    destination: OutboundDestination
+  ) async throws -> [String: StudyPattern] {
+    guard !cards.isEmpty else { return [:] }
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
+    let output = try await client.generate(
+      text: StudyPattern.classificationMessage(for: cards),
+      model: destination.model,
+      systemPrompt: StudyPattern.systemPrompt,
+      effort: effort
+    )
+    return try StudyPattern.parseClassification(output, for: cards)
+  }
+
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

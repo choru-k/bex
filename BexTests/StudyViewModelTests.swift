@@ -20,7 +20,7 @@ final class StudyViewModelTests: XCTestCase {
   /// card: `wrong` must appear as a whole word in the generated `original` sentence.
   private func appendEntry(
     to store: LearningLogStore,
-    category: String = "preposition",
+    category: String = "other",
     wrong: String,
     correct: String
   ) async {
@@ -37,7 +37,7 @@ final class StudyViewModelTests: XCTestCase {
     )
   }
 
-  private func cardID(category: String = "preposition", wrong: String, correct: String) -> String {
+  private func cardID(category: String = "other", wrong: String, correct: String) -> String {
     "\(category)|\(wrong)|\(correct)"
   }
 

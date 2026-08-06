@@ -131,6 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       // never gate that.
       await self?.refreshMenuBarBadge()
       await self?.studyNotificationScheduler?.requestAuthorizationIfNeeded()
+      // Last: this one makes a network call. Everything the user can see is already
+      // correct without it, and it republishes the badge itself once it finishes.
+      await self?.classifyStudyPatternsIfNeeded()
+      await self?.refreshMenuBarBadge()
     }
     #if DEBUG
       installUITestingCommands()
@@ -736,6 +740,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     menuBarRefreshTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) {
       [weak self] _ in
       Task { @MainActor [weak self] in
+        await self?.classifyStudyPatternsIfNeeded()
         await self?.refreshMenuBarBadge()
       }
     }
@@ -794,8 +799,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let samples = LearningLogSamples.parse(entries)
     let cards = StudyCardBuilder.cards(from: samples)
     let states = await services.studyState.states()
-    let plan = StudyDailyPlan.plan(cards: cards, states: states, now: now)
+    let patterns = await services.studyPatterns.patterns()
+    let plan = StudyDailyPlan.plan(
+      cards: cards, states: states, now: now, patterns: patterns)
     return (cards, plan, samples)
+  }
+
+  /// Labels any newly-built cards with the English rule they exemplify, so
+  /// `StudyDailyPlan` can spread one batch across ten different lessons instead of six
+  /// examples of two.
+  ///
+  /// Runs off the interactive path, on purpose. A Quick Check has to answer in about two
+  /// seconds, so this is never folded into the correction prompt; it happens afterwards on
+  /// launch and hourly, where a slow call costs nothing. Only cards never classified
+  /// before are sent, so the steady-state cost is zero calls.
+  ///
+  /// Gated on the outbound disclosure the user has already accepted for their current
+  /// destination. The learning log is owner-only by design, and this would ship 139 of
+  /// their own mistakes to a provider — so if they have not already agreed to send text to
+  /// that destination, this silently does nothing rather than asking in the background.
+  /// Grouping then falls back to `GrammarCategory` tags, which is worse but never
+  /// surprising.
+  //
+  // ponytail: failures are swallowed and simply retried on the next hourly tick. No
+  // backoff, no retry counter, no error surfaced — grouping quality degrades to the tag
+  // fallback, which is exactly where it started. Ceiling: if a persistently failing
+  // provider ever needs to be visible, surface it in the Study window rather than here.
+  private func classifyStudyPatternsIfNeeded() async {
+    guard let services else { return }
+    guard let destination = try? await services.preferences.outboundDestination(),
+      await services.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+    else { return }
+
+    let entries = await services.learningLog.readAll()
+    let cards = StudyCardBuilder.cards(from: LearningLogSamples.parse(entries))
+    let pendingIDs = Set(await services.studyPatterns.unclassifiedIDs(among: cards))
+    guard !pendingIDs.isEmpty else { return }
+
+    let pending = cards.filter { pendingIDs.contains($0.id) }
+    guard
+      let assignments = try? await services.grammar.classifyStudyPatterns(
+        cards: pending, destination: destination)
+    else { return }
+    await services.studyPatterns.assign(assignments)
   }
 
   private func applyMenuBarBadge(_ badge: StudyDueCount.MenuBarBadge) {

@@ -132,7 +132,7 @@ final class StudyCardQualityTests: XCTestCase {
   private func card(_ id: String, priority: StudyCardPriority) -> StudyCard {
     StudyCard(
       id: id,
-      category: "article",
+      category: "other",
       wrong: "a",
       correct: "the",
       reason: "reason",

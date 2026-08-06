@@ -473,6 +473,19 @@ private struct SettingsGrammarStub: GrammarServicing {
     throw URLError(.notConnectedToInternet)
   }
 
+  func classifyStudyPatterns(
+
+    cards: [StudyCard],
+
+    destination: OutboundDestination
+
+  ) async throws -> [String: StudyPattern] {
+
+    [:]
+
+  }
+
+
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

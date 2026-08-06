@@ -28,7 +28,7 @@ final class StudyDailyPlanTests: XCTestCase {
   private func card(_ id: String, priority: StudyCardPriority = .high) -> StudyCard {
     StudyCard(
       id: id,
-      category: "article",
+      category: "other",
       wrong: "a",
       correct: "the",
       reason: "reason",
@@ -164,6 +164,70 @@ final class StudyDailyPlanTests: XCTestCase {
     let plan = StudyDailyPlan.plan(cards: deck, states: states, now: now, calendar: calendar)
 
     XCTAssertEqual(plan.newCount, StudyDailyPlan.newCardBatchSize - 3)
+  }
+
+  // MARK: - One card per pattern
+
+  private func card(_ id: String, category: String) -> StudyCard {
+    StudyCard(
+      id: id, category: category, wrong: "a", correct: "the", reason: "reason",
+      sentence: "I saw a dog.", promptWithBlank: "I saw _____ dog.", choices: ["a", "the"],
+      answerMode: .typed, priority: .high)
+  }
+
+  /// The real complaint this solves: 34 of the owner's cards are the same determiner rule,
+  /// so an unfiltered batch spent six of ten slots re-teaching one lesson.
+  func testBatchTakesOnlyOneCardPerPattern() {
+    let deck = (0..<20).map { card("determiner\($0)", category: "article") }
+
+    let plan = StudyDailyPlan.plan(cards: deck, states: [:], now: day(0), calendar: calendar)
+
+    XCTAssertEqual(plan.cardIDs, ["determiner0"])
+  }
+
+  /// ...but a batch of distinct lessons still fills up. Every card here is groupable, so
+  /// this also pins that grouping never withholds a card whose pattern is unused.
+  func testBatchFillsWithDistinctPatterns() {
+    let categories = [
+      "article", "preposition", "word-order", "plural", "subject-verb-agreement", "verb-tense",
+    ]
+    let deck = categories.enumerated().map { index, category in
+      card("card\(index)", category: category)
+    }
+
+    let plan = StudyDailyPlan.plan(cards: deck, states: [:], now: day(0), calendar: calendar)
+
+    XCTAssertEqual(plan.cardIDs.count, categories.count)
+  }
+
+  /// A model-assigned pattern overrides the `GrammarCategory` fallback. These two cards
+  /// carry different tags — so the tag fallback would let both through — but the
+  /// classifier found they teach the same rule, and only one may appear.
+  func testAssignedPatternsOverrideTheCategoryFallback() {
+    let deck = [
+      card("tagged-other", category: "other"),
+      card("tagged-spelling", category: "spelling"),
+    ]
+    let patterns: [String: StudyPattern] = [
+      "tagged-other": .phrasing,
+      "tagged-spelling": .phrasing,
+    ]
+
+    let plan = StudyDailyPlan.plan(
+      cards: deck, states: [:], now: day(0), calendar: calendar, patterns: patterns)
+
+    XCTAssertEqual(plan.cardIDs, ["tagged-other"])
+  }
+
+  /// Unclassified cards are never held back — otherwise the whole untagged remainder of
+  /// the deck (43 of 139 cards before the classifier runs) would count as one lesson and
+  /// starve the batch to a single card.
+  func testUnclassifiedCardsAreNotGrouped() {
+    let deck = (0..<20).map { card("unknown\($0)", category: "other") }
+
+    let plan = StudyDailyPlan.plan(cards: deck, states: [:], now: day(0), calendar: calendar)
+
+    XCTAssertEqual(plan.cardIDs.count, StudyDailyPlan.newCardBatchSize)
   }
 
   // MARK: - Reviews always included

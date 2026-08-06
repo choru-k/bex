@@ -10,7 +10,7 @@ final class StudyDueCountTests: XCTestCase {
   private func card(_ id: String) -> StudyCard {
     StudyCard(
       id: id,
-      category: "article",
+      category: "other",
       wrong: "a",
       correct: "the",
       reason: "reason",
