@@ -2,9 +2,28 @@ import Foundation
 
 enum GrammarResponseParser {
   static func parse(_ raw: String) throws -> GrammarResult {
+    guard let dictionary = jsonObject(in: raw),
+      let corrected = dictionary["corrected"] as? String
+    else {
+      throw BexError.invalidResponse
+    }
+    let explanation = dictionary["explanation"] as? String
+    return GrammarResult(
+      corrected: corrected,
+      explanation: explanation?.isEmpty == false
+        ? explanation!
+        : "No explanation provided."
+    )
+  }
+
+  /// The first JSON object in a model response, tolerating the ways models wrap one:
+  /// bare, inside ```json fences, or surrounded by prose. Shared by every JSON-shaped
+  /// prompt in the app (`parse` above, `DictionaryLookup.parse`) so the unwrapping
+  /// rules can't drift between them.
+  static func jsonObject(in raw: String) -> [String: Any]? {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    if let result = parseObject(trimmed) {
-      return result
+    if let object = decode(trimmed) {
+      return object
     }
 
     let stripped =
@@ -26,44 +45,32 @@ enum GrammarResponseParser {
       )
       .trimmingCharacters(in: .whitespacesAndNewlines)
 
-    if let result = parseObject(stripped) {
-      return result
+    if let object = decode(stripped) {
+      return object
     }
 
     if let start = stripped.firstIndex(of: "{"),
       let end = stripped.lastIndex(of: "}"),
       start < end,
-      let result = parseObject(String(stripped[start...end]))
+      let object = decode(String(stripped[start...end]))
     {
-      return result
+      return object
     }
 
-    if let balanced = firstBalancedJSONObject(in: stripped),
-      let result = parseObject(balanced)
-    {
-      return result
+    if let balanced = firstBalancedJSONObject(in: stripped) {
+      return decode(balanced)
     }
-
-    throw BexError.invalidResponse
+    return nil
   }
 
-  private static func parseObject(_ source: String) -> GrammarResult? {
+  private static func decode(_ source: String) -> [String: Any]? {
     guard
       let data = source.data(using: .utf8),
-      let object = try? JSONSerialization.jsonObject(with: data),
-      let dictionary = object as? [String: Any],
-      let corrected = dictionary["corrected"] as? String
+      let object = try? JSONSerialization.jsonObject(with: data)
     else {
       return nil
     }
-
-    let explanation = dictionary["explanation"] as? String
-    return GrammarResult(
-      corrected: corrected,
-      explanation: explanation?.isEmpty == false
-        ? explanation!
-        : "No explanation provided."
-    )
+    return object as? [String: Any]
   }
 
   private static func firstBalancedJSONObject(in input: String) -> String? {

@@ -466,6 +466,13 @@ private struct SettingsGrammarStub: GrammarServicing {
     throw URLError(.notConnectedToInternet)
   }
 
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup {
+    throw URLError(.notConnectedToInternet)
+  }
+
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

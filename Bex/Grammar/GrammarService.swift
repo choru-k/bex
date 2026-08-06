@@ -135,6 +135,23 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
     return output
   }
 
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup {
+    let term = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !term.isEmpty else { throw BexError.emptyInput }
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
+    let output = try await client.generate(
+      text: term,
+      model: destination.model,
+      systemPrompt: DictionaryLookup.systemPrompt,
+      effort: effort
+    )
+    return try DictionaryLookup.parse(output)
+  }
+
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

@@ -27,6 +27,7 @@ struct QuickCheckView: View {
           outboundConfirmationSection
           disclosureSection
           errorSection
+          lookupSection
           resultSection
           managementRow
         }
@@ -244,6 +245,15 @@ struct QuickCheckView: View {
         .disabled(!viewModel.canCheck)
         .accessibilityIdentifier("quick-check-check")
 
+        Button {
+          viewModel.lookUp()
+        } label: {
+          Label("Look Up", systemImage: "character.book.closed")
+        }
+        .keyboardShortcut("d", modifiers: .command)
+        .disabled(!viewModel.canLookUp)
+        .accessibilityIdentifier("quick-check-look-up")
+
         if let busyLabel = viewModel.busyLabel {
           ProgressView()
             .controlSize(.small)
@@ -350,6 +360,55 @@ struct QuickCheckView: View {
         .accessibilityLabel("Quick Check error")
         .accessibilityValue(error)
         .accessibilityIdentifier("quick-check-error")
+    }
+  }
+
+  @ViewBuilder
+  private var lookupSection: some View {
+    if let lookup = viewModel.lookup {
+      Divider()
+      VStack(alignment: .leading, spacing: 14) {
+        Text("Dictionary")
+          .font(.title3.bold())
+          .accessibilityAddTraits(.isHeader)
+
+        resultTextSection(
+          title: "English",
+          text: lookup.english,
+          identifier: "quick-check-lookup-english",
+          secondary: false
+        )
+        resultTextSection(
+          title: "Korean",
+          text: lookup.korean,
+          identifier: "quick-check-lookup-korean",
+          secondary: false
+        )
+        resultTextSection(
+          title: "In simple English",
+          text: lookup.simple,
+          identifier: "quick-check-lookup-simple",
+          secondary: true
+        )
+        resultTextSection(
+          title: "Example",
+          text: lookup.example,
+          identifier: "quick-check-lookup-example",
+          secondary: true
+        )
+
+        HStack {
+          Button(viewModel.lookupSavedToStudy ? "Saved to Study" : "Save to Study") {
+            viewModel.saveLookupToStudy()
+          }
+          .disabled(viewModel.lookupSavedToStudy)
+          .accessibilityIdentifier("quick-check-lookup-save")
+          Spacer()
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Dictionary lookup section")
     }
   }
 

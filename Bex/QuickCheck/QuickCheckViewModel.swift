@@ -50,6 +50,9 @@ final class QuickCheckViewModel: ObservableObject {
   @Published private(set) var diff: [DiffSegment] = []
   @Published private(set) var isChecking = false
   @Published private(set) var rewritingIntent: RewriteIntent?
+  @Published private(set) var isLookingUp = false
+  @Published private(set) var lookup: DictionaryLookup?
+  @Published private(set) var lookupSavedToStudy = false
   @Published private(set) var isPreparingOutbound = false
   @Published private(set) var outboundSummary: QuickCheckOutboundSummary?
   @Published var changesOnly = false
@@ -68,6 +71,7 @@ final class QuickCheckViewModel: ObservableObject {
   private let data: BexDataStore
   private let grammar: any GrammarServicing
   private let pasteboard: any PasteboardWriting
+  private let learningLog: LearningLogStore
   private let onDismiss: @MainActor (QuickCheckDismissalReason) -> Void
 
   private var contextLoadTask: Task<Void, Never>?
@@ -76,6 +80,7 @@ final class QuickCheckViewModel: ObservableObject {
   private var draftTask: Task<Void, Never>?
   private var copiedTask: Task<Void, Never>?
   private var historyTask: Task<Void, Never>?
+  private var studyLogTask: Task<Void, Never>?
   private var historyID: UUID?
   private var pendingOutbound: PendingOutbound?
   private var activeOperationID: UUID?
@@ -93,6 +98,7 @@ final class QuickCheckViewModel: ObservableObject {
     data: BexDataStore,
     grammar: any GrammarServicing,
     pasteboard: any PasteboardWriting,
+    learningLog: LearningLogStore = LearningLogStore(),
     onDismiss: @escaping @MainActor (QuickCheckDismissalReason) -> Void
   ) {
     self.preferences = preferences
@@ -100,6 +106,7 @@ final class QuickCheckViewModel: ObservableObject {
     self.data = data
     self.grammar = grammar
     self.pasteboard = pasteboard
+    self.learningLog = learningLog
     self.onDismiss = onDismiss
   }
 
@@ -115,7 +122,7 @@ final class QuickCheckViewModel: ObservableObject {
   }
 
   var isBusy: Bool {
-    isPreparingOutbound || isChecking || rewritingIntent != nil
+    isPreparingOutbound || isChecking || rewritingIntent != nil || isLookingUp
   }
 
   var busyLabel: String? {
@@ -128,13 +135,20 @@ final class QuickCheckViewModel: ObservableObject {
     if let rewritingIntent {
       return "Applying \(rewritingIntent.label)…"
     }
+    if isLookingUp {
+      return "Looking up…"
+    }
     return nil
   }
 
   var hasPreservedUserWork: Bool {
     !input.isEmpty || isBusy || outboundSummary != nil || result != nil
-      || userVisibleError != nil
+      || userVisibleError != nil || lookup != nil
   }
+
+  /// Dictionary lookup takes the same preconditions as Check — a term, a configured
+  /// provider, nothing already in flight.
+  var canLookUp: Bool { canCheck }
 
   var canCheck: Bool {
     isContextLoaded && !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -260,6 +274,31 @@ final class QuickCheckViewModel: ObservableObject {
     )
   }
 
+  func lookUp() {
+    guard canLookUp else { return }
+    prepareOutbound(.define(DefinePayload(term: input)))
+  }
+
+  /// Appends the current lookup to the learning log so `StudyCardBuilder` turns it into a
+  /// drill. Deliberate rather than automatic: the log is append-only with no delete UI, so
+  /// a word saved by accident cannot be taken back out of the deck without hand-editing
+  /// the JSONL file. Looking a word up is not the same as wanting to memorize it.
+  func saveLookupToStudy() {
+    guard let lookup, !lookupSavedToStudy else { return }
+    lookupSavedToStudy = true
+    announce("Saved \(lookup.english) to Study.")
+    studyLogTask = Task { [learningLog, provider, model] in
+      await learningLog.append(
+        client: "quick-check-dictionary",
+        original: lookup.learningLogOriginal,
+        corrected: lookup.english,
+        explanation: lookup.learningLogExplanation,
+        provider: provider.rawValue,
+        model: model
+      )
+    }
+  }
+
   func selectWritingStyle(id: UUID?) async {
     guard id == nil || availableWritingStyles.contains(where: { $0.id == id }) else { return }
     selectedWritingStyleID = id
@@ -350,12 +389,13 @@ final class QuickCheckViewModel: ObservableObject {
     isPreparingOutbound = false
 
     if activeOperationID != nil {
-      announce(isChecking ? "Check canceled." : "Rewrite canceled.")
+      announce(canceledAnnouncement)
     }
     activeOperationID = nil
     operationTask?.cancel()
     isChecking = false
     rewritingIntent = nil
+    isLookingUp = false
 
     copiedTask?.cancel()
     copied = false
@@ -385,6 +425,7 @@ final class QuickCheckViewModel: ObservableObject {
     await operationTask?.value
     await historyTask?.value
     await draftTask?.value
+    await studyLogTask?.value
   }
 
   private func performInitialContextLoad(
@@ -487,6 +528,51 @@ final class QuickCheckViewModel: ObservableObject {
       startCheck(request)
     case .rewrite(let request):
       startRewrite(request)
+    case .define(let request):
+      startDefine(request)
+    }
+  }
+
+  private func startDefine(_ request: DefineRequest) {
+    operationTask?.cancel()
+    let operationID = UUID()
+    activeOperationID = operationID
+
+    isLookingUp = true
+    userVisibleError = nil
+    copied = false
+    lookup = nil
+    lookupSavedToStudy = false
+    // A lookup and a grammar check answer different questions about different text; leaving
+    // the previous check's diff on screen under a dictionary entry would read as if the
+    // entry were the correction.
+    result = nil
+    resultProvenance = nil
+    diff = []
+    changesOnly = false
+    historyID = nil
+    announce("Lookup started.")
+
+    operationTask = Task { [weak self, grammar] in
+      guard let self else { return }
+      do {
+        let entry = try await grammar.define(
+          text: request.term,
+          destination: request.destination
+        )
+        try Task.checkCancellation()
+        guard self.activeOperationID == operationID else { return }
+        self.lookup = entry
+        self.finishOperation(operationID, announcement: "Lookup complete.")
+      } catch {
+        guard self.activeOperationID == operationID else { return }
+        if Task.isCancelled || error is CancellationError || error as? BexError == .cancellation {
+          self.finishOperation(operationID, announcement: "Lookup canceled.")
+        } else {
+          self.show(error)
+          self.finishOperation(operationID, announcement: "Lookup failed.")
+        }
+      }
     }
   }
 
@@ -499,6 +585,8 @@ final class QuickCheckViewModel: ObservableObject {
     rewritingIntent = nil
     userVisibleError = nil
     copied = false
+    lookup = nil
+    lookupSavedToStudy = false
     result = nil
     resultProvenance = nil
     diff = []
@@ -602,6 +690,7 @@ final class QuickCheckViewModel: ObservableObject {
     activeOperationID = nil
     isChecking = false
     rewritingIntent = nil
+    isLookingUp = false
     announce(announcement)
   }
 
@@ -626,12 +715,13 @@ final class QuickCheckViewModel: ObservableObject {
     wantsEditorFocus = false
 
     if activeOperationID != nil {
-      announce(isChecking ? "Check canceled." : "Rewrite canceled.")
+      announce(canceledAnnouncement)
     }
     activeOperationID = nil
     operationTask?.cancel()
     isChecking = false
     rewritingIntent = nil
+    isLookingUp = false
 
     draftPersistenceGeneration &+= 1
     draftTask?.cancel()
@@ -752,12 +842,22 @@ final class QuickCheckViewModel: ObservableObject {
     }
   }
 
+  /// What to announce when an in-flight operation is torn down, for whichever of the
+  /// three kinds is running.
+  private var canceledAnnouncement: String {
+    if isChecking { return "Check canceled." }
+    if isLookingUp { return "Lookup canceled." }
+    return "Rewrite canceled."
+  }
+
   private func clearRenderedResult() {
     result = nil
     resultProvenance = nil
     diff = []
     changesOnly = false
     historyID = nil
+    lookup = nil
+    lookupSavedToStudy = false
   }
 
   private func announce(_ message: String) {
@@ -788,12 +888,19 @@ extension QuickCheckViewModel {
     let intent: RewriteIntent
   }
 
+  fileprivate struct DefinePayload {
+    let term: String
+  }
+
   fileprivate enum OutboundPayload {
     case check(CheckPayload)
     case rewrite(RewritePayload)
+    case define(DefinePayload)
 
     func configured(for destination: OutboundDestination) -> PendingOutbound {
       switch self {
+      case .define(let payload):
+        return .define(DefineRequest(term: payload.term, destination: destination))
       case .check(let payload):
         return .check(
           CheckRequest(
@@ -828,19 +935,36 @@ extension QuickCheckViewModel {
     let destination: OutboundDestination
   }
 
+  fileprivate struct DefineRequest {
+    let term: String
+    let destination: OutboundDestination
+  }
+
   fileprivate enum PendingOutbound {
     case check(CheckRequest)
     case rewrite(RewriteRequest)
+    case define(DefineRequest)
 
     var destination: OutboundDestination {
       switch self {
       case .check(let request): request.destination
       case .rewrite(let request): request.destination
+      case .define(let request): request.destination
       }
     }
 
     var summary: QuickCheckOutboundSummary {
       switch self {
+      case .define(let request):
+        return QuickCheckOutboundSummary(
+          action: "Look up",
+          provider: request.destination.provider.displayName,
+          model: request.destination.model,
+          writingStyle: nil,
+          fullDraft: request.term,
+          disclosure:
+            "The term shown here will be sent to \(request.destination.disclosureTarget)."
+        )
       case .check(let request):
         return QuickCheckOutboundSummary(
           action: "Check draft",

@@ -13,6 +13,11 @@ enum GrammarCategory: String, CaseIterable, Sendable {
   case plural
   case spelling
   case capitalization
+  /// Dictionary lookups saved from Quick Check, not grammar corrections. `GrammarPrompts`
+  /// never emits this tag — only `DictionaryLookup.learningLogExplanation` does — so it
+  /// exists to keep vocabulary out of the grammar stats (see `recurringCounts`) while
+  /// still letting `StudyCardBuilder` drill it like any other card.
+  case vocabulary
   case other
 
   /// Friendly label for the Learning window.
@@ -26,6 +31,7 @@ enum GrammarCategory: String, CaseIterable, Sendable {
     case .plural: return "Plurals"
     case .spelling: return "Spelling"
     case .capitalization: return "Capitalization"
+    case .vocabulary: return "Vocabulary"
     case .other: return "Other"
     }
   }
@@ -117,10 +123,22 @@ enum LearningAggregator {
   /// word order) the Learning window exists to surface. The raw tag stays in the log and
   /// in `parseFixedTags`; only these aggregate stats drop it.
   /// ponytail: whole-category exclusion; add sentence-start-vs-proper-noun detection only if real capitalization errors ever matter here.
+  ///
+  /// `vocabulary` is excluded for a different reason: a saved dictionary lookup is a word
+  /// the owner chose to learn, not a mistake he made. Counting it would inflate the
+  /// per-100-words error rates in `LearningMetrics` — which read straight from this
+  /// function — every time he looks something up, making the gate he already passed
+  /// depend on how curious he was that week.
+  static let statisticsExcludedCategories: Set<String> = [
+    GrammarCategory.capitalization.rawValue,
+    GrammarCategory.vocabulary.rawValue,
+  ]
+
   static func recurringCounts(explanations: [String]) -> [GrammarCategoryCount] {
     var counts: [String: Int] = [:]
     for explanation in explanations {
-      for tag in parseFixedTags(from: explanation) where tag != GrammarCategory.capitalization.rawValue {
+      for tag in parseFixedTags(from: explanation)
+      where !statisticsExcludedCategories.contains(tag) {
         counts[tag, default: 0] += 1
       }
     }

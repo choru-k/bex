@@ -48,6 +48,10 @@ protocol GrammarServicing: Sendable {
     intent: RewriteIntent,
     destination: OutboundDestination
   ) async throws -> String
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

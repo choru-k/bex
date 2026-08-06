@@ -561,6 +561,18 @@
       }
     }
 
+    func define(
+      text: String,
+      destination: OutboundDestination
+    ) async throws -> DictionaryLookup {
+      DictionaryLookup(
+        english: "postpone",
+        korean: "미루다",
+        simple: "To move something to a later time.",
+        example: "Let's postpone the review until Friday."
+      )
+    }
+
     func generateProfile(
       context: ProfileContext,
       destination: OutboundDestination

@@ -21,6 +21,8 @@ actor QuickCheckGrammarStub: GrammarServicing {
 
   private var checkCalls: [QuickCheckCall] = []
   private var rewriteCalls = 0
+  private var defineTerms: [String] = []
+  private var failDefine = false
   private var delayCheck = false
   private var delayRewrite = false
   private var failCheck = false
@@ -45,6 +47,14 @@ actor QuickCheckGrammarStub: GrammarServicing {
 
   func recordedRewriteCount() -> Int {
     rewriteCalls
+  }
+
+  func setFailDefine(_ value: Bool) {
+    failDefine = value
+  }
+
+  func recordedDefineTerms() -> [String] {
+    defineTerms
   }
 
   func resumeChecks() {
@@ -101,6 +111,20 @@ actor QuickCheckGrammarStub: GrammarServicing {
       }
     }
     return "This is a test."
+  }
+
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup {
+    defineTerms.append(text)
+    if failDefine { throw BexError.invalidResponse }
+    return DictionaryLookup(
+      english: "postpone",
+      korean: "미루다",
+      simple: "To move something to a later time.",
+      example: "Let's postpone the review until Friday."
+    )
   }
 
   func generateProfile(
@@ -685,6 +709,69 @@ final class QuickCheckViewModelTests: XCTestCase {
     )
   }
 
+  func testLookUpShowsAnEntryAndOnlySavesToStudyWhenAsked() async throws {
+    let fixture = try await makeFixture()
+    defer { fixture.removeFiles() }
+
+    await fixture.viewModel.loadContext()
+    fixture.viewModel.input = "미루다"
+    fixture.viewModel.lookUp()
+    await fixture.viewModel.waitForCurrentWork()
+
+    let definedTerms = await fixture.grammar.recordedDefineTerms()
+    XCTAssertEqual(definedTerms, ["미루다"])
+    XCTAssertEqual(fixture.viewModel.lookup?.english, "postpone")
+    XCTAssertFalse(fixture.viewModel.lookupSavedToStudy)
+    // A lookup is not a correction: nothing lands in Quick Check history, and nothing
+    // enters the study deck until the owner says so — the log has no delete.
+    let history = try await fixture.data.loadHistory()
+    XCTAssertTrue(history.isEmpty)
+    let beforeSave = await fixture.learningLog.readAll()
+    XCTAssertTrue(beforeSave.isEmpty)
+
+    fixture.viewModel.saveLookupToStudy()
+    XCTAssertTrue(fixture.viewModel.lookupSavedToStudy)
+    await fixture.viewModel.waitForCurrentWork()
+
+    let entries = await fixture.learningLog.readAll()
+    XCTAssertEqual(entries.count, 1)
+    XCTAssertEqual(entries[0].client, "quick-check-dictionary")
+    XCTAssertEqual(entries[0].corrected, "postpone")
+
+    let cards = StudyCardBuilder.cards(
+      from: entries.map {
+        LearningSample(date: Date(), original: $0.original, explanation: $0.explanation)
+      }
+    )
+    XCTAssertEqual(cards.map(\.correct), ["postpone"])
+
+    // Saving twice must not double-log the same word.
+    fixture.viewModel.saveLookupToStudy()
+    await fixture.viewModel.waitForCurrentWork()
+    let afterSecondSave = await fixture.learningLog.readAll()
+    XCTAssertEqual(afterSecondSave.count, 1)
+  }
+
+  func testFailedLookUpSurfacesAnErrorAndLeavesNothingToSave() async throws {
+    let fixture = try await makeFixture()
+    defer { fixture.removeFiles() }
+
+    await fixture.grammar.setFailDefine(true)
+    await fixture.viewModel.loadContext()
+    fixture.viewModel.input = "미루다"
+    fixture.viewModel.lookUp()
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertNil(fixture.viewModel.lookup)
+    XCTAssertNotNil(fixture.viewModel.userVisibleError)
+    XCTAssertFalse(fixture.viewModel.isBusy)
+
+    fixture.viewModel.saveLookupToStudy()
+    await fixture.viewModel.waitForCurrentWork()
+    let entries = await fixture.learningLog.readAll()
+    XCTAssertTrue(entries.isEmpty)
+  }
+
   private func makeFixture(
     provider: LLMProvider = .openAI,
     draftRetention: RetentionChoice = .enabled,
@@ -717,12 +804,18 @@ final class QuickCheckViewModelTests: XCTestCase {
     let grammar = QuickCheckGrammarStub()
     let pasteboard = RecordingPasteboard()
     let dismissals = QuickCheckDismissalRecorder()
+    // Always a temp directory: the default `LearningLogStore()` writes to the real
+    // ~/Library/Application Support, and a test that saves a lookup would append to the
+    // owner's actual study deck.
+    let learningLog = LearningLogStore(
+      directoryURL: directory.appendingPathComponent("LearningLog", isDirectory: true))
     let viewModel = QuickCheckViewModel(
       preferences: preferences,
       keychain: keychain,
       data: data,
       grammar: grammar,
       pasteboard: pasteboard,
+      learningLog: learningLog,
       onDismiss: { reason in dismissals.record(reason) }
     )
     return QuickCheckFixture(
@@ -733,6 +826,7 @@ final class QuickCheckViewModelTests: XCTestCase {
       grammar: grammar,
       pasteboard: pasteboard,
       dismissals: dismissals,
+      learningLog: learningLog,
       viewModel: viewModel
     )
   }
@@ -757,6 +851,7 @@ private struct QuickCheckFixture {
   let grammar: QuickCheckGrammarStub
   let pasteboard: RecordingPasteboard
   let dismissals: QuickCheckDismissalRecorder
+  let learningLog: LearningLogStore
   let viewModel: QuickCheckViewModel
 
   func removeFiles() {

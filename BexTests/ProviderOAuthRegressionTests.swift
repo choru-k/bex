@@ -62,6 +62,13 @@ struct ModelCatalogGrammarStub: GrammarServicing {
     throw BexError.invalidResponse
   }
 
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup {
+    throw BexError.invalidResponse
+  }
+
   func generateProfile(
     context: ProfileContext,
     destination: OutboundDestination

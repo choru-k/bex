@@ -63,6 +63,12 @@ Quick Check also supports three in-place rewrites:
 - **Friendlier** (`⌘2`)
 - **Shorter** (`⌘3`)
 
+### Look up a word
+
+Type a word or short phrase and press **Look Up** (`⌘D`). It works in either direction — Korean or English in, and you get all four back: the English term, the Korean term, the meaning in plain English, and an example sentence. There is no language to pick; Bex works out which side you typed.
+
+**Save to Study** adds the word to your Study deck as a fill-in-the-blank card that asks you to produce the English term. Saving is a deliberate step: looking a word up is not the same as wanting to memorize it, and the deck has no delete. Saved words never count toward the grammar statistics in the Learning window — a word you chose to learn is not a mistake you made.
+
 The Bex menu opens the management windows only when needed:
 
 - **History** — search and filter prior checks, inspect their diffs, reuse an input, or delete entries

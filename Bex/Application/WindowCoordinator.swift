@@ -93,6 +93,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         data: services.data,
         grammar: services.grammar,
         pasteboard: services.pasteboard,
+        learningLog: services.learningLog,
         onDismiss: { [weak self] reason in
           self?.closeQuickCheck(reason: reason)
         }
