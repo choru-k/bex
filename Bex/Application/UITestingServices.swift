@@ -578,7 +578,7 @@
     func classifyStudyPatterns(
       cards: [StudyCard],
       destination: OutboundDestination
-    ) async throws -> [String: StudyPattern] {
+    ) async throws -> [String: StudyPattern.Verdict] {
       [:]
     }
 

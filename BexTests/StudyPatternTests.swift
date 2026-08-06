@@ -38,9 +38,9 @@ final class StudyPatternTests: XCTestCase {
 
   // MARK: - Request shape
 
-  /// Only the correction pair is sent — never the surrounding sentence, which is the
-  /// owner's own prompt text.
-  func testClassificationMessageIsANumberedListOfPairsOnly() {
+  /// The rendered card is sent, blank included: whether the blank is answerable is most of
+  /// what the model is asked to judge, and it cannot see that from the pair alone.
+  func testClassificationMessageCarriesTheRenderedCard() {
     let cards = [
       card("1", wrong: "has bad format", correct: "has a bad format"),
       card("2", wrong: "I am prefering", correct: "I prefer"),
@@ -51,10 +51,13 @@ final class StudyPatternTests: XCTestCase {
     XCTAssertEqual(
       message,
       """
-      1. has bad format -> has a bad format
-      2. I am prefering -> I prefer
+      1. CARD: _____ here.
+         ANSWER: has a bad format
+         HE WROTE: has bad format
+      2. CARD: _____ here.
+         ANSWER: I prefer
+         HE WROTE: I am prefering
       """)
-    XCTAssertFalse(message.contains("here."))
   }
 
   // MARK: - Response parsing
@@ -66,9 +69,12 @@ final class StudyPatternTests: XCTestCase {
     ]
 
     let parsed = try StudyPattern.parseClassification(
-      #"{"1": "determiner", "2": "stative-progressive"}"#, for: cards)
+      #"{"1": {"drill": false, "pattern": "determiner"}, "2": {"drill": true, "pattern": "stative-progressive"}}"#, for: cards)
 
-    XCTAssertEqual(parsed, ["card-a": .determiner, "card-b": .stativeProgressive])
+    XCTAssertEqual(parsed["card-a"]?.pattern, .determiner)
+    XCTAssertEqual(parsed["card-b"]?.pattern, .stativeProgressive)
+    XCTAssertEqual(parsed["card-a"]?.isDrillable, false, "articles are not drillable")
+    XCTAssertEqual(parsed["card-b"]?.isDrillable, true)
   }
 
   /// A wrong label silently regroups a card, so anything the vocabulary does not contain
@@ -81,11 +87,14 @@ final class StudyPatternTests: XCTestCase {
     ]
 
     let parsed = try StudyPattern.parseClassification(
-      #"{"1": "DETERMINER", "2": "article-omission"}"#, for: cards)
+      #"{"1": {"drill": true, "pattern": "DETERMINER"}, "2": {"drill": true, "pattern": "article-omission"}}"#, for: cards)
 
-    XCTAssertEqual(parsed["known"], .determiner, "labels are matched case-insensitively")
-    XCTAssertEqual(parsed["invented"], .unclassified)
-    XCTAssertEqual(parsed["absent"], .unclassified)
+    XCTAssertEqual(parsed["known"]?.pattern, .determiner, "labels are matched case-insensitively")
+    XCTAssertEqual(parsed["invented"]?.pattern, .unclassified)
+    XCTAssertEqual(parsed["absent"]?.pattern, .unclassified)
+    XCTAssertEqual(
+      parsed["absent"]?.isDrillable, true,
+      "a missing verdict must not silently delete a card")
   }
 
   func testNonJSONResponseThrows() {

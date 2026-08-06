@@ -68,13 +68,20 @@ enum StudyDailyPlan {
     states: [String: StudyReviewState],
     now: Date,
     calendar: Calendar = .current,
-    patterns: [String: StudyPattern] = [:]
+    verdicts: [String: StudyPattern.Verdict] = [:]
   ) -> Plan {
+    // Patterns a blank cannot teach are dropped outright — not deprioritized — including
+    // for cards already in rotation. See `StudyPattern.isDrillable`; on the real deck this
+    // removes 57 of 151 cards, all of them articles and subject-verb agreement.
+    let drillable = cards.filter { card in
+      isDrillable(card, verdicts: verdicts)
+    }
+
     // Reviews: every in-rotation (has a state) card that's due. Unconditional — see
     // the file doc comment on why reviews never get capped.
     var reviewIDs: [String] = []
     var maxOverdueDays = 0
-    for card in cards {
+    for card in drillable {
       guard let state = states[card.id] else { continue }
       guard state.dueAt <= now else { continue }
       reviewIDs.append(card.id)
@@ -98,7 +105,7 @@ enum StudyDailyPlan {
     // the owner actually ever sees, so it has to be "the mistakes worth fixing" rather
     // than "whatever was logged first" — an obvious `"sub agent"` → `"sub agents"` tap
     // is not worth one of the ten slots while word order and prepositions wait.
-    let unseen: [StudyCard] = cards.filter { states[$0.id] == nil }
+    let unseen: [StudyCard] = drillable.filter { states[$0.id] == nil }
 
     // A card the classifier examined and found no rule for teaches nothing, so it goes
     // behind every real lesson. This is a stronger signal than `StudyCardQuality`'s
@@ -111,7 +118,9 @@ enum StudyDailyPlan {
     // `nil` is deliberately NOT treated the same way: it means "not classified yet", not
     // "no rule applies", and penalizing it would push every card to the back of the deck
     // until the background pass has run.
-    func teachesNoRule(_ card: StudyCard) -> Bool { patterns[card.id] == .unclassified }
+    func teachesNoRule(_ card: StudyCard) -> Bool {
+      verdicts[card.id]?.pattern == .unclassified
+    }
     let ordered: [StudyCard] =
       unseen.filter { $0.priority == .high && !teachesNoRule($0) }
       + unseen.filter { $0.priority == .low && !teachesNoRule($0) }
@@ -132,10 +141,10 @@ enum StudyDailyPlan {
     var newIDs: [String] = []
     for card in ordered {
       guard newIDs.count < allowedNew else { break }
-      let pattern = patterns[card.id] ?? StudyPattern.fromCategory(card.category)
-      if pattern.groupsCards {
-        guard !usedPatterns.contains(pattern) else { continue }
-        usedPatterns.insert(pattern)
+      let cardPattern = pattern(for: card, verdicts: verdicts)
+      if cardPattern.groupsCards {
+        guard !usedPatterns.contains(cardPattern) else { continue }
+        usedPatterns.insert(cardPattern)
       }
       newIDs.append(card.id)
     }
@@ -146,5 +155,21 @@ enum StudyDailyPlan {
       newCount: newIDs.count,
       maxOverdueDays: maxOverdueDays
     )
+  }
+
+  /// A card's pattern: what the classifier assigned, or the `GrammarCategory` tag it falls
+  /// back to until the background pass has labelled it.
+  private static func pattern(for card: StudyCard, verdicts: [String: StudyPattern.Verdict]) -> StudyPattern {
+    verdicts[card.id]?.pattern ?? StudyPattern.fromCategory(card.category)
+  }
+
+  /// A card survives two independent gates. The classifier's per-card `isDrillable` is the
+  /// authoritative one — it can see whether the blank is answerable, which no rule here
+  /// can — and the pattern-level check is the fallback that applies before the background
+  /// pass has judged a card. An unjudged card is drillable unless its *pattern* is one a
+  /// blank cannot teach, so nothing is removed on a parse failure or a missing entry.
+  private static func isDrillable(_ card: StudyCard, verdicts: [String: StudyPattern.Verdict]) -> Bool {
+    if let verdict = verdicts[card.id] { return verdict.isDrillable }
+    return StudyPattern.fromCategory(card.category).isDrillable
   }
 }

@@ -75,7 +75,7 @@ struct ModelCatalogGrammarStub: GrammarServicing {
 
     destination: OutboundDestination
 
-  ) async throws -> [String: StudyPattern] {
+  ) async throws -> [String: StudyPattern.Verdict] {
 
     [:]
 

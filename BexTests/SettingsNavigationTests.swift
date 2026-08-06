@@ -479,7 +479,7 @@ private struct SettingsGrammarStub: GrammarServicing {
 
     destination: OutboundDestination
 
-  ) async throws -> [String: StudyPattern] {
+  ) async throws -> [String: StudyPattern.Verdict] {
 
     [:]
 

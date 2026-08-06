@@ -27,7 +27,7 @@ extension Notification.Name {
 actor StudyPatternStore {
   private let directoryURL: URL
   private let fileURL: URL
-  private var cached: [String: StudyPattern]?
+  private var cached: [String: StudyPattern.Verdict]?
 
   init(
     directoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -37,7 +37,7 @@ actor StudyPatternStore {
     self.fileURL = directoryURL.appendingPathComponent("study-patterns.json")
   }
 
-  func patterns() -> [String: StudyPattern] {
+  func verdicts() -> [String: StudyPattern.Verdict] {
     loadIfNeeded()
     return cached ?? [:]
   }
@@ -45,7 +45,7 @@ actor StudyPatternStore {
   /// Merges newly classified cards in, overwriting any previous assignment for the same
   /// id. Posts only when something actually changed, so a pass that reclassifies nothing
   /// does not churn the badge.
-  func assign(_ assignments: [String: StudyPattern]) {
+  func assign(_ assignments: [String: StudyPattern.Verdict]) {
     loadIfNeeded()
     var merged = cached ?? [:]
     for (cardID, pattern) in assignments { merged[cardID] = pattern }
@@ -76,12 +76,12 @@ actor StudyPatternStore {
   /// Best-effort, exactly like `StudyStateStore.readFromDisk`: a missing or corrupt file
   /// means "nothing classified yet", which degrades to grouping by `GrammarCategory` tag
   /// rather than failing.
-  private func readFromDisk() -> [String: StudyPattern] {
+  private func readFromDisk() -> [String: StudyPattern.Verdict] {
     guard let data = try? Data(contentsOf: fileURL) else { return [:] }
-    return (try? JSONDecoder().decode([String: StudyPattern].self, from: data)) ?? [:]
+    return (try? JSONDecoder().decode([String: StudyPattern.Verdict].self, from: data)) ?? [:]
   }
 
-  private func persist(_ patterns: [String: StudyPattern]) {
+  private func persist(_ patterns: [String: StudyPattern.Verdict]) {
     cached = patterns
     do {
       try FileManager.default.createDirectory(

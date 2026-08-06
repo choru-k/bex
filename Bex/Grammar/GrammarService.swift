@@ -162,7 +162,7 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
   func classifyStudyPatterns(
     cards: [StudyCard],
     destination: OutboundDestination
-  ) async throws -> [String: StudyPattern] {
+  ) async throws -> [String: StudyPattern.Verdict] {
     guard !cards.isEmpty else { return [:] }
     let client = try await factory.makeClient(for: destination)
     let effort = await factory.preferences.selectedEffort(for: destination.provider)

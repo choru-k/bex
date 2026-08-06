@@ -799,9 +799,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let samples = LearningLogSamples.parse(entries)
     let cards = StudyCardBuilder.cards(from: samples)
     let states = await services.studyState.states()
-    let patterns = await services.studyPatterns.patterns()
+    let verdicts = await services.studyPatterns.verdicts()
     let plan = StudyDailyPlan.plan(
-      cards: cards, states: states, now: now, patterns: patterns)
+      cards: cards, states: states, now: now, verdicts: verdicts)
     return (cards, plan, samples)
   }
 

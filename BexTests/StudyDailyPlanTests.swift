@@ -178,19 +178,19 @@ final class StudyDailyPlanTests: XCTestCase {
   /// The real complaint this solves: 34 of the owner's cards are the same determiner rule,
   /// so an unfiltered batch spent six of ten slots re-teaching one lesson.
   func testBatchTakesOnlyOneCardPerPattern() {
-    let deck = (0..<20).map { card("determiner\($0)", category: "article") }
+    let deck = (0..<20).map { card("preposition\($0)", category: "preposition") }
 
     let plan = StudyDailyPlan.plan(cards: deck, states: [:], now: day(0), calendar: calendar)
 
-    XCTAssertEqual(plan.cardIDs, ["determiner0"])
+    XCTAssertEqual(plan.cardIDs, ["preposition0"])
   }
 
   /// ...but a batch of distinct lessons still fills up. Every card here is groupable, so
   /// this also pins that grouping never withholds a card whose pattern is unused.
   func testBatchFillsWithDistinctPatterns() {
-    let categories = [
-      "article", "preposition", "word-order", "plural", "subject-verb-agreement", "verb-tense",
-    ]
+    // Articles and subject-verb agreement are absent on purpose: `StudyPattern.isDrillable`
+    // removes them, so they cannot fill a slot.
+    let categories = ["preposition", "word-order", "plural", "verb-tense"]
     let deck = categories.enumerated().map { index, category in
       card("card\(index)", category: category)
     }
@@ -208,15 +208,63 @@ final class StudyDailyPlanTests: XCTestCase {
       card("tagged-other", category: "other"),
       card("tagged-spelling", category: "spelling"),
     ]
-    let patterns: [String: StudyPattern] = [
-      "tagged-other": .phrasing,
-      "tagged-spelling": .phrasing,
+    let verdicts: [String: StudyPattern.Verdict] = [
+      "tagged-other": .init(pattern: .phrasing, isDrillable: true),
+      "tagged-spelling": .init(pattern: .phrasing, isDrillable: true),
     ]
 
     let plan = StudyDailyPlan.plan(
-      cards: deck, states: [:], now: day(0), calendar: calendar, patterns: patterns)
+      cards: deck, states: [:], now: day(0), calendar: calendar, verdicts: verdicts)
 
     XCTAssertEqual(plan.cardIDs, ["tagged-other"])
+  }
+
+  /// The classifier's verdict removes a card outright, whatever its pattern. This is the
+  /// authoritative gate — it is the only thing that can see whether the blank is answerable
+  /// from the words around it, which two hand-written rules of mine both got wrong.
+  func testClassifierVerdictRemovesACardEvenWhenItsPatternIsFine() {
+    let deck = [card("unanswerable", category: "preposition"), card("good", category: "preposition")]
+    let verdicts: [String: StudyPattern.Verdict] = [
+      "unanswerable": .init(pattern: .preposition, isDrillable: false),
+      "good": .init(pattern: .preposition, isDrillable: true),
+    ]
+
+    let plan = StudyDailyPlan.plan(
+      cards: deck, states: [:], now: day(0), calendar: calendar, verdicts: verdicts)
+
+    XCTAssertEqual(plan.cardIDs, ["good"])
+  }
+
+  /// It also removes a card already in rotation, not just from new intake — a card that
+  /// teaches nothing should stop appearing, not wait to age out.
+  func testClassifierVerdictAlsoRemovesCardsAlreadyInRotation() {
+    let deck = [card("in-rotation", category: "preposition")]
+    let states: [String: StudyReviewState] = [
+      "in-rotation": StudyReviewState(
+        box: 1, dueAt: day(0).addingTimeInterval(-dayInSeconds), timesSeen: 3, timesCorrect: 2,
+        firstSeenAt: day(0).addingTimeInterval(-10 * dayInSeconds))
+    ]
+
+    let plan = StudyDailyPlan.plan(
+      cards: deck, states: states, now: day(0), calendar: calendar,
+      verdicts: ["in-rotation": .init(pattern: .preposition, isDrillable: false)])
+
+    XCTAssertEqual(plan.cardIDs, [])
+    XCTAssertEqual(plan.reviewCount, 0)
+  }
+
+  /// Articles and subject-verb agreement are excluded before the classifier has seen them
+  /// too — the owner was explicit that no blank can teach those.
+  func testArticleAndAgreementCardsAreExcludedWithoutAVerdict() {
+    let deck = [
+      card("article", category: "article"),
+      card("agreement", category: "subject-verb-agreement"),
+      card("preposition", category: "preposition"),
+    ]
+
+    let plan = StudyDailyPlan.plan(cards: deck, states: [:], now: day(0), calendar: calendar)
+
+    XCTAssertEqual(plan.cardIDs, ["preposition"])
   }
 
   /// A card the classifier examined and found no rule for goes behind every real lesson.
@@ -228,13 +276,13 @@ final class StudyDailyPlanTests: XCTestCase {
       card("no-rule", category: "other"),
       card("real-lesson", category: "other"),
     ]
-    let patterns: [String: StudyPattern] = [
-      "no-rule": .unclassified,
-      "real-lesson": .phrasing,
+    let verdicts: [String: StudyPattern.Verdict] = [
+      "no-rule": .init(pattern: .unclassified, isDrillable: true),
+      "real-lesson": .init(pattern: .phrasing, isDrillable: true),
     ]
 
     let plan = StudyDailyPlan.plan(
-      cards: deck, states: [:], now: day(0), calendar: calendar, patterns: patterns)
+      cards: deck, states: [:], now: day(0), calendar: calendar, verdicts: verdicts)
 
     XCTAssertEqual(plan.cardIDs, ["real-lesson", "no-rule"])
   }
@@ -245,11 +293,11 @@ final class StudyDailyPlanTests: XCTestCase {
   func testUnclassifiedCardsAreNotPenalizedBeforeTheClassifierRuns() {
     let deck = [
       card("not-yet-classified", category: "other"),
-      card("known-lesson", category: "article"),
+      card("known-lesson", category: "preposition"),
     ]
 
     let plan = StudyDailyPlan.plan(
-      cards: deck, states: [:], now: day(0), calendar: calendar, patterns: [:])
+      cards: deck, states: [:], now: day(0), calendar: calendar, verdicts: [:])
 
     XCTAssertEqual(plan.cardIDs, ["not-yet-classified", "known-lesson"])
   }
