@@ -2,14 +2,35 @@ import Foundation
 
 enum GrammarPrompts {
   /// The editing rules and the `explanation` contract, shared by `system` and
-  /// `promptSafeSystem` so the two cannot drift apart. The `[tag]` list here is the one
-  /// `GrammarCategory` — and, through it, `LearningAggregator` and `StudyCardBuilder` —
-  /// must stay in sync with.
+  /// `promptSafeSystem` so the two cannot drift apart.
   ///
   /// Rules 2-4 and the "copied from the input" clause each exist because a measured
   /// failure demanded them: on a 25-case eval the older wording reported no-op fixes like
   /// `[capitalization] "The deploy" → "The deploy"` and rewrote correct developer
   /// vocabulary. Both pollute the Learning counts that Study Mode drills from.
+  ///
+  /// Plan v7 (`docs/learning-mode-plan.md`) reweighted the two sections toward expression,
+  /// against the grain of that anti-noise tuning. Both halves were owner decisions:
+  ///
+  /// - **Consider is now always present**, and offers candidates *without* ranking them. It
+  ///   used to default to silence, so a correct-but-debatable sentence ("What is your plan
+  ///   for fixing this issue?") returned "No changes needed." — accurate and useless, with
+  ///   no channel for "this is fine, and here is what the alternatives imply." The owner
+  ///   wants to weigh the candidates and choose, so the prompt describes differences and is
+  ///   forbidden from naming a winner.
+  /// - **`Fixed:` lists only what the writer did not KNOW.** The governing test is no longer
+  ///   "is this error type important" but "was this a knowledge gap or a finger slip" — a
+  ///   typo like "whta" teaches nothing, because the writer knows the word. The model is
+  ///   asked to judge that from the writer's evident level, which is the point: the deck
+  ///   should track what they are actually missing, not what they mistyped. `[article]` and
+  ///   `[plural]` are excluded on top of that test, by owner preference, even when genuine.
+  ///
+  /// So the `[tag]` list below is deliberately a SUBSET of `GrammarCategory`: the enum keeps
+  /// `.article`, `.plural`, and `.vocabulary` because `LearningAggregator` and
+  /// `StudyCardBuilder` still parse logs written before this change (and `.vocabulary` is
+  /// written directly by `DictionaryLookup`, never by this prompt). Removing a case would
+  /// break old data, not just new output. Both changes cost real signal — see the plan doc
+  /// for what they do to the goal-2 uptake tripwire and the Study deck's card mix.
   private static let editingRules = """
     Edit the text under these rules:
 
@@ -24,15 +45,19 @@ enum GrammarPrompts {
     Build "explanation" from up to two labeled sections, in this order.
 
     Fixed:
-    One line per change you actually made, in the order they appear. Start each line with exactly one tag: [article] [verb-tense] [subject-verb-agreement] [preposition] [word-order] [plural] [spelling] [capitalization] [other]. Use [other] for punctuation and anything else. Format:
+    This section is study material, not a change log — the diff already shows every edit. List a change ONLY when the writer plausibly did not KNOW the correct form. Fix the rest silently and never list it:
+    - Typos and slips. A transposed, doubled, or dropped letter ("whta", "teh", "adn") is a finger slip by someone who knows the word perfectly well. Judge from the whole text and from the writer's evident level: if they use a word or form correctly anywhere, they did not "not know" it where they mistyped it. A genuine misspelling is different — a plausible-sounding wrong spelling of a word they have clearly never written correctly is a real gap; list that.
+    - Article and plural fixes. Never list these, under any tag, even when they are a real gap. The reader has asked not to spend lines on them.
+    Whatever survives is something worth learning. One line each, in the order they appear, starting with exactly one tag: [verb-tense] [subject-verb-agreement] [preposition] [word-order] [spelling] [capitalization] [other]. Use [other] for punctuation and anything else. Format:
     [tag] "original phrase" → "corrected phrase" — short simple reason.
-    The "original phrase" must be copied from the input text, character for character. Never list a change you did not make, and never invent a phrase that is not in the input. Omit this whole section when you changed nothing.
+    The "original phrase" must be copied from the input text, character for character. Never list a change you did not make, and never invent a phrase that is not in the input. Omit this whole section entirely when nothing survives the test above.
 
     Consider:
-    Silence is the default — most texts get no Consider section at all. Add at most 2 lines, and only when an ordinary colleague would obviously say it differently. A suggestion must be shorter or plainer than the original, never longer, fancier, or more formal, and never a change to technical vocabulary. Format:
-    "original phrase" → "suggested phrase" — short simple reason it sounds more natural.
+    Always include this section, even when the text is already correct — this is the part the reader wants most. Pick the ONE phrase whose wording is most genuinely open to choice, and offer 2-3 alternatives for that phrase. Never offer an alternative to technical vocabulary. One line per alternative:
+    "original phrase" → "alternative phrase" — how this alternative differs from the original in meaning, tone, or register.
+    Then one closing line beginning with "Which fits?" that says what the original already conveys and what the reader should ask themselves to choose. Describe the differences; never rank the alternatives, never call one better, and never tell the reader which to pick — the choice is theirs. Every alternative must be common, conversational, and usable at an intermediate level: no literary, fancier, or more formal upgrades.
 
-    When you changed nothing and have nothing to suggest, explanation is exactly "No changes needed."
+    Use exactly "No changes needed." as the whole explanation only when the input is too short or fragmentary for alternatives to mean anything.
     """
 
   static let system = """
