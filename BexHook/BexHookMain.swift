@@ -58,7 +58,7 @@ struct BexHookMain {
         return
       }
 
-      if KoreanPrompt.isMainlyKorean(input.prompt) {
+      if KoreanPrompt.isMainlyKorean(input.prompt) || TrivialPrompt.isTrivial(input.prompt) {
         try? writeHeartbeat(client: client, integrationID: input.integrationID)
         return
       }
@@ -130,7 +130,7 @@ struct BexHookMain {
       }
       integrationID = input.integrationID
 
-      if KoreanPrompt.isMainlyKorean(input.text) {
+      if KoreanPrompt.isMainlyKorean(input.text) || TrivialPrompt.isTrivial(input.text) {
         try writeFrame(OMPPromptGateFrame.allow(integrationID: integrationID))
         decisionWritten = true
         try writeHeartbeat(client: .ohMyPi, integrationID: integrationID)

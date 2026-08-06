@@ -133,6 +133,34 @@ enum KoreanPrompt {
   }
 }
 
+/// Recognizes an acknowledgement — `yes`, `ok`, `go ahead` — which there is nothing to
+/// correct in and nothing to learn from. Like `KoreanPrompt`, these pass straight through
+/// instead of costing a round trip and a gate window.
+///
+/// A closed list, not a length rule. Short prompts are where some of the owner's best
+/// study material comes from: `check status` → `check the status` and `make commit` → `make
+/// a commit` are two words each. Anything that trims the deck by size would throw those
+/// away, so this only skips words whose whole purpose is to say "continue".
+enum TrivialPrompt {
+  /// Matched after lowercasing and stripping surrounding punctuation, so `Yes.`, `ok!`,
+  /// and `y` all land here.
+  private static let acknowledgements: Set<String> = [
+    "y", "n", "yes", "yeah", "yep", "yup", "no", "nope", "ok", "okay", "k", "sure",
+    "go", "go ahead", "goahead", "next", "continue", "proceed", "do it", "done",
+    "stop", "wait", "thanks", "thank you", "thx", "ty", "please", "good", "nice",
+    "great", "perfect", "cool", "right", "correct", "agree", "agreed",
+  ]
+
+  static func isTrivial(_ text: String) -> Bool {
+    let stripped = text.trimmingCharacters(in: .whitespacesAndNewlines)
+      .lowercased()
+      .trimmingCharacters(in: CharacterSet(charactersIn: ".?!,;:\"'“”‘’-–— \t\n"))
+    guard !stripped.isEmpty else { return true }
+    let collapsed = stripped.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    return acknowledgements.contains(collapsed)
+  }
+}
+
 struct HookInput: Decodable, Sendable {
   let hookEventName: String
   let prompt: String

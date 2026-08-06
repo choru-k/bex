@@ -405,7 +405,12 @@ final class PromptGateViewModel: ObservableObject {
   func skipCheckAndSendOriginal() {
     guard canSkipHookCheck, let session, let requestID = session.hookRequestID else { return }
 
-    retireCurrentTask()
+    // Released, not cancelled: `canSkipHookCheck` is only true while `phase == .checking`,
+    // so the prompt is already at the provider and its correction is already on its way
+    // back. Cancelling threw that away and with it the study material — the owner skips to
+    // stop *waiting*, not to stop the check. The released task still logs its result (see
+    // `runCheck`); the session-generation guard there keeps it from reopening this window.
+    releaseCurrentTask()
     let sessionGeneration = generation
     phase = .delivering
     errorMessage = nil
@@ -997,6 +1002,27 @@ final class PromptGateViewModel: ObservableObject {
           destination: destination
         )
         try Task.checkCancellation()
+        // Record the correction BEFORE the "is this session still on screen" guard, so a
+        // correction the provider already produced is kept even when nobody is waiting for
+        // it. That is the whole point of `skipCheckAndSendOriginal`: by the time Skip is
+        // offered the payload is already in flight, so skipping only abandons an answer
+        // that is coming anyway. Logging here turns those into study material instead.
+        //
+        // Awaited, not fire-and-forget. The hazard the previous version guarded against is
+        // a suspension point *between* the isCurrent guard and the review/phase mutation,
+        // where a concurrent cancel could clobber state that was just checked. Awaiting
+        // here is before the guard, which is re-evaluated afterwards and still bails on a
+        // stale session — and it means the entry is on disk before anything can tear this
+        // task's context down, rather than racing a detached task against it.
+        await learningLog.append(
+          client: session.knownClient?.rawValue ?? "manual",
+          original: pending.original,
+          corrected: result.corrected,
+          explanation: result.explanation,
+          provider: destination.provider.rawValue,
+          model: destination.model
+        )
+
         guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
           phase == .checking
         else {
@@ -1014,26 +1040,6 @@ final class PromptGateViewModel: ObservableObject {
         phase = .reviewing
         finishWork(workID)
         focusReview(completedReview)
-        // Fire-and-forget: record the approved correction for the learning log without
-        // suspending the state transition above. Awaiting here would reintroduce a
-        // suspension point between the isCurrent guard and the review/phase mutation,
-        // letting a concurrent cancel/invalidate clobber the state. See LearningLogStore.
-        let logClient = session.knownClient?.rawValue ?? "manual"
-        let logOriginal = pending.original
-        let logCorrected = result.corrected
-        let logExplanation = result.explanation
-        let logProvider = destination.provider.rawValue
-        let logModel = destination.model
-        Task { [learningLog] in
-          await learningLog.append(
-            client: logClient,
-            original: logOriginal,
-            corrected: logCorrected,
-            explanation: logExplanation,
-            provider: logProvider,
-            model: logModel
-          )
-        }
       } catch is CancellationError {
         self.finishWork(workID)
       } catch {
@@ -1135,6 +1141,15 @@ final class PromptGateViewModel: ObservableObject {
   private func retireCurrentTask() {
     guard let task = currentTask else { return }
     task.cancel()
+    retiredTasks.append(task)
+    currentTask = nil
+  }
+
+  /// Stops treating `currentTask` as current without cancelling it, so work already paid
+  /// for finishes. It stays in `retiredTasks` so `waitForCurrentWork()` still awaits it and
+  /// nothing is silently dropped.
+  private func releaseCurrentTask() {
+    guard let task = currentTask else { return }
     retiredTasks.append(task)
     currentTask = nil
   }

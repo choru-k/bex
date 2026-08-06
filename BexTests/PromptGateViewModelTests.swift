@@ -738,6 +738,42 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(fixture.viewModel.phase, .closed)
   }
 
+  /// Skipping stops the *waiting*, not the check. `canSkipHookCheck` is only true while the
+  /// prompt is already at the provider, so the correction arrives regardless — and it is
+  /// kept as study material instead of being thrown away with the closed window.
+  func testSkippingTheWaitStillRecordsTheLateCorrectionForStudy() async throws {
+    let grammar = SuspendedPromptGrammar()
+    let fixture = try await Fixture(confirmsHookOutboundPayloads: false, grammar: grammar)
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.hookSession(requestID: UUID(), text: "check status of the deploy")
+      ))
+    await grammar.waitUntilStarted()
+    fixture.viewModel.skipCheckAndSendOriginal()
+
+    await grammar.resume(
+      with: GrammarResult(
+        corrected: "check the status of the deploy",
+        explanation: """
+          Fixed:
+          [article] "check status" → "check the status" — needs the article.
+          """
+      ))
+    await fixture.viewModel.waitForCurrentWork()
+
+    // The window is gone...
+    XCTAssertEqual(fixture.viewModel.phase, .closed)
+    XCTAssertNil(fixture.viewModel.review)
+    // ...but the correction survived it.
+    let entries = await LearningLogStore(directoryURL: fixture.learningLogDirectory).readAll()
+    XCTAssertEqual(entries.count, 1)
+    XCTAssertEqual(entries.first?.original, "check status of the deploy")
+    XCTAssertEqual(entries.first?.corrected, "check the status of the deploy")
+    XCTAssertEqual(
+      StudyCardBuilder.cards(from: LearningLogSamples.parse(entries)).first?.correct,
+      "check the status")
+  }
+
 }
 
 private actor RecordingPromptGrammar: PromptGrammarServicing {
