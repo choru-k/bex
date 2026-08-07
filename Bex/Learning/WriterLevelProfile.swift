@@ -32,6 +32,8 @@ struct WriterLevelProfile: Codable, Equatable, Sendable {
 
     Ignore keyboard typos entirely; a mistyped word says nothing about what someone knows. Ignore one-off slips that never repeat. Name only patterns you can see more than once.
 
+    Do NOT name articles, plurals, capitalization, or punctuation, however often they appear. Those are corrected silently and never explained to this writer, so naming them spends the profile on something that can never be taught. Spend it on what can: verb tense and form, subject-verb agreement, prepositions, word order, and natural collocations.
+
     Write for another model to read as context, not for the person. No praise, no encouragement, no advice, no greeting.
     """
 
@@ -44,10 +46,26 @@ struct WriterLevelProfile: Codable, Equatable, Sendable {
   // than raising this number.
   static let maxCorrections = 200
 
+  /// Tags whose corrections are stripped before profiling. Instructing the model to ignore
+  /// them is not enough on its own: most of this corpus predates the silencing rules, so
+  /// article and plural lines outnumber everything else and the evidence alone pushes the
+  /// profile toward naming them. Removing them from the input is what actually frees the
+  /// 80-word budget for gaps the writer will really be shown.
+  private static let unteachableTags: Set<String> = [
+    GrammarCategory.article.rawValue,
+    GrammarCategory.plural.rawValue,
+    GrammarCategory.capitalization.rawValue,
+  ]
+
   static func profilingMessage(samples: [LearningSample]) -> String {
-    let lines = samples.suffix(maxCorrections).flatMap { sample in
-      LearningAggregator.parseFixedTags(from: sample.explanation).isEmpty
-        ? [] : ["\(sample.original)\n\(LearningAggregator.explanationWithoutConsider(from: sample.explanation))"]
+    let lines = samples.suffix(maxCorrections).compactMap { sample -> String? in
+      let teachable = LearningAggregator.linesUnderFixed(in: sample.explanation)
+        .filter { line in
+          guard let tag = LearningAggregator.leadingTag(in: line) else { return true }
+          return !unteachableTags.contains(tag)
+        }
+      guard !teachable.isEmpty else { return nil }
+      return ([sample.original, "Fixed:"] + teachable).joined(separator: "\n")
     }
     return lines.joined(separator: "\n\n")
   }

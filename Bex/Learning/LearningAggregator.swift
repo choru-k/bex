@@ -104,6 +104,17 @@ enum LearningAggregator {
     linesInSection(named: "Consider:", of: explanation)
   }
 
+  /// Non-empty, trimmed lines under "Fixed:". Exposed for `WriterLevelProfile`, which needs
+  /// the lines themselves rather than just their tags so it can drop the unteachable ones.
+  static func linesUnderFixed(in explanation: String) -> [String] {
+    linesInSection(named: "Fixed:", of: explanation)
+  }
+
+  /// The first canonical `[tag]` on a Fixed line, or `nil` when the line carries none.
+  static func leadingTag(in line: String) -> String? {
+    leadingBracketTags(in: line).first
+  }
+
   /// Splits one "Consider" line — `"original" → "alternative" — reason` — into its parts.
   /// `->` is tolerated in place of `→` because models produce both.
   ///

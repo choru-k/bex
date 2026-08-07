@@ -76,9 +76,44 @@ final class WriterLevelTests: XCTestCase {
     XCTAssertFalse(message.contains("livelier"))
   }
 
+  /// The fix for what the first real profile got wrong: it named articles and plurals as
+  /// this writer's top gaps, which is true but useless — those are corrected silently and
+  /// never explained, so the profile was spending a third of its 80 words on something the
+  /// writer will never be shown.
+  func testProfilingMessageDropsSilentlyCorrectedTags() {
+    let samples = [
+      LearningSample(
+        date: Self.now, original: "check status of PR and add it into sprint",
+        explanation: """
+          Fixed:
+          [article] "check status" → "check the status" — needs an article.
+          [plural] "PR" → "PRs" — plural.
+          [capitalization] "check" → "Check" — sentence start.
+          [preposition] "add it into" → "add it to" — wrong preposition.
+          """),
+      LearningSample(
+        date: Self.now, original: "these PR are merged",
+        explanation: "Fixed:\n[plural] \"PR\" → \"PRs\" — plural."),
+    ]
+
+    let message = WriterLevelProfile.profilingMessage(samples: samples)
+
+    XCTAssertTrue(message.contains("add it into"), "teachable gaps must survive")
+    for dropped in ["check the status", "\"PR\" → \"PRs\"", "sentence start"] {
+      XCTAssertFalse(message.contains(dropped), "\(dropped) should have been filtered out")
+    }
+    // The second sample had nothing left after filtering, so it contributes no context at
+    // all rather than an original with an empty Fixed section.
+    XCTAssertFalse(message.contains("these PR are merged"))
+  }
+
   func testProfilingMessageIsEmptyWithoutCorrections() {
     let samples = [
-      LearningSample(date: Self.now, original: "fine", explanation: "No changes needed.")
+      LearningSample(date: Self.now, original: "fine", explanation: "No changes needed."),
+      // Article-only: real, but unteachable, so it leaves nothing to profile from.
+      LearningSample(
+        date: Self.now, original: "make commit",
+        explanation: "Fixed:\n[article] \"make commit\" → \"make a commit\" — needs an article."),
     ]
     XCTAssertTrue(WriterLevelProfile.profilingMessage(samples: samples).isEmpty)
   }
