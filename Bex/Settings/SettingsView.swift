@@ -525,13 +525,6 @@ struct SettingsView: View {
             Text("Uses your ChatGPT Codex account. Tokens remain in Keychain.")
               .font(.caption)
               .foregroundStyle(.secondary)
-            Toggle("Fast responses (uses more of your ChatGPT quota)", isOn: codexPriorityTierBinding)
-              .accessibilityIdentifier("settings-codex-priority-tier")
-            Text(
-              "Asks OpenAI for the priority service tier. Measured on real corrections it returned about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. It is billed as increased usage against your ChatGPT account, so it stays off until you turn it on."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
           } else if viewModel.provider == .ollama {
             TextField("Ollama URL", text: ollamaBinding)
               .accessibilityIdentifier("settings-ollama-url")
@@ -573,6 +566,15 @@ struct SettingsView: View {
             }
           }
           .accessibilityIdentifier("settings-effort")
+          if viewModel.provider == .openAICodex {
+            Toggle("Fast responses", isOn: codexPriorityTierBinding)
+              .accessibilityIdentifier("settings-codex-priority-tier")
+            Text(
+              "Asks OpenAI for its priority service tier. Measured on real corrections it answered about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. On by default because Bex is meant to answer while you are still typing — turn it off if you would rather not spend the extra ChatGPT usage it is billed as."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+          }
           Text("Model and effort tune provider behavior; they are not required to connect Bex.")
             .font(.caption)
             .foregroundStyle(.secondary)

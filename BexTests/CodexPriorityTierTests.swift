@@ -4,8 +4,10 @@ import XCTest
 @testable import Bex
 
 /// The priority ("Fast") service tier is billed as increased usage against the owner's
-/// ChatGPT account, so the load-bearing test here is the *absence* of the field when the
-/// setting is off — a default that silently spends their quota would be the real bug.
+/// ChatGPT account. It defaults to ON — the owner's call, made after seeing the ~1.6s
+/// median saving — so the load-bearing test is that turning it OFF really does drop the
+/// field, rather than sending some "standard" value that would override whatever tier the
+/// account already has.
 final class CodexPriorityTierTests: XCTestCase {
   private func makeKeychain() async throws -> KeychainStore {
     let keychain = KeychainStore(service: "com.bex.tests.tier.\(UUID())", inMemory: true)
@@ -38,9 +40,9 @@ final class CodexPriorityTierTests: XCTestCase {
     return try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
   }
 
-  /// Off is the default, and off must mean the key is not sent at all rather than sent with
-  /// some "standard" value — omitting it leaves the account on whatever tier it already has.
-  func testTierIsAbsentByDefault() async throws {
+  /// Off must mean the key is not sent at all rather than sent with some "standard" value —
+  /// omitting it leaves the account on whatever tier it already has.
+  func testTierIsAbsentWhenDisabled() async throws {
     let body = try await sentBody(usesPriorityTier: false)
     XCTAssertNil(body["service_tier"])
   }
@@ -76,21 +78,23 @@ final class CodexPriorityTierTests: XCTestCase {
 
   // MARK: - Preference
 
-  func testPreferenceDefaultsToOffAndRoundTrips() async {
+  /// An unset key must read as ON. A bare `defaults.bool(forKey:)` returns false for a
+  /// missing key, which would have made the shipped default the opposite of the intent.
+  func testPreferenceDefaultsToOnAndRoundTrips() async {
     let suite = "com.bex.tests.tier.\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
     let preferences = PreferencesStore(defaults: defaults)
 
     let initial = await preferences.codexPriorityTier()
-    XCTAssertFalse(initial, "must not spend the owner's quota until they ask for it")
+    XCTAssertTrue(initial, "an unset key must read as ON, not as bool(forKey:)'s false")
+
+    await preferences.setCodexPriorityTier(false)
+    let disabled = await preferences.codexPriorityTier()
+    XCTAssertFalse(disabled, "turning it off must stick, not fall back to the default")
 
     await preferences.setCodexPriorityTier(true)
     let enabled = await preferences.codexPriorityTier()
     XCTAssertTrue(enabled)
-
-    await preferences.setCodexPriorityTier(false)
-    let disabled = await preferences.codexPriorityTier()
-    XCTAssertFalse(disabled)
   }
 }

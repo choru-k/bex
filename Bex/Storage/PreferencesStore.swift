@@ -243,13 +243,19 @@ actor PreferencesStore {
 
   /// Whether OpenAI Codex requests ask for the priority ("Fast") service tier.
   ///
-  /// Defaults to OFF, unlike most quality-of-life settings, because it is not free: the
-  /// tier is billed as increased usage against the owner's ChatGPT account. Measured on 326
-  /// corrections built from a real corpus it saved ~1.6s median and ~3.2s at p90 with no
-  /// measurable change to correction quality — a good trade, but one that spends the
-  /// owner's quota, so they opt in rather than discover it.
+  /// Defaults to ON. It is not free — the tier is billed as increased usage against the
+  /// owner's ChatGPT account — so this was shipped opt-in first and the owner then chose to
+  /// make it the default, having seen the measurement: across 326 corrections from a real
+  /// corpus it saved ~1.6s median and ~3.2s at p90 with no measurable change to correction
+  /// quality. Latency is the constraint Bex is designed around, and this buys it directly.
+  ///
+  /// Note the `object(forKey:)` guard rather than a bare `bool(forKey:)`: without it an
+  /// unset key reads as `false`, which would silently mean OFF for everyone.
   func codexPriorityTier() -> Bool {
-    defaults.bool(forKey: Key.codexPriorityTier)
+    guard defaults.object(forKey: Key.codexPriorityTier) != nil else {
+      return true
+    }
+    return defaults.bool(forKey: Key.codexPriorityTier)
   }
 
   func setCodexPriorityTier(_ enabled: Bool) {
