@@ -72,7 +72,7 @@ Type a word or short phrase and press **Look Up** (`⌘D`). It works in either d
 The Bex menu opens the management windows only when needed:
 
 - **History** — search and filter prior checks, inspect their diffs, reuse an input, or delete entries
-- **Learning** — once enough Prompt Gate corrections have accumulated, review the recurring grammar patterns Bex has noticed in your own writing; a menu-bar badge lights up when there is something new to see
+- **Learning** — once enough Prompt Gate corrections have accumulated, review the recurring grammar patterns Bex has noticed in your own writing, and the alternative phrasings it offered. Bex deliberately does not rank those alternatives; choosing one with **I'd use this** records your pick and turns it into a Study card. The menu-bar badge counts alternatives you have not chosen from yet, so it can reach zero
 - **Study** — spaced-repetition drills built from your own past Prompt Gate corrections (a "Fixed: 'a' → 'the'" becomes a fill-in-the-blank card). Cards you get right come back less often, cards you miss come back tomorrow — the same idea as a Leitner flashcard box, sized for one person's own mistakes rather than a shared deck
 - **Profiles** — a profile is a saved writing-context prompt (tone, audience, house style) that Quick Check applies automatically while active; you can maintain profiles by hand or generate one with an AI wizard
 - **Settings** — choose providers, models, and reasoning effort (see [Providers](#providers)), manage credentials, validate Ollama, and select system, light, or dark appearance
@@ -90,7 +90,7 @@ Study and Learning share one menu-bar badge: whenever any Study cards are due, t
 | Provider | Authentication | Default model |
 | --- | --- | --- |
 | OpenAI | API key | `gpt-5.6-sol` |
-| OpenAI Codex | ChatGPT OAuth | `gpt-5.6-sol` |
+| OpenAI Codex | ChatGPT OAuth | `gpt-5.6-terra` |
 | Claude | API key | `claude-opus-4-8` |
 | Gemini | API key | `gemini-3.5-flash` |
 | Ollama | Local service | `llama3.3` |
@@ -99,7 +99,7 @@ Available model lists are fetched on demand from every provider. After a success
 
 Small local models may be unable to reproduce protected tokens exactly. Prompt Gate then refuses delivery; select a more capable Ollama model and retry.
 
-Reasoning-capable providers use the Settings **effort** control (reasoning depth). Medium is the default: OpenAI and OpenAI Codex send medium reasoning effort, current Claude models use adaptive thinking with medium effort, Gemini 3 uses medium thinking without sampling overrides, supported legacy Claude and Gemini models use token budgets, and Ollama enables `think` for supported local thinking models unless effort is Low.
+Reasoning-capable providers use the Settings **effort** control (reasoning depth). Medium is the default everywhere except OpenAI Codex, which defaults to Low: on a real-corpus evaluation `gpt-5.6-terra` at Low matched every higher effort setting on correction quality while answering fastest, so the extra reasoning bought nothing. OpenAI sends medium reasoning effort, current Claude models use adaptive thinking with medium effort, Gemini 3 uses medium thinking without sampling overrides, supported legacy Claude and Gemini models use token budgets, and Ollama enables `think` for supported local thinking models unless effort is Low.
 
 ## Prompt Gate
 
@@ -189,6 +189,8 @@ Masking is best-effort and covers only recognized spans. Unrecognized sensitive 
 Prompt Gate receipts at `~/Library/Application Support/Bex/PromptGate/receipts` bind the exact text, client, integration, and session, and contain a SHA-256 digest and routing metadata, not prompt text. They are mode `0600`, are consumed once, and expire after two minutes; cancellation and delivery failure revoke them. The local IPC (inter-process communication) rendezvous and integration heartbeat files live under `~/Library/Application Support/Bex/PromptGate`.
 
 Prompt Gate corrections you approve are also appended to a local learning log at `~/Library/Application Support/Bex/LearningLog/learning-log.jsonl` (directory `0700`, file `0600`). Unlike receipts, this log stores the full prompt prose you wrote—the original text, the correction, and the explanation—in cleartext, including technical spans that are masked before being sent to a provider. It is append-only, owner-only, and never leaves the Mac. It is not part of Quick Check history. Deleting `~/Library/Application Support/Bex` removes it (see [Uninstall](#uninstall)).
+
+Two smaller files sit beside that log, same directory, same `0600` mode, and never leave the Mac. `consider-taps.json` records the alternative phrasings you chose with **I'd use this**, and stores the surrounding text they were suggested for, so it contains prompt prose like the log does. `writer-level.json` holds a short profile of your English — what you reliably get right and what you still miss — that Bex recomputes in the background from the log and passes to the corrector so it can tell a typo from a real gap. Deleting either one only costs you the Study cards or the profile; nothing else breaks.
 
 Prompt Gate installs its immutable signed helper at `~/Library/Application Support/Bex/bin/<sha256>/bex-hook`. Legacy shared-helper installations remain removable and migrate only through an explicit reviewed Update or Repair.
 
