@@ -66,6 +66,11 @@ enum GrammarPrompts {
     - Capitalization of any kind: sentence starts, the pronoun "I", product names, abbreviations.
     - Punctuation, spacing, and formatting, including a missing or changed final mark.
     All four are still corrected in "corrected" — they are silent, not skipped. And silence is by category, not by label: a line is banned because of what it fixes, so tagging an article fix [other] does not make it listable. If the only thing a line teaches is one of the four above, drop the line.
+    The writer is a Korean speaker, so these gaps hide easily — look for them on purpose, and list one only when it is genuinely there:
+    - A dropped object pronoun. Korean leaves objects out and English usually needs one: "do right now" → "do it right now", "assign to me" → "assign it to me".
+    - A compound written as two words: "your self" → "yourself", "hot key" → "hotkey".
+    - A collective noun taking a plural verb: "the backend team are" → "the backend team is".
+    - "other" where English needs "another", and the wrong verb form after a preposition or inside a parallel list.
     Whatever survives is something worth learning. One line each, in the order they appear, starting with exactly one tag: [verb-tense] [subject-verb-agreement] [preposition] [word-order] [spelling] [other]. Format:
     [tag] "original phrase" → "corrected phrase" — short simple reason.
     Quote the SHORTEST span that contains the error — a few words, never a whole sentence or clause. The reader studies these as fill-in-the-blank drills, so a phrase long enough to swallow the sentence leaves nothing to recall. If one line would need to quote most of the sentence, quote only the part that was actually wrong. The "original phrase" must be copied from the input text, character for character, and must differ from the "corrected phrase" by more than case or punctuation. Never list a change you did not make, and never invent a phrase that is not in the input. Omit this whole section entirely when nothing survives the test above.
