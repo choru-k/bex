@@ -333,6 +333,71 @@ final class SettingsNavigationTests: XCTestCase {
       cloudViewModel.providerDisclosure.hasPrefix("Bex sends these payloads to Claude."))
   }
 
+  func testOMPExecutableDiscoveryFindsNewestRegularMiseInstallOutsideGUIPath() throws {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("BexOMPDiscovery-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let miseDataDirectory = root.appendingPathComponent("mise", isDirectory: true)
+
+    func makeExecutable(version: String) throws -> URL {
+      let executable = miseDataDirectory
+        .appendingPathComponent(
+          "installs/npm-oh-my-pi-pi-coding-agent/\(version)/node_modules/.bin/omp"
+        )
+      try FileManager.default.createDirectory(
+        at: executable.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+      )
+      try Data("#!/bin/sh\n".utf8).write(to: executable)
+      try FileManager.default.setAttributes(
+        [.posixPermissions: 0o755],
+        ofItemAtPath: executable.path
+      )
+      return executable
+    }
+
+    _ = try makeExecutable(version: "17.2.9")
+    let newest = try makeExecutable(version: "17.10.0")
+    let symlink = miseDataDirectory
+      .appendingPathComponent(
+        "installs/npm-oh-my-pi-pi-coding-agent/99.0.0/node_modules/.bin/omp"
+      )
+    try FileManager.default.createDirectory(
+      at: symlink.deletingLastPathComponent(),
+      withIntermediateDirectories: true
+    )
+    try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: newest)
+
+    let discovered = SettingsViewModel.defaultOMPExecutablePath(
+      environment: [
+        "PATH": root.appendingPathComponent("gui-path-without-omp").path,
+        "MISE_DATA_DIR": miseDataDirectory.path,
+      ],
+      homeDirectory: root
+    )
+    XCTAssertEqual(
+      URL(fileURLWithPath: discovered).resolvingSymlinksInPath(),
+      newest.resolvingSymlinksInPath()
+    )
+  }
+
+  func testOMPExecutableDiscoveryDoesNotSuggestANonexistentHomebrewPath() {
+    let root = FileManager.default.temporaryDirectory
+      .appendingPathComponent("BexOMPDiscoveryEmpty-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+
+    XCTAssertEqual(
+      SettingsViewModel.defaultOMPExecutablePath(
+        environment: [
+          "PATH": root.appendingPathComponent("empty-path").path,
+          "MISE_DATA_DIR": root.appendingPathComponent("empty-mise").path,
+        ],
+        homeDirectory: root
+      ),
+      ""
+    )
+  }
+
   func testStandardWindowsHaveDistinctAutosaveNamesAndContentMinimums() throws {
     let configurations = [
       WindowCoordinator.historyWindowConfiguration,
