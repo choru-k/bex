@@ -12,11 +12,21 @@ actor OpenAICodexClient: LLMProviderClient {
   private let keychain: KeychainStore
   private let transport: any HTTPTransport
   private let timeout: TimeInterval
+  /// Ask for the priority ("Fast") service tier on every request. Off unless the owner
+  /// turned it on in Settings — see `PreferencesStore.codexPriorityTier()` for why it is
+  /// opt-in rather than a default.
+  private let usesPriorityTier: Bool
 
-  init(keychain: KeychainStore, transport: any HTTPTransport, timeout: TimeInterval = 30) {
+  init(
+    keychain: KeychainStore,
+    transport: any HTTPTransport,
+    timeout: TimeInterval = 30,
+    usesPriorityTier: Bool = false
+  ) {
     self.keychain = keychain
     self.transport = transport
     self.timeout = timeout
+    self.usesPriorityTier = usesPriorityTier
   }
 
   func check(
@@ -97,6 +107,26 @@ actor OpenAICodexClient: LLMProviderClient {
       model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? LLMProvider.openAICodex.defaultModel
       : model
+    // Verified against the endpoint before shipping: an unknown value is rejected with
+    // `400 Unsupported service_tier`, so the backend genuinely parses this rather than
+    // ignoring it. Omitted entirely when off, which leaves the account's default tier.
+    var body: [String: Any] = [
+      "model": resolvedModel,
+      "store": false,
+      "stream": true,
+      "instructions": systemPrompt,
+      "input": [
+        [
+          "role": "user",
+          "content": [["type": "input_text", "text": text]],
+        ]
+      ],
+      "reasoning": ["effort": effort.rawValue],
+      "text": ["verbosity": "medium"],
+    ]
+    if usesPriorityTier {
+      body["service_tier"] = "priority"
+    }
     let request = try ProviderRequest.json(
       url: Self.responsesURL,
       headers: [
@@ -107,20 +137,7 @@ actor OpenAICodexClient: LLMProviderClient {
         "accept": "text/event-stream",
         "content-type": "application/json",
       ],
-      body: [
-        "model": resolvedModel,
-        "store": false,
-        "stream": true,
-        "instructions": systemPrompt,
-        "input": [
-          [
-            "role": "user",
-            "content": [["type": "input_text", "text": text]],
-          ]
-        ],
-        "reasoning": ["effort": effort.rawValue],
-        "text": ["verbosity": "medium"],
-      ],
+      body: body,
       timeout: timeout
     )
     let (data, response) = try await ProviderResponse.data(

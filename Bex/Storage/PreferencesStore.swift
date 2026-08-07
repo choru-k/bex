@@ -44,6 +44,7 @@ actor PreferencesStore {
     static let fixAndSendKeyChord = "shortcut.fixAndSend"
     static let welcomeCompletedVersion = "welcome.completedVersion"
     static let confirmsHookOutboundPayloads = "promptGate.confirmsHookOutboundPayloads"
+    static let codexPriorityTier = "providers.codexPriorityTier"
     static let lastLearningViewedAt = "learning.lastViewedAt"
 
     static func outboundDisclosureVersion(for destination: OutboundDestination) -> String {
@@ -238,6 +239,21 @@ actor PreferencesStore {
 
   func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
     defaults.set(confirms, forKey: Key.confirmsHookOutboundPayloads)
+  }
+
+  /// Whether OpenAI Codex requests ask for the priority ("Fast") service tier.
+  ///
+  /// Defaults to OFF, unlike most quality-of-life settings, because it is not free: the
+  /// tier is billed as increased usage against the owner's ChatGPT account. Measured on 326
+  /// corrections built from a real corpus it saved ~1.6s median and ~3.2s at p90 with no
+  /// measurable change to correction quality — a good trade, but one that spends the
+  /// owner's quota, so they opt in rather than discover it.
+  func codexPriorityTier() -> Bool {
+    defaults.bool(forKey: Key.codexPriorityTier)
+  }
+
+  func setCodexPriorityTier(_ enabled: Bool) {
+    defaults.set(enabled, forKey: Key.codexPriorityTier)
   }
 
   func outboundDisclosureVersion(for destination: OutboundDestination) -> Int {

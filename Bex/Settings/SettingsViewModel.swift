@@ -53,6 +53,7 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var manualCallbackRequired = false
   @Published var callbackURL = ""
   @Published private(set) var confirmsHookOutboundPayloads = true
+  @Published private(set) var codexPriorityTier = false
   @Published private(set) var accessibilityTrusted = false
   @Published private(set) var hookStatuses: [PromptClient: HookInstallationStatus] = [:]
   @Published private(set) var hookConfigPaths: [PromptClient: String] = [:]
@@ -217,6 +218,7 @@ final class SettingsViewModel: ObservableObject {
     async let selectedProvider = preferences.selectedProvider()
     async let savedAppearance = preferences.appearance()
     async let savedHookOutboundConfirmation = preferences.confirmsHookOutboundPayloads()
+    async let savedCodexPriorityTier = preferences.codexPriorityTier()
     async let savedDraftRetention = preferences.draftRetentionChoice()
     async let savedHistoryRetention = preferences.historyRetentionChoice()
     async let savedQuickCheckChord = preferences.quickCheckKeyChord()
@@ -228,6 +230,7 @@ final class SettingsViewModel: ObservableObject {
     ollamaURL = await preferences.ollamaURL()
     appearance = await savedAppearance
     confirmsHookOutboundPayloads = await savedHookOutboundConfirmation
+    codexPriorityTier = await savedCodexPriorityTier
     draftRetentionChoice = await savedDraftRetention
     historyRetentionChoice = await savedHistoryRetention
     quickCheckKeyChord = await savedQuickCheckChord
@@ -432,6 +435,13 @@ final class SettingsViewModel: ObservableObject {
     confirmsHookOutboundPayloads = confirms
     enqueuePreferenceUpdate { [preferences] in
       await preferences.setConfirmsHookOutboundPayloads(confirms)
+    }
+  }
+
+  func setCodexPriorityTier(_ enabled: Bool) {
+    codexPriorityTier = enabled
+    enqueuePreferenceUpdate { [preferences] in
+      await preferences.setCodexPriorityTier(enabled)
     }
   }
 

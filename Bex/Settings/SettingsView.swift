@@ -525,6 +525,13 @@ struct SettingsView: View {
             Text("Uses your ChatGPT Codex account. Tokens remain in Keychain.")
               .font(.caption)
               .foregroundStyle(.secondary)
+            Toggle("Fast responses (uses more of your ChatGPT quota)", isOn: codexPriorityTierBinding)
+              .accessibilityIdentifier("settings-codex-priority-tier")
+            Text(
+              "Asks OpenAI for the priority service tier. Measured on real corrections it returned about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. It is billed as increased usage against your ChatGPT account, so it stays off until you turn it on."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
           } else if viewModel.provider == .ollama {
             TextField("Ollama URL", text: ollamaBinding)
               .accessibilityIdentifier("settings-ollama-url")
@@ -865,6 +872,13 @@ struct SettingsView: View {
     )
   }
 
+
+  private var codexPriorityTierBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.codexPriorityTier },
+      set: { viewModel.setCodexPriorityTier($0) }
+    )
+  }
 
   private var hookOutboundConfirmationBinding: Binding<Bool> {
     Binding(

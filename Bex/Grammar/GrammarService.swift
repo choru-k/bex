@@ -27,7 +27,12 @@ struct ProviderClientFactory: Sendable {
         timeout: 30
       )
     case .openAICodex:
-      return OpenAICodexClient(keychain: keychain, transport: transport, timeout: 30)
+      return OpenAICodexClient(
+        keychain: keychain,
+        transport: transport,
+        timeout: 30,
+        usesPriorityTier: await preferences.codexPriorityTier()
+      )
     case .claude:
       return ClaudeClient(
         apiKey: try await requiredAPIKey(for: destination.provider),

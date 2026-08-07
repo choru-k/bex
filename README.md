@@ -99,6 +99,8 @@ Available model lists are fetched on demand from every provider. After a success
 
 Small local models may be unable to reproduce protected tokens exactly. Prompt Gate then refuses delivery; select a more capable Ollama model and retry.
 
+OpenAI Codex offers **Fast responses** in Settings, which asks OpenAI for its priority service tier. Measured on real corrections it returned about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. It is billed as increased usage against your ChatGPT account, so it is off until you turn it on.
+
 Reasoning-capable providers use the Settings **effort** control (reasoning depth). Medium is the default everywhere except OpenAI Codex, which defaults to Low: on a real-corpus evaluation `gpt-5.6-terra` at Low matched every higher effort setting on correction quality while answering fastest, so the extra reasoning bought nothing. OpenAI sends medium reasoning effort, current Claude models use adaptive thinking with medium effort, Gemini 3 uses medium thinking without sampling overrides, supported legacy Claude and Gemini models use token budgets, and Ollama enables `think` for supported local thinking models unless effort is Low.
 
 ## Prompt Gate
