@@ -154,7 +154,7 @@ Bex resolves these exact host-owned targets:
 - Codex: `${CODEX_HOME}/hooks.json` when that variable is inherited by Bex, otherwise `~/.codex/hooks.json`
 - OMP: the absolute gate directory returned by `omp capabilities --json` for the selected profile and working directory
 
-OMP must advertise the `prompt-gate-v1` capability. Builds without it — including OMP 17.0.6 — remain unavailable: Bex will not fall back to an unreviewed OMP `input` extension, and a project's own `.omp` extension cannot substitute for the native gate.
+The selected OMP build must advertise the `prompt-gate-v1` capability. When it does not, Bex remains unavailable: Bex will not fall back to an OMP `input` extension because that extension can fail open, and a project's own `.omp` extension cannot substitute for the native gate.
 
 Bex preserves unrelated JSON and file permissions. **Uninstall** removes only Bex-owned artifacts. Drift produces **Update available** or **Needs repair**, never an automatic overwrite; the signed helper is replaced only through an explicit reviewed Update or Repair.
 
@@ -170,7 +170,7 @@ If a prompt is blocked with a helper or IPC error, keep Bex running, repair the 
 
 - **Installed — waiting for first prompt:** restart the client if it was already open, keep Bex running, and submit a test prompt.
 - **Installed — approve Bex in `/hooks`:** open `/hooks` in Codex, trust the handler, then submit a test prompt.
-- **OMP unavailable:** install an OMP build that advertises `prompt-gate-v1`, then resolve the target again.
+- **OMP unavailable:** the selected build does not implement `omp capabilities --json` or does not advertise `prompt-gate-v1`. Bex cannot install until OMP provides that native interface.
 - **Update available / Needs repair:** open a fresh review, verify the new baseline, and Apply.
 - **Nothing changed:** the reviewed file or an ancestor changed identity. Choose **Review Latest Changes**; Bex will not apply a stale review.
 - **Partial failure:** inspect the completed, restored, and retained paths shown in the review sheet before retrying.

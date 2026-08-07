@@ -744,7 +744,7 @@ struct SettingsView: View {
         }
 
         Text(
-          "OMP must advertise native prompt-gate-v1. Builds without it—including 17.0.6—remain unavailable; Bex never installs a best-effort extension."
+          "The selected OMP build must advertise native prompt-gate-v1. If it does not, Bex stays unavailable; input extensions can fail open and are not a safe fallback."
         )
         .font(.caption)
         .foregroundStyle(.secondary)

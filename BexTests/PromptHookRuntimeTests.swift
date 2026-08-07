@@ -1106,6 +1106,29 @@ final class HookInstallationManagerTests: XCTestCase {
       XCTFail("Expected unavailable OMP target to reject preparation")
     } catch {}
 
+    let unsupportedExecutable = try executable(
+      named: "omp-without-capability-command",
+      script:
+        "printf 'Error: unknown flag: --json\\nRun `omp --help` for available flags.\\n' >&2; exit 1"
+    )
+    do {
+      _ = try await fixture.manager.resolve(
+        .ohMyPi(
+          executable: unsupportedExecutable,
+          profile: "default",
+          workingDirectory: workingDirectory
+        )
+      )
+      XCTFail("Expected an OMP build without the native capability command to remain unavailable")
+    } catch {
+      XCTAssertTrue(
+        error.localizedDescription.contains(
+          "does not implement the native prompt-gate-v1 interface required by Bex"
+        )
+      )
+      XCTAssertFalse(error.localizedDescription.contains("unknown flag"))
+    }
+
     let invalidExecutables = try [
       executable(named: "omp-malformed", script: "printf 'not-json\\n'"),
       executable(named: "omp-nonzero", script: "printf 'failure\\n' >&2; exit 7"),
