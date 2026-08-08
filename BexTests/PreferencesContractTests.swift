@@ -18,18 +18,18 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertEqual(draft, "")
   }
 
-  func testHookOutboundConfirmationDefaultsOnAndPersistsOptOut() async {
+  func testHookOutboundConfirmationDefaultsOffAndPersistsOptIn() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }
 
     let preferences = fixture.store
     let confirmsByDefault = await preferences.confirmsHookOutboundPayloads()
-    XCTAssertTrue(confirmsByDefault)
+    XCTAssertFalse(confirmsByDefault)
 
-    await preferences.setConfirmsHookOutboundPayloads(false)
+    await preferences.setConfirmsHookOutboundPayloads(true)
 
-    let confirmsAfterOptOut = await preferences.confirmsHookOutboundPayloads()
-    XCTAssertFalse(confirmsAfterOptOut)
+    let confirmsAfterOptIn = await preferences.confirmsHookOutboundPayloads()
+    XCTAssertTrue(confirmsAfterOptIn)
   }
 
   func testDraftRetentionDisableStopsWritesWithoutDeletingSavedDraft() async {
@@ -96,7 +96,7 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertFalse(acceptedClaude)
   }
 
-  func testOutboundConfirmationMatrixKeepsAmbiguousAndHookFlowsGated() {
+  func testOutboundConfirmationMatrixKeepsDisclosureAndOptInGates() {
     XCTAssertFalse(
       OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
         hasAcceptedDisclosure: true
@@ -112,9 +112,15 @@ final class PreferencesContractTests: XCTestCase {
         hasAcceptedDisclosure: true
       )
     )
-    XCTAssertTrue(
+    XCTAssertFalse(
       OutboundConfirmationContext.hook.requiresConfirmation(
         hasAcceptedDisclosure: true
+      )
+    )
+    XCTAssertTrue(
+      OutboundConfirmationContext.hook.requiresConfirmation(
+        hasAcceptedDisclosure: true,
+        confirmsHookOutboundPayloads: true
       )
     )
     XCTAssertFalse(

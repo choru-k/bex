@@ -53,7 +53,7 @@ final class PromptGateViewModel: ObservableObject {
   private var configuredDestination: OutboundDestination?
   private var replacementConfirmedDraft: String?
   private var hasAcceptedDestinationDisclosure = false
-  private var confirmsHookOutboundPayloads = true
+  private var confirmsHookOutboundPayloads = false
   private var isClosing = false
   private var pendingCorrection: PendingCorrection?
 

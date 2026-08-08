@@ -146,7 +146,7 @@ The three clients differ only in setup and delivery:
 | Codex | Open `/hooks` and trust the Bex handler | Same as Claude Code | May fail open |
 | OMP | None — uses the reviewed native prompt gate, no marketplace extension | Bex resubmits the correction once through the native gate | Fails closed |
 
-By default, Bex asks you to confirm each hook prompt before sending it to the configured provider. To skip that per-prompt screen, turn off **Settings → Integrations → Confirm each hook payload before sending**. The first disclosure for each provider still requires approval, and ambiguous manual focused-app captures remain gated.
+After you accept a provider’s first disclosure, Bex sends installed-hook payloads directly to that configured correction provider by default. To review every masked hook payload before it leaves the Mac, turn on **Settings → Integrations → Confirm each hook payload before sending**. Ambiguous manual focused-app captures remain gated.
 
 Bex resolves these exact host-owned targets:
 

@@ -52,7 +52,7 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var oauthInProgress = false
   @Published private(set) var manualCallbackRequired = false
   @Published var callbackURL = ""
-  @Published private(set) var confirmsHookOutboundPayloads = true
+  @Published private(set) var confirmsHookOutboundPayloads = false
   @Published private(set) var codexPriorityTier = true
   @Published private(set) var accessibilityTrusted = false
   @Published private(set) var hookStatuses: [PromptClient: HookInstallationStatus] = [:]

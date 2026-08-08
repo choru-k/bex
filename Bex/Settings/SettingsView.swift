@@ -657,7 +657,7 @@ struct SettingsView: View {
         )
         .accessibilityIdentifier("settings-hook-outbound-confirmation")
         Text(
-          "When off, installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Ambiguous manual Fix & Send captures still require confirmation."
+          "Off by default. Installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Turn this on to review every masked hook payload before it leaves the Mac. Ambiguous manual Fix & Send captures still require confirmation."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
