@@ -505,6 +505,46 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertEqual(fixture.viewModel.phase, .closed)
   }
 
+  func testOMPApprovalIssuesSingleUseReceiptForStagedReplay() async throws {
+    let fixture = try await Fixture()
+    await fixture.hooks.setStatus(.active(lastSeen: Date()))
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.hookSession(
+          requestID: UUID(),
+          text: "This are original.",
+          knownClient: .ohMyPi,
+          integrationID: "omp-integration"
+        )
+      )
+    )
+    await fixture.viewModel.waitForCurrentWork()
+    fixture.viewModel.acceptDisclosure()
+    await fixture.viewModel.waitForCurrentWork()
+
+    fixture.viewModel.approve()
+    await fixture.viewModel.waitForCurrentWork()
+
+    let approvalStore = PromptApprovalStore(directoryURL: fixture.receiptDirectory)
+    let firstConsumption = try await approvalStore.consume(
+      client: .ohMyPi,
+      integrationID: "omp-integration",
+      text: "This is original.",
+      sessionID: "session-1",
+      cwd: "/tmp/project"
+    )
+    let secondConsumption = try await approvalStore.consume(
+      client: .ohMyPi,
+      integrationID: "omp-integration",
+      text: "This is original.",
+      sessionID: "session-1",
+      cwd: "/tmp/project"
+    )
+    XCTAssertTrue(firstConsumption)
+    XCTAssertFalse(secondConsumption)
+    XCTAssertEqual(fixture.viewModel.phase, .closed)
+  }
+
   func testHookAuthorizationRequiresKnownClient() async throws {
     let fixture = try await Fixture()
     await fixture.hooks.setStatus(.active(lastSeen: Date()))
@@ -863,6 +903,7 @@ private actor StubHookManager: HookInstallationManaging {
 
   func setStatus(_ status: HookInstallationStatus) { installationStatus = status }
   func status(for client: PromptClient) async -> HookInstallationStatus { installationStatus }
+  func status(for integrationID: String) async -> HookInstallationStatus { installationStatus }
   func install(_ client: PromptClient) async throws {}
   func uninstall(_ client: PromptClient) async throws {}
 }
@@ -1042,21 +1083,25 @@ private final class Fixture {
   func hookSession(
     requestID: UUID,
     text: String,
-    knownClient: PromptClient? = .claudeCode
+    knownClient: PromptClient? = .claudeCode,
+    integrationID: String? = nil
   ) -> PromptGateSession {
-    PromptGateSession(
+    let isOMP = knownClient == .ohMyPi
+    return PromptGateSession(
       initialDraft: text,
       target: PromptTarget(
-        kind: target.isAccessibilityTrusted ? .composerPaste : .copyOnly,
-        processID: target.isAccessibilityTrusted ? 200 : nil,
-        bundleID: "com.example.terminal",
-        applicationName: "Terminal",
+        kind: isOMP ? .managedDraft : (target.isAccessibilityTrusted ? .composerPaste : .copyOnly),
+        processID: isOMP ? nil : (target.isAccessibilityTrusted ? 200 : nil),
+        bundleID: isOMP ? nil : "com.example.terminal",
+        applicationName: isOMP ? "Oh My Pi" : "Terminal",
         guidance: "Hook prompt",
         hookContext: PromptHookContext(
           requestID: requestID,
           sessionID: "session-1",
           cwd: "/tmp/project",
-          helperPID: 123
+          helperPID: 123,
+          client: knownClient,
+          integrationID: integrationID
         )
       ),
       knownClient: knownClient,

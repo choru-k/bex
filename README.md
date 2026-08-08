@@ -156,7 +156,7 @@ Bex resolves these exact host-owned targets:
 
 The selected OMP build must advertise the `prompt-gate-v1` capability. When it does not, Bex remains unavailable: Bex will not fall back to an OMP `input` extension because that extension can fail open, and a project's own `.omp` extension cannot substitute for the native gate.
 
-OMP compatibility is capability-based rather than inferred from its version number: run the exact selected binary with `capabilities --json` and verify that it reports `prompt-gate-v1`. The native integration requires Bex 0.8.5 or newer so allow/block frames and post-delivery heartbeats complete correctly over OMP's pipes.
+OMP compatibility is capability-based rather than inferred from its version number: run the exact selected binary with `capabilities --json` and verify that it reports `prompt-gate-v1`. The native integration requires Bex 0.8.6 or newer so staged corrections can be replayed through OMP's gate and post-delivery heartbeats complete correctly over its pipes.
 
 OMP upstream tracking: [can1357/oh-my-pi#7989](https://github.com/can1357/oh-my-pi/pull/7989). Until `prompt-gate-v1` appears in an official OMP release, use a compatible build from that change; Bex continues to reject standard builds that do not advertise the capability.
 

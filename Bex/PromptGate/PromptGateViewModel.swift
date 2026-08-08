@@ -502,16 +502,14 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
-          if context?.client != .ohMyPi {
-            issuedReceipt = try await approvalStore.issue(
-              client: client,
-              integrationID: context?.integrationID,
-              text: correction,
-              sessionID: context?.sessionID,
-              cwd: context?.cwd
-            )
-            activeReceiptID = issuedReceipt
-          }
+          issuedReceipt = try await approvalStore.issue(
+            client: client,
+            integrationID: context?.integrationID,
+            text: correction,
+            sessionID: context?.sessionID,
+            cwd: context?.cwd
+          )
+          activeReceiptID = issuedReceipt
           if let requestID = session.hookRequestID {
             do {
               try await hookResponder.complete(
