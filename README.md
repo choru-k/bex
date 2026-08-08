@@ -156,6 +156,8 @@ Bex resolves these exact host-owned targets:
 
 The selected OMP build must advertise the `prompt-gate-v1` capability. When it does not, Bex remains unavailable: Bex will not fall back to an OMP `input` extension because that extension can fail open, and a project's own `.omp` extension cannot substitute for the native gate.
 
+OMP compatibility is capability-based rather than inferred from its version number: run the exact selected binary with `capabilities --json` and verify that it reports `prompt-gate-v1`. The native integration requires Bex 0.8.5 or newer so allow/block frames and post-delivery heartbeats complete correctly over OMP's pipes.
+
 Bex preserves unrelated JSON and file permissions. **Uninstall** removes only Bex-owned artifacts. Drift produces **Update available** or **Needs repair**, never an automatic overwrite; the signed helper is replaced only through an explicit reviewed Update or Repair.
 
 The integration blocks the first prompt before the client model receives it and opens Prompt Gate. After approval:

@@ -245,9 +245,8 @@ struct BexHookMain {
     return data
   }
 
-  private static func writeFrame(_ data: Data) throws {
+  private static func writeFrame(_ data: Data) {
     FileHandle.standardOutput.write(data)
-    try FileHandle.standardOutput.synchronize()
   }
 
   private static func writeBlock(

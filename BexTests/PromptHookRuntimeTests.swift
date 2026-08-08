@@ -1285,6 +1285,46 @@ final class HookHelperOutputTests: XCTestCase {
     XCTAssertEqual(ompObject["integration_id"] as? String, "omp-test")
     XCTAssertEqual(ompObject["decision"] as? String, "block")
   }
+
+  func testOMPTrivialPromptProducesOneAllowFrameAndHeartbeat() throws {
+    let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/bex-hook")
+    let integrationID = "omp-test-\(UUID().uuidString)"
+    let heartbeatName = Data(integrationID.utf8).base64EncodedString()
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "=", with: "")
+    let heartbeatURL = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/Bex/PromptGate/heartbeats")
+      .appendingPathComponent("\(heartbeatName).json")
+    defer { try? FileManager.default.removeItem(at: heartbeatURL) }
+    var input = try JSONSerialization.data(withJSONObject: [
+      "version": HookProtocolConstants.version,
+      "event": HookProtocolConstants.promptGateCapability,
+      "integration_id": integrationID,
+      "text": "안녕하세요",
+      "images": [],
+      "session_id": "omp-helper-test",
+      "cwd": "/tmp",
+      "profile": "default",
+      "source": "prompt",
+    ])
+    input.append(0x0A)
+
+    let output = try runHelper(
+      helper,
+      client: "omp",
+      additionalArguments: [integrationID],
+      input: input
+    )
+    let lines = output.split(separator: 0x0A)
+    XCTAssertEqual(lines.count, 1)
+    let frame = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(lines[0])) as? [String: Any]
+    )
+    XCTAssertEqual(frame["decision"] as? String, "allow")
+    XCTAssertEqual(frame["integration_id"] as? String, integrationID)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: heartbeatURL.path))
+  }
 }
 
 private actor IPCRequestRecorder {
