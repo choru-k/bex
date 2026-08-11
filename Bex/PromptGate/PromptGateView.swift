@@ -10,6 +10,9 @@ enum PromptGateLayout {
 
 struct PromptGateView: View {
   @ObservedObject var viewModel: PromptGateViewModel
+  /// The ask thread for this correction. Owned outside the view so a question in flight
+  /// survives the sheet re-rendering around it.
+  @ObservedObject var askThread: AskThreadViewModel
   @FocusState private var keyboardFocus: PromptGateKeyboardFocus?
   @AccessibilityFocusState private var accessibilityFocus: PromptGateAccessibilityFocus?
   @State private var isDetailsExpanded = false
@@ -268,6 +271,17 @@ struct PromptGateView: View {
         error
 
         alternativesPanel
+
+        AskThreadView(viewModel: askThread)
+          .padding(14)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(Color.accentColor.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+          // Keyed on the original rather than the corrected text: editing the final message
+          // must not throw away a question the owner already asked about it.
+          .onAppear { askThread.reset(context: review.original) }
+          .onChange(of: review.original) { original in
+            askThread.reset(context: original)
+          }
 
         details(review: review)
       }

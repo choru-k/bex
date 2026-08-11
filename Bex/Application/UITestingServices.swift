@@ -573,6 +573,23 @@
       )
     }
 
+    /// Deterministic ask answer, with a card so the save affordance is exercised too.
+    func answerQuestion(
+      question: String,
+      context: String,
+      destination: OutboundDestination
+    ) async throws -> AskAnswer {
+      AskAnswer(
+        answer: "“Check” reads as an instruction; “take a look” reads as an invitation.",
+        card: AskAnswer.Card(
+          sentence: "Can you check the failing test before the release?",
+          weaker: "check",
+          better: "take a look at",
+          note: "softer, less like an order"
+        )
+      )
+    }
+
     /// UI tests never exercise the background classifier — it makes no network call here,
     /// so every card keeps its `GrammarCategory`-derived fallback pattern.
     func classifyStudyPatterns(

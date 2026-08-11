@@ -69,6 +69,7 @@ final class MainWindowModel: ObservableObject {
 
   let study: StudyViewModel
   let learning: LearningViewModel
+  let askThread: AskThreadViewModel
   let history: HistoryViewModel
   let profiles: ProfilesViewModel
   let settings: SettingsViewModel
@@ -77,6 +78,7 @@ final class MainWindowModel: ObservableObject {
     page: MainWindowPage = .learn,
     study: StudyViewModel,
     learning: LearningViewModel,
+    askThread: AskThreadViewModel,
     history: HistoryViewModel,
     profiles: ProfilesViewModel,
     settings: SettingsViewModel
@@ -84,6 +86,7 @@ final class MainWindowModel: ObservableObject {
     self.page = page
     self.study = study
     self.learning = learning
+    self.askThread = askThread
     self.history = history
     self.profiles = profiles
     self.settings = settings
@@ -179,7 +182,12 @@ struct BexMainWindow: View {
   private var detail: some View {
     switch model.page {
     case .learn:
-      LearnView(model: model, study: model.study, learning: model.learning)
+      LearnView(
+        model: model,
+        study: model.study,
+        learning: model.learning,
+        askThread: model.askThread
+      )
     case .history:
       HistoryView(viewModel: model.history)
     case .writingStyles:

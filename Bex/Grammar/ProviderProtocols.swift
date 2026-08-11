@@ -52,6 +52,13 @@ protocol GrammarServicing: Sendable {
     text: String,
     destination: OutboundDestination
   ) async throws -> DictionaryLookup
+  /// Answers one question about a correction or a card. Off the correction path by design —
+  /// `ModelJob.ask` gives it a longer budget than a Quick Check gets.
+  func answerQuestion(
+    question: String,
+    context: String,
+    destination: OutboundDestination
+  ) async throws -> AskAnswer
   func classifyStudyPatterns(
     cards: [StudyCard],
     destination: OutboundDestination

@@ -35,12 +35,15 @@ struct LearnView: View {
   /// the objects a view actually observes, and these two are what change while drilling.
   @ObservedObject var study: StudyViewModel
   @ObservedObject var learning: LearningViewModel
+  /// Questions asked about the card on screen. Owned by the window so a question in flight
+  /// survives the drill re-rendering around it.
+  @ObservedObject var askThread: AskThreadViewModel
   @State private var tab: Tab = .deck
 
   var body: some View {
     Group {
       if model.isDrillTakeover, let card = study.currentCard {
-        StudyTakeoverView(viewModel: study, card: card, end: endDrill)
+        StudyTakeoverView(viewModel: study, askThread: askThread, card: card, end: endDrill)
       } else {
         chrome
       }

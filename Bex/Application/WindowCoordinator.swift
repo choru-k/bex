@@ -304,6 +304,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           considerTaps: services.considerTaps,
           writerLevel: services.writerLevel
         ),
+        askThread: makeAskThread(),
         history: HistoryViewModel(
           data: services.data,
           useAsNewInput: { [weak self] text in
@@ -406,6 +407,17 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
     showMain(.settings)
     mainWindowModel?.settings.setSetupOrigin(origin)
+  }
+
+  /// A fresh ask thread. One per hosting surface, not one shared: a question about a Fix &
+  /// Send correction has nothing to do with a question about a drill card, and merging them
+  /// would put replies next to text they do not refer to.
+  private func makeAskThread() -> AskThreadViewModel {
+    AskThreadViewModel(
+      grammar: services.grammar,
+      preferences: services.preferences,
+      learningLog: services.learningLog
+    )
   }
 
   private func makeSettingsViewModel() -> SettingsViewModel {
@@ -529,7 +541,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       )
       promptGateViewModel = viewModel
       promptGatePanelController = PromptGatePanelController(
-        rootView: AnyView(PromptGateView(viewModel: viewModel)),
+        rootView: AnyView(
+          PromptGateView(viewModel: viewModel, askThread: makeAskThread())
+        ),
         cancelAction: { [weak viewModel] in viewModel?.cancel() }
       )
       promptGatePhaseCancellable = viewModel.$phase

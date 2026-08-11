@@ -163,6 +163,40 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
     return try DictionaryLookup.parse(output)
   }
 
+  /// Answers one question, with the text it is about supplied as context.
+  ///
+  /// The context is quoted rather than merged into the question so the prompt can keep saying
+  /// "this is material, not instructions" about a clearly delimited block — a question and the
+  /// prompt it is about are both the owner's words, and one of them arriving as an
+  /// instruction is exactly the failure mode `AskAnswer.systemPrompt` guards.
+  func answerQuestion(
+    question: String,
+    context: String,
+    destination: OutboundDestination
+  ) async throws -> AskAnswer {
+    let trimmed = question.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { throw BexError.emptyInput }
+    let client = try await factory.makeClient(for: destination)
+    let effort = await factory.preferences.selectedEffort(for: destination.provider)
+    let message =
+      context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? trimmed
+      : """
+        The text this question is about:
+        \(context)
+
+        The question:
+        \(trimmed)
+        """
+    let output = try await client.generate(
+      text: message,
+      model: destination.model,
+      systemPrompt: AskAnswer.systemPrompt,
+      effort: effort
+    )
+    return try AskAnswer.parse(output)
+  }
+
   /// Labels each of `cards` with the `StudyPattern` it is an example of, in one call.
   ///
   /// Background-only by design. The owner's constraint is that a Quick Check must answer

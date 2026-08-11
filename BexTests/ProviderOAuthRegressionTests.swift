@@ -69,6 +69,14 @@ struct ModelCatalogGrammarStub: GrammarServicing {
     throw BexError.invalidResponse
   }
 
+  func answerQuestion(
+    question: String,
+    context: String,
+    destination: OutboundDestination
+  ) async throws -> AskAnswer {
+    throw BexError.invalidResponse
+  }
+
   func classifyStudyPatterns(
 
     cards: [StudyCard],

@@ -129,6 +129,14 @@ actor QuickCheckGrammarStub: GrammarServicing {
 
   /// Quick Check never classifies study patterns — that runs in the background, off the
   /// interactive path, precisely so it cannot add latency here.
+  func answerQuestion(
+    question: String,
+    context: String,
+    destination: OutboundDestination
+  ) async throws -> AskAnswer {
+    throw BexError.invalidResponse
+  }
+
   func classifyStudyPatterns(
     cards: [StudyCard],
     destination: OutboundDestination

@@ -79,18 +79,23 @@ struct StudyDeckView: View {
 /// is still true when the session ends; none of it helps while a card is on screen.
 struct StudyTakeoverView: View {
   @ObservedObject var viewModel: StudyViewModel
+  @ObservedObject var askThread: AskThreadViewModel
   let card: StudyCard
   /// Leaves the drill. Unanswered cards stay due — `StudyScheduler` only moves on an
   /// answer, so quitting mid-session loses nothing and never needs a confirmation.
   let end: () -> Void
+  @State private var isAsking = false
 
   var body: some View {
     VStack(spacing: 0) {
       topBar
       Spacer()
-      StudyCardView(viewModel: viewModel, card: card, scale: .takeover)
-        .frame(maxWidth: 620)
-        .padding(.horizontal, 40)
+      VStack(spacing: 22) {
+        StudyCardView(viewModel: viewModel, card: card, scale: .takeover)
+        askSection
+      }
+      .frame(maxWidth: 620)
+      .padding(.horizontal, 40)
       Spacer()
       StudyPileDots(
         total: viewModel.sessionTotal,
@@ -105,8 +110,11 @@ struct StudyTakeoverView: View {
   }
 
   private var topBar: some View {
-    HStack {
+    HStack(spacing: 14) {
       Spacer()
+      Text("？ Ask ⌘/")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
       Button(action: end) {
         Text("Esc ends the session")
           .font(.caption)
@@ -118,5 +126,39 @@ struct StudyTakeoverView: View {
     }
     .padding(.horizontal, 18)
     .padding(.top, 14)
+  }
+
+  /// The ask thread, folded away until ⌘/ opens it.
+  ///
+  /// Design 3a keeps the takeover empty — the card is the whole screen — so this stays a
+  /// single hint until asked for, and the card waits: opening it does not grade, skip or
+  /// advance anything.
+  @ViewBuilder
+  private var askSection: some View {
+    // Always present but zero-sized when closed, so ⌘/ has something to bind to.
+    Button("") { isAsking = true }
+      .keyboardShortcut("/", modifiers: .command)
+      .buttonStyle(.plain)
+      .frame(width: 0, height: 0)
+      .opacity(0)
+      .accessibilityHidden(true)
+
+    if isAsking {
+      AskThreadView(viewModel: askThread, prompt: "Ask about this card…")
+        .padding(16)
+        .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 11))
+        .onAppear { askThread.reset(context: askContext) }
+    } else if askThread.isEmpty {
+      Button("？ Ask about this card") { isAsking = true }
+        .buttonStyle(.link)
+        .font(.callout)
+        .accessibilityIdentifier("study-ask-open")
+    }
+  }
+
+  /// What a question about this card is about: the sentence and the answer it turns on.
+  private var askContext: String {
+    let reason = card.reason.isEmpty ? "" : " (\(card.reason))"
+    return "\(card.sentence)\nThe blank is “\(card.correct)”, not “\(card.wrong)”\(reason)."
   }
 }
