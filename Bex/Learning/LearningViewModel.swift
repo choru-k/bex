@@ -42,12 +42,57 @@ final class LearningViewModel: ObservableObject {
   @Published private(set) var uptakeAdopted: Int = 0
   @Published private(set) var uptakeSuggested: Int = 0
 
+  /// Bex's own model of the owner, shown so they can see it and correct it.
+  ///
+  /// Until now this was computed in the background, injected into every correction prompt,
+  /// and never displayed anywhere — Bex was carrying an opinion about the owner's English
+  /// that the owner could not read, let alone argue with.
+  @Published private(set) var profile: WriterLevelProfile?
+  /// The owner's own description of themselves, bound to the editor. Saved explicitly.
+  @Published var ownerNote: String = ""
+
   private let learningLog: LearningLogStore
   private let considerTaps: ConsiderTapStore
+  private let writerLevel: WriterLevelStore
 
-  init(learningLog: LearningLogStore, considerTaps: ConsiderTapStore) {
+  init(
+    learningLog: LearningLogStore,
+    considerTaps: ConsiderTapStore,
+    writerLevel: WriterLevelStore = WriterLevelStore()
+  ) {
     self.learningLog = learningLog
     self.considerTaps = considerTaps
+    self.writerLevel = writerLevel
+  }
+
+  /// What Bex reliably sees the owner getting right, as short labels.
+  var solid: [String] {
+    profile?.solid ?? []
+  }
+
+  /// What the owner is still working on, taken from the measured rates rather than from the
+  /// model's prose.
+  ///
+  /// Non-negotiable 8 is the reason: these are the categories Bex claims are recurring, and
+  /// there is already a real number for each one. Asking a model to restate them would put a
+  /// second, unmeasured opinion next to the measurement.
+  var workingOn: [CategoryRate] {
+    Array(categoryRates.prefix(3))
+  }
+
+  /// "updated 3 hours ago", or nil before the first background pass has ever run.
+  var profileAgeDescription: String? {
+    guard let generatedAt = profile?.generatedAt,
+      let date = ISO8601DateFormatter().date(from: generatedAt)
+    else { return nil }
+    let formatter = RelativeDateTimeFormatter()
+    formatter.unitsStyle = .full
+    return "updated \(formatter.localizedString(for: date, relativeTo: Date()))"
+  }
+
+  func saveOwnerNote() async {
+    await writerLevel.setOwnerNote(ownerNote)
+    profile = await writerLevel.current()
   }
 
   var isEmpty: Bool {
@@ -56,6 +101,8 @@ final class LearningViewModel: ObservableObject {
 
   func load() async {
     isLoading = true
+    profile = await writerLevel.current()
+    ownerNote = profile?.ownerNote ?? ""
     let entries = await learningLog.readAll()
     let tappedIDs = await considerTaps.tappedIDs()
     let explanations = entries.map(\.explanation)

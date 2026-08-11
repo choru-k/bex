@@ -283,6 +283,9 @@ struct LearnProgressView: View {
       )
     } else {
       List {
+        Section {
+          WriterProfilePanel(viewModel: viewModel)
+        }
         if !viewModel.categoryRates.isEmpty {
           Section("Grammar mistakes by type") {
             ForEach(viewModel.categoryRates, id: \.category) { item in
@@ -350,6 +353,162 @@ struct LearnProgressView: View {
         }
       }
       .listStyle(.inset)
+    }
+  }
+}
+
+// MARK: - Writer profile
+
+/// What Bex thinks it knows about the owner's English, and the one part of it they own.
+///
+/// Design 2c. Until now this profile was computed hourly, injected into every correction
+/// prompt, and shown nowhere — Bex held an opinion about the owner that shaped every
+/// correction and that the owner could neither read nor argue with. Showing it is the point;
+/// "Who you are" being editable, preserved across refreshes, and actually sent to the model
+/// is what makes it more than a readout.
+struct WriterProfilePanel: View {
+  @ObservedObject var viewModel: LearningViewModel
+  @State private var isEditingNote = false
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      header
+      if !viewModel.solid.isEmpty {
+        group(
+          "Solid — never explained again",
+          color: .green,
+          identifier: "profile-solid"
+        ) {
+          chipRow(viewModel.solid.map { ($0, nil) }, tinted: false)
+        }
+      }
+      if !viewModel.workingOn.isEmpty {
+        group(
+          "Working on — explained when they recur",
+          color: .yellow,
+          identifier: "profile-working-on"
+        ) {
+          chipRow(
+            viewModel.workingOn.map {
+              ($0.displayName, "\(LearnFormat.number($0.ratePer100Words))/100w")
+            },
+            tinted: true
+          )
+        }
+      }
+      group("Who you are — tunes suggestion level", color: .secondary, identifier: "profile-note") {
+        ownerNoteEditor
+      }
+      Text(
+        "This lives in one local file you can open: "
+          + "~/Library/Application Support/Bex/LearningLog/writer-level.json. "
+          + "Wrong? Edit it here — a background refresh keeps your words."
+      )
+      .font(.caption2)
+      .foregroundStyle(.tertiary)
+      .fixedSize(horizontal: false, vertical: true)
+    }
+    .padding(.vertical, 4)
+  }
+
+  private var header: some View {
+    HStack(alignment: .firstTextBaseline) {
+      Text("Writer profile")
+        .font(.headline)
+      Spacer(minLength: 8)
+      Text(
+        [viewModel.profileAgeDescription, "editable"]
+          .compactMap { $0 }
+          .joined(separator: " · ")
+      )
+      .font(.caption)
+      .foregroundStyle(.tertiary)
+    }
+    .accessibilityIdentifier("writer-profile")
+  }
+
+  @ViewBuilder
+  private func group<Content: View>(
+    _ title: String,
+    color: Color,
+    identifier: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .textCase(.uppercase)
+        .foregroundStyle(color)
+      content()
+    }
+    .accessibilityIdentifier(identifier)
+  }
+
+  /// A vertical run rather than a wrapping one: macOS 13 has no wrapping stack, and three
+  /// labels read fine stacked. Not worth a custom layout.
+  private func chipRow(_ items: [(String, String?)], tinted: Bool) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+        HStack(spacing: 6) {
+          Text(item.0)
+          if let trailing = item.1 {
+            Text(trailing)
+              .foregroundStyle(.secondary)
+          }
+        }
+        .font(.callout)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(
+          Capsule().fill(tinted ? AnyShapeStyle(Color.yellow.opacity(0.14)) : AnyShapeStyle(.quaternary))
+        )
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var ownerNoteEditor: some View {
+    if isEditingNote {
+      VStack(alignment: .leading, spacing: 8) {
+        TextEditor(text: $viewModel.ownerNote)
+          .font(.callout)
+          .frame(minHeight: 70)
+          .padding(4)
+          .background(Color(nsColor: .textBackgroundColor))
+          .clipShape(RoundedRectangle(cornerRadius: 7))
+          .overlay {
+            RoundedRectangle(cornerRadius: 7)
+              .stroke(Color(nsColor: .separatorColor))
+          }
+          .accessibilityIdentifier("writer-profile-note-editor")
+        HStack {
+          Button("Save") {
+            isEditingNote = false
+            Task { await viewModel.saveOwnerNote() }
+          }
+          .keyboardShortcut(.defaultAction)
+          .accessibilityIdentifier("writer-profile-note-save")
+          Button("Cancel", role: .cancel) {
+            isEditingNote = false
+            viewModel.ownerNote = viewModel.profile?.ownerNote ?? ""
+          }
+        }
+      }
+    } else {
+      HStack(alignment: .firstTextBaseline, spacing: 8) {
+        Text(
+          viewModel.ownerNote.isEmpty
+            ? "Nothing yet — tell Bex who is writing, and suggestions get pitched at you rather than at nobody."
+            : viewModel.ownerNote
+        )
+        .font(.callout)
+        .foregroundStyle(viewModel.ownerNote.isEmpty ? .tertiary : .secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 8)
+        Button(viewModel.ownerNote.isEmpty ? "Write" : "Edit") { isEditingNote = true }
+          .buttonStyle(.link)
+          .accessibilityIdentifier("writer-profile-note-edit")
+      }
     }
   }
 }

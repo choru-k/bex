@@ -182,4 +182,72 @@ final class WriterLevelTests: XCTestCase {
     XCTAssertThrowsError(
       try WriterLevelProfile.parse("not json", generatedAt: Self.now, sampleCount: 1))
   }
+
+  /// The "solid" labels are display-only, so a model that omits them, or answers with
+  /// sentences instead of labels, must still produce a usable profile rather than failing the
+  /// whole background pass.
+  func testParseTakesShortSolidLabelsAndToleratesTheirAbsence() throws {
+    let withLabels = try WriterLevelProfile.parse(
+      """
+      {"summary": "Reliable on tenses.", "solid": ["past tense", "technical vocabulary",
+       "this label is far too long to be a chip", ""]}
+      """,
+      generatedAt: Self.now,
+      sampleCount: 4
+    )
+    XCTAssertEqual(withLabels.solid, ["past tense", "technical vocabulary"])
+
+    let withoutLabels = try WriterLevelProfile.parse(
+      "{\"summary\": \"Reliable on tenses.\"}", generatedAt: Self.now, sampleCount: 4)
+    XCTAssertNil(withoutLabels.solid)
+    XCTAssertEqual(withoutLabels.summary, "Reliable on tenses.")
+  }
+
+  /// The note is the one part of the profile the owner owns, and the refresh that overwrites
+  /// everything else runs unattended every hour. If it dropped the note, the owner's own
+  /// words would vanish some time after they typed them — worse than never offering the field.
+  func testOwnerNoteSurvivesABackgroundRefreshAndReachesThePrompt() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WriterLevelOwnerNote-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = WriterLevelStore(directoryURL: directory)
+
+    await store.store(Self.profile(daysAgo: 1, sampleCount: 20))
+    await store.setOwnerNote("Korean-speaking engineer; direct register preferred.")
+
+    // A later background pass replaces the computed half.
+    await store.store(Self.profile(daysAgo: 0, sampleCount: 40, summary: "Now reliable on prepositions."))
+
+    let stored = await store.current()
+    let profile = try XCTUnwrap(stored)
+    XCTAssertEqual(profile.summary, "Now reliable on prepositions.")
+    XCTAssertEqual(profile.ownerNote, "Korean-speaking engineer; direct register preferred.")
+
+    // And what the correction prompt is handed carries both halves, owner's words last.
+    let summaryText = await store.summary()
+    let summary = try XCTUnwrap(summaryText)
+    XCTAssertTrue(summary.contains("Now reliable on prepositions."))
+    XCTAssertTrue(summary.contains("Korean-speaking engineer"))
+
+    // Clearing it removes the note without disturbing the computed profile.
+    await store.setOwnerNote("   ")
+    let clearedProfile = await store.current()
+    let cleared = try XCTUnwrap(clearedProfile)
+    XCTAssertNil(cleared.ownerNote)
+    XCTAssertEqual(cleared.summary, "Now reliable on prepositions.")
+  }
+
+  /// A note written before any background pass has ever run must still be kept and still
+  /// reach the prompt — otherwise the first thing the owner types is the thing Bex loses.
+  func testOwnerNoteIsKeptWithoutAComputedProfile() async throws {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("WriterLevelNoteOnly-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = WriterLevelStore(directoryURL: directory)
+
+    await store.setOwnerNote("Writes mostly to coding agents.")
+    let summaryText = await store.summary()
+    let summary = try XCTUnwrap(summaryText)
+    XCTAssertTrue(summary.contains("Writes mostly to coding agents."))
+  }
 }

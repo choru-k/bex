@@ -298,7 +298,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         study: studyDrill(),
         learning: LearningViewModel(
           learningLog: services.learningLog,
-          considerTaps: services.considerTaps
+          considerTaps: services.considerTaps,
+          writerLevel: services.writerLevel
         ),
         history: HistoryViewModel(
           data: services.data,
