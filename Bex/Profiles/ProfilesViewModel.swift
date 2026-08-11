@@ -293,7 +293,7 @@ final class ProfilesViewModel: ObservableObject {
     operationTask = Task { [weak self] in
       guard let self else { return }
       do {
-        let destination = try await preferences.outboundDestination()
+        let destination = try await preferences.outboundDestination(for: .rewrites)
         let accepted = await preferences.hasAcceptedCurrentOutboundDisclosure(
           for: destination
         )

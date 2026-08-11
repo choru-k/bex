@@ -37,6 +37,8 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var model: String = LLMProvider.openAI.defaultModel
   @Published private(set) var effort: ReasoningEffort = .medium
   @Published private(set) var models: [ModelOption] = []
+  /// Per-job model overrides for the current provider. Absent means "follow Correction".
+  @Published private(set) var modelOverrides: [ModelJob: String] = [:]
   @Published var ollamaURL = "http://localhost:11434"
   @Published private(set) var appearance: AppearancePreference = .system
   @Published var credentialInput = ""
@@ -227,6 +229,7 @@ final class SettingsViewModel: ObservableObject {
     provider = await selectedProvider
     model = await preferences.selectedModel(for: provider)
     effort = await preferences.selectedEffort(for: provider)
+    modelOverrides = await loadedModelOverrides(provider: provider)
     ollamaURL = await preferences.ollamaURL()
     appearance = await savedAppearance
     confirmsHookOutboundPayloads = await savedHookOutboundConfirmation
@@ -254,6 +257,9 @@ final class SettingsViewModel: ObservableObject {
       await preferences.setSelectedProvider(provider)
       model = await preferences.selectedModel(for: provider)
       effort = await preferences.selectedEffort(for: provider)
+      // Overrides are stored per provider, so switching providers loads that provider's set
+      // rather than carrying over model names it has never heard of.
+      modelOverrides = await loadedModelOverrides(provider: provider)
       await refreshCredentialState()
       await refreshCodexState()
       await reloadModels()
@@ -265,6 +271,51 @@ final class SettingsViewModel: ObservableObject {
     enqueuePreferenceUpdate { [preferences, provider] in
       await preferences.setSelectedModel(model, for: provider)
     }
+  }
+
+  /// Which model each non-correction job uses, or `nil` where it follows Correction.
+  ///
+  /// Kept as one dictionary rather than four published properties so the Models section can
+  /// render itself from `ModelJob.allCases` and adding a job later needs no new state.
+  func modelOverride(for job: ModelJob) -> String? {
+    modelOverrides[job]
+  }
+
+  /// The model a job will actually use right now, override or inherited.
+  func resolvedModel(for job: ModelJob) -> String {
+    modelOverrides[job] ?? model
+  }
+
+  /// `nil` puts the job back to following Correction.
+  func selectModel(_ selection: String?, for job: ModelJob) {
+    guard job != .correction else {
+      if let selection { selectModel(selection) }
+      return
+    }
+    if let selection {
+      modelOverrides[job] = selection
+    } else {
+      modelOverrides.removeValue(forKey: job)
+    }
+    enqueuePreferenceUpdate { [preferences, provider] in
+      await preferences.setModelOverride(selection, for: job, provider: provider)
+    }
+  }
+
+  /// Advisory only — the owner may still pick a heavy model for corrections, and Bex says
+  /// what it costs rather than refusing (non-negotiable 1 is a budget, not a lock).
+  var correctionLatencyWarning: String? {
+    ModelLatencyWarning.warning(forCorrectionModel: model)
+  }
+
+  private func loadedModelOverrides(provider: LLMProvider) async -> [ModelJob: String] {
+    var result: [ModelJob: String] = [:]
+    for job in ModelJob.allCases where job != .correction {
+      if let value = await preferences.modelOverride(for: job, provider: provider) {
+        result[job] = value
+      }
+    }
+    return result
   }
 
   func selectEffort(_ effort: ReasoningEffort) {

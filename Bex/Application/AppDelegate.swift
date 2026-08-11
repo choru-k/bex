@@ -851,7 +851,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   // provider ever needs to be visible, surface it in the Study window rather than here.
   private func classifyStudyPatternsIfNeeded() async {
     guard let services else { return }
-    guard let destination = try? await services.preferences.outboundDestination(),
+    guard let destination = try? await services.preferences.outboundDestination(for: .background),
       await services.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
     else { return }
 
@@ -878,7 +878,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// accumulate, so the accumulating happens here (docs/learning-mode-plan.md v7.1).
   private func refreshWriterLevelIfNeeded() async {
     guard let services else { return }
-    guard let destination = try? await services.preferences.outboundDestination(),
+    guard let destination = try? await services.preferences.outboundDestination(for: .background),
       await services.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
     else { return }
 

@@ -62,6 +62,14 @@ actor PreferencesStore {
     static func selectedEffort(for provider: LLMProvider) -> String {
       "selectedEffort.\(provider.rawValue)"
     }
+
+    /// Per-provider so switching providers does not carry a model name that provider has
+    /// never heard of. `.correction` deliberately has no key of its own — it reads
+    /// `selectedModel`, which is the setting that already existed, so nothing has to be
+    /// migrated and an owner who never opens the Models section keeps exactly what they had.
+    static func modelOverride(for job: ModelJob, provider: LLMProvider) -> String {
+      "modelOverride.\(job.rawValue).\(provider.rawValue)"
+    }
   }
 
   private static let retiredModels: [LLMProvider: Set<String>] = [
@@ -150,11 +158,43 @@ actor PreferencesStore {
     defaults.set(url, forKey: Key.ollamaURL)
   }
 
-  func outboundDestination() throws -> OutboundDestination {
+  /// The model override set for one job, or `nil` when it inherits.
+  ///
+  /// `.correction` is the base and has no override of its own — it *is* `selectedModel`.
+  func modelOverride(for job: ModelJob, provider: LLMProvider) -> String? {
+    guard job != .correction else { return nil }
+    let value = defaults.string(forKey: Key.modelOverride(for: job, provider: provider))
+    guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+    return value
+  }
+
+  /// Passing `nil` clears the override, so the job goes back to following Correction.
+  func setModelOverride(_ model: String?, for job: ModelJob, provider: LLMProvider) {
+    guard job != .correction else {
+      // The correction model is the provider's selected model; there is nothing above it to
+      // override, and writing a second copy would let the two disagree.
+      if let model { setSelectedModel(model, for: provider) }
+      return
+    }
+    let key = Key.modelOverride(for: job, provider: provider)
+    if let model, !model.trimmingCharacters(in: .whitespaces).isEmpty {
+      defaults.set(model, forKey: key)
+    } else {
+      defaults.removeObject(forKey: key)
+    }
+  }
+
+  func model(for job: ModelJob, provider: LLMProvider) -> String {
+    modelOverride(for: job, provider: provider) ?? selectedModel(for: provider)
+  }
+
+  /// Where a given job's request goes. Defaults to `.correction` so every existing call site
+  /// keeps its current behaviour without naming a job.
+  func outboundDestination(for job: ModelJob = .correction) throws -> OutboundDestination {
     let provider = selectedProvider()
     return try OutboundDestination(
       provider: provider,
-      model: selectedModel(for: provider),
+      model: model(for: job, provider: provider),
       ollamaEndpoint: provider == .ollama ? ollamaURL() : nil
     )
   }

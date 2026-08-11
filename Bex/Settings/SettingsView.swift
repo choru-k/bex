@@ -578,6 +578,13 @@ struct SettingsView: View {
           Text("Model and effort tune provider behavior; they are not required to connect Bex.")
             .font(.caption)
             .foregroundStyle(.secondary)
+          if let warning = viewModel.correctionLatencyWarning {
+            Label(warning, systemImage: "hare")
+              .font(.caption)
+              .foregroundStyle(.orange)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("settings-correction-latency-warning")
+          }
           if let modelFetchError = viewModel.modelFetchError {
             HStack {
               Text(modelFetchError)
@@ -588,10 +595,58 @@ struct SettingsView: View {
             }
           }
         }
+
+        modelsByJobSection
     }
     .formStyle(.grouped)
     .padding()
     .frame(maxWidth: .infinity)
+  }
+
+  /// One model per job, because one model cannot serve all of them.
+  ///
+  /// Non-negotiable 1 gives a Quick Check about two seconds and lets background work cost
+  /// anything, so a single "selected model" forces a choice that is wrong for one job or the
+  /// other. Correction is the one above — everything here either overrides it or follows it.
+  private var modelsByJobSection: some View {
+    Section("Models by job") {
+      Text("Each job has its own latency budget. Anything left as “\(ModelJob.rewrites.inheritedLabel)” follows the model above.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+
+      ForEach(ModelJob.allCases.filter { $0 != .correction }) { job in
+        VStack(alignment: .leading, spacing: 2) {
+          Picker(selection: jobModelBinding(job)) {
+            Text(job.inheritedLabel).tag(String?.none)
+            ForEach(viewModel.models) { model in
+              Text(model.name).tag(String?.some(model.id))
+            }
+          } label: {
+            HStack(spacing: 6) {
+              Text(job.title)
+              if let budget = job.budget {
+                Text(budget)
+                  .font(.caption)
+                  .foregroundStyle(.tertiary)
+              }
+            }
+          }
+          .accessibilityIdentifier("settings-model-job-\(job.rawValue)")
+          Text(job.detail)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+      }
+    }
+  }
+
+  private func jobModelBinding(_ job: ModelJob) -> Binding<String?> {
+    Binding(
+      get: { viewModel.modelOverride(for: job) },
+      set: { viewModel.selectModel($0, for: job) }
+    )
   }
 
   private var fixAndSendCategory: some View {

@@ -18,6 +18,67 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertEqual(draft, "")
   }
 
+  /// Per-job models must be additive: an owner who never opens the Models section has to keep
+  /// exactly the behaviour they had, which means every job falls back to `selectedModel` and
+  /// Correction has no separate copy of it to drift from.
+  func testJobModelsInheritTheCorrectionModelUntilOverridden() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+    let preferences = fixture.store
+
+    await preferences.setSelectedProvider(.claude)
+    await preferences.setSelectedModel("base-model", for: .claude)
+
+    for job in ModelJob.allCases {
+      let model = await preferences.model(for: job, provider: .claude)
+      XCTAssertEqual(model, "base-model", "\(job.rawValue) should inherit the correction model")
+    }
+
+    await preferences.setModelOverride("heavy-model", for: .background, provider: .claude)
+    let background = await preferences.model(for: .background, provider: .claude)
+    let correction = await preferences.model(for: .correction, provider: .claude)
+    let ask = await preferences.model(for: .ask, provider: .claude)
+    XCTAssertEqual(background, "heavy-model")
+    XCTAssertEqual(correction, "base-model", "overriding one job must not move the sacred path")
+    XCTAssertEqual(ask, "base-model")
+
+    // Clearing puts the job back to following Correction rather than pinning the old value.
+    await preferences.setModelOverride(nil, for: .background, provider: .claude)
+    let clearedBackground = await preferences.model(for: .background, provider: .claude)
+    XCTAssertEqual(clearedBackground, "base-model")
+  }
+
+  /// Overrides are per provider, so switching providers never sends a model name to a
+  /// provider that has never heard of it.
+  func testJobModelOverridesAreProviderScoped() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+    let preferences = fixture.store
+
+    await preferences.setSelectedModel("claude-base", for: .claude)
+    await preferences.setSelectedModel("openai-base", for: .openAI)
+    await preferences.setModelOverride("claude-heavy", for: .background, provider: .claude)
+
+    let claudeBackground = await preferences.model(for: .background, provider: .claude)
+    let openAIBackground = await preferences.model(for: .background, provider: .openAI)
+    XCTAssertEqual(claudeBackground, "claude-heavy")
+    XCTAssertEqual(openAIBackground, "openai-base")
+  }
+
+  /// Writing a job's model into `.correction` is the same as setting the provider's model —
+  /// two stores for one value could disagree about what the sacred path actually uses.
+  func testSettingTheCorrectionJobWritesTheProviderModel() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+    let preferences = fixture.store
+
+    await preferences.setModelOverride("chosen", for: .correction, provider: .claude)
+    let selected = await preferences.selectedModel(for: .claude)
+    let override = await preferences.modelOverride(for: .correction, provider: .claude)
+    XCTAssertEqual(selected, "chosen")
+    XCTAssertNil(override)
+  }
+
   func testHookOutboundConfirmationDefaultsOnAndPersistsOptOut() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }
