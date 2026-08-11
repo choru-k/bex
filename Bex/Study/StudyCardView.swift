@@ -175,13 +175,32 @@ struct StudyCardView: View {
           .accessibilityIdentifier("study-reason")
       }
 
-      Button("Next ⏎") {
+      keepOrToss
+    }
+  }
+
+  /// Keep and move on, or say this card should never have existed.
+  ///
+  /// Design 2b's rule, and the reason Keep is bound to Return: answering *is* the review, so
+  /// the happy path costs zero extra keys and Toss is the deliberate one. The deck is built
+  /// automatically from logged corrections, and `docs/purpose.md` names a deck of junk cards
+  /// as worse than a thin one — this is where the owner draws that line.
+  private var keepOrToss: some View {
+    HStack(spacing: 10) {
+      Button("Keep ⏎") {
         viewModel.advance()
       }
       .keyboardShortcut(.defaultAction)
-      .controlSize(scale.isCompact ? .small : .regular)
       .accessibilityIdentifier("study-next")
+
+      Button("Toss — not a gap") {
+        Task { await viewModel.toss() }
+      }
+      .buttonStyle(.link)
+      .accessibilityIdentifier("study-toss")
     }
+    .controlSize(scale.isCompact ? .small : .regular)
+    .font(scale.isCompact ? .caption : .body)
   }
 
   /// What the owner actually answered, in whichever way this card takes answers.

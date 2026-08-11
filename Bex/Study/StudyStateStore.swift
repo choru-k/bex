@@ -67,6 +67,19 @@ actor StudyStateStore {
     NotificationCenter.default.post(name: .bexStudyStateDidChange, object: nil)
   }
 
+  /// Records that a card is not a gap worth drilling, removing it from the deck for good.
+  ///
+  /// Posts the same change notification as `record` so the badge and the daily reminder
+  /// shrink the moment a card is tossed — a "no" that leaves the count unchanged reads as
+  /// having been ignored.
+  func toss(cardID: String, now: Date) {
+    loadIfNeeded()
+    var states = cachedStates ?? [:]
+    states[cardID] = StudyScheduler.tossed(states[cardID], now: now)
+    persist(states)
+    NotificationCenter.default.post(name: .bexStudyStateDidChange, object: nil)
+  }
+
   /// Clears all review state. Used by tests and by a future "start over" action —
   /// every card reverts to "never studied" (see `StudyScheduler.isDue`), since an
   /// absent entry is always due.

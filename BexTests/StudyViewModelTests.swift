@@ -367,6 +367,56 @@ final class StudyViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.currentCard?.id, cardMidSession)
   }
 
+  /// Tossing has to actually mean it. A deprioritized "no" comes back, and the whole reason
+  /// to ask is that the answer is respected — `docs/purpose.md` names a deck of junk cards as
+  /// worse than a thin one.
+  func testTossingACardRemovesItFromTheDeckForGood() async {
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+    await appendEntry(to: learningLog, wrong: "at", correct: "to")
+    let tossedID = cardID(wrong: "on", correct: "in")
+
+    let viewModel = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
+    await viewModel.load()
+    XCTAssertEqual(viewModel.currentCard?.id, tossedID)
+    XCTAssertEqual(viewModel.sessionTotal, 2)
+
+    await viewModel.toss()
+
+    // Tossing is not an answer: nothing was graded, so it must not count as progress.
+    XCTAssertEqual(viewModel.completedCount, 0)
+    // The session is one card shorter rather than one card further along.
+    XCTAssertEqual(viewModel.sessionTotal, 1)
+    XCTAssertEqual(viewModel.currentCard?.id, cardID(wrong: "at", correct: "to"))
+
+    // And it is gone from a freshly built session, not merely skipped in this one.
+    let reopened = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
+    await reopened.load()
+    XCTAssertEqual(reopened.sessionTotal, 1)
+    XCTAssertEqual(reopened.currentCard?.id, cardID(wrong: "at", correct: "to"))
+    XCTAssertEqual(reopened.dueCount, 1, "the due count has to shrink, or the no reads as ignored")
+  }
+
+  /// A card tossed before it was ever answered never entered rotation, so it must not eat a
+  /// slot in the day's new-card batch on its way out of the deck.
+  func testTossingBeforeAnsweringDoesNotConsumeTheNewCardBudget() async {
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+
+    let viewModel = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
+    await viewModel.load()
+    await viewModel.toss()
+
+    let states = await studyState.states()
+    XCTAssertEqual(states[cardID(wrong: "on", correct: "in")]?.isTossed, true)
+    XCTAssertNil(states[cardID(wrong: "on", correct: "in")]?.firstSeenAt)
+  }
+
   /// The other half of the guard: once the session is spent, reopening either surface
   /// should pick up anything that has come due since rather than showing "done" forever.
   func testLoadIfNeededRebuildsAFinishedSession() async {

@@ -74,7 +74,10 @@ enum StudyDailyPlan {
     // for cards already in rotation. See `StudyPattern.isDrillable`; on the real deck this
     // removes 57 of 151 cards, all of them articles and subject-verb agreement.
     let drillable = cards.filter { card in
-      isDrillable(card, verdicts: verdicts)
+      // Tossed first, and unconditionally: the owner said this is not a gap, and the whole
+      // point of asking is that the answer is respected. A deprioritized "no" comes back.
+      guard states[card.id]?.isTossed != true else { return false }
+      return isDrillable(card, verdicts: verdicts)
     }
 
     // Reviews: every in-rotation (has a state) card that's due. Unconditional — see

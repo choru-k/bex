@@ -18,6 +18,13 @@ struct StudyReviewState: Codable, Equatable, Sendable {
   /// "we don't know when this card entered rotation" — `StudyDailyPlan` treats that as
   /// not counting against the current new-card batch rather than guessing a date.
   var firstSeenAt: Date?
+  /// The owner said this card is not a gap worth drilling.
+  ///
+  /// `Optional` for the same reason as `firstSeenAt`: any `study-state.json` written before
+  /// this field existed must still decode, and `nil` correctly means "never tossed".
+  /// `StudyDailyPlan` drops these before anything else, so a tossed card is gone from the
+  /// deck rather than merely deprioritized — the owner said no, not "later".
+  var isTossed: Bool?
 }
 
 /// Pure Leitner-box scheduling for Study Mode drills built from the user's own logged
@@ -90,7 +97,25 @@ enum StudyScheduler {
       dueAt: dueAt,
       timesSeen: timesSeen,
       timesCorrect: timesCorrect,
-      firstSeenAt: firstSeenAt
+      firstSeenAt: firstSeenAt,
+      // Answering a card is not un-tossing it; only `tossed(_:now:)` sets this either way.
+      isTossed: state?.isTossed
+    )
+  }
+
+  /// Marks a card as not worth drilling, keeping whatever progress it already had.
+  ///
+  /// `firstSeenAt` deliberately stays `nil` for a card tossed before it was ever answered:
+  /// it never entered rotation, so it must not eat a slot in `StudyDailyPlan`'s new-card
+  /// batch on its way out of the deck.
+  static func tossed(_ state: StudyReviewState?, now: Date) -> StudyReviewState {
+    StudyReviewState(
+      box: state?.box ?? 0,
+      dueAt: state?.dueAt ?? now,
+      timesSeen: state?.timesSeen ?? 0,
+      timesCorrect: state?.timesCorrect ?? 0,
+      firstSeenAt: state?.firstSeenAt,
+      isTossed: true
     )
   }
 

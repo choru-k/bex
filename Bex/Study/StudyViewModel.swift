@@ -165,6 +165,21 @@ final class StudyViewModel: ObservableObject {
     presentNextCard()
   }
 
+  /// Drops the current card from the deck for good and moves on.
+  ///
+  /// The deck is built automatically from logged corrections, and `docs/purpose.md` names a
+  /// deck of junk cards as worse than a thin one — a typo is a finger slip by someone who
+  /// already knows the word, and drilling it teaches nothing. This is how the owner says so.
+  /// It does not count as an answer: nothing is graded, and `completedCount` stays put,
+  /// because tossing a card is not evidence about what they know.
+  func toss() async {
+    guard let currentCard else { return }
+    await studyState.toss(cardID: currentCard.id, now: now())
+    // The card is gone, so the session is one card shorter rather than one card further on.
+    sessionTotal = max(0, sessionTotal - 1)
+    presentNextCard()
+  }
+
   private func presentNextCard() {
     guard !sessionQueue.isEmpty else {
       currentCard = nil
