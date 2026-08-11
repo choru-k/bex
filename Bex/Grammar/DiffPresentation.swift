@@ -71,74 +71,71 @@ struct DiffChange: Equatable, Sendable {
   }
 }
 
-struct DiffChangeRows: View {
+/// Every change on one wrapping line: `i I · has have · teh the`, struck-through old
+/// beside bold new, then a count and the rules involved.
+///
+/// This replaces a stacked Before/After panel that gave each edit its own labelled pair of
+/// cells. That layout was fine at one change and a wall at three, and it was competing for
+/// attention with the expression alternatives — which are the part of the sheet that
+/// actually asks for a decision. A typo fix does not need a heading; it needs to be
+/// glanceable enough to confirm and move past.
+///
+/// An `AttributedString` because macOS 13 has no wrapping stack, and this has to wrap
+/// rather than clip or scroll sideways.
+struct DiffRedline: View {
   let changes: [DiffChange]
+  /// The grammar rules involved, e.g. "Subject–verb agreement, Spelling". May be empty.
+  var categorySummary: String = ""
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 10) {
-      Text("Changes · \(changes.count)")
-        .font(.headline)
-
-      ForEach(changes.indices, id: \.self) { index in
-        let change = changes[index]
-        if index > 0 {
-          Divider()
-        }
-        ViewThatFits(in: .horizontal) {
-          HStack(alignment: .top, spacing: 10) {
-            changeCell(label: "Before", text: change.oldText, isBefore: true)
-            Image(systemName: "arrow.right")
-              .foregroundStyle(.secondary)
-              .padding(.top, 24)
-              .accessibilityHidden(true)
-            changeCell(label: "After", text: change.newText, isBefore: false)
-          }
-          VStack(alignment: .leading, spacing: 6) {
-            changeCell(label: "Before", text: change.oldText, isBefore: true)
-            Image(systemName: "arrow.down")
-              .foregroundStyle(.secondary)
-              .frame(maxWidth: .infinity)
-              .accessibilityHidden(true)
-            changeCell(label: "After", text: change.newText, isBefore: false)
-          }
-        }
-      }
+    HStack(alignment: .firstTextBaseline, spacing: 8) {
+      Text(redline)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+      Spacer(minLength: 8)
+      Text(summary)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
     }
   }
 
-  private func changeCell(label: String, text: String, isBefore: Bool) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(label)
-        .font(.caption.weight(.semibold))
-        .foregroundStyle(.secondary)
-      if text.isEmpty {
-        Text("Nothing")
-          .italic()
-          .foregroundStyle(.secondary)
-      } else {
-        Text(displayText(for: text))
-          .foregroundStyle(isBefore ? Color.red : Color.green)
-          .fontWeight(isBefore ? .regular : .semibold)
-          .strikethrough(isBefore)
-          .padding(.horizontal, 5)
-          .padding(.vertical, 3)
-          .background(
-            (isBefore ? Color.red : Color.green).opacity(isBefore ? 0.12 : 0.14)
-          )
-          .clipShape(RoundedRectangle(cornerRadius: 4))
-          .textSelection(.enabled)
-      }
-    }
-    .frame(maxWidth: .infinity, alignment: .leading)
-    .fixedSize(horizontal: false, vertical: true)
+  private var summary: String {
+    let count = "\(changes.count) change\(changes.count == 1 ? "" : "s")"
+    return categorySummary.isEmpty ? count : "\(count) · \(categorySummary)"
   }
 
+  private var redline: AttributedString {
+    var result = AttributedString()
+    for (index, change) in changes.enumerated() {
+      if index > 0 {
+        var separator = AttributedString(" · ")
+        separator.foregroundColor = .secondary
+        result += separator
+      }
+      var old = AttributedString(displayText(for: change.oldText))
+      old.foregroundColor = .red
+      old.strikethroughStyle = .single
+      result += old
+      result += AttributedString(" ")
+      var new = AttributedString(displayText(for: change.newText))
+      new.foregroundColor = .green
+      new.inlinePresentationIntent = .stronglyEmphasized
+      result += new
+    }
+    return result
+  }
+
+  /// Whitespace-only edits have no visible text to show, so they borrow the same prose
+  /// description VoiceOver gets ("a space", "a line break") rather than rendering as a gap.
   private func displayText(for text: String) -> String {
-    text.allSatisfy(\.isWhitespace)
+    if text.isEmpty { return "nothing" }
+    return text.allSatisfy(\.isWhitespace)
       ? AccessibleDiffSummary.describeChange(text)
       : text
   }
 }
+
 struct DiffSummaryAccessibilityElement: NSViewRepresentable {
   let changeCount: Int
   let summary: String

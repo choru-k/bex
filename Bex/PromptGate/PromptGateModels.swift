@@ -263,6 +263,34 @@ enum PromptGatePhase: Equatable, Sendable {
   case invalidated
 }
 
+/// One run of the masked payload as the consent sheet draws it: either prose that will
+/// leave the Mac, or a span that will not.
+struct OutboundSegment: Identifiable, Equatable, Sendable {
+  enum Content: Equatable, Sendable {
+    case text(String)
+    /// A withheld span, named by what it was recognized as ("path", "url", "flag", …).
+    case masked(kind: String)
+  }
+
+  let id: Int
+  let content: Content
+}
+
+/// One unranked expression alternative offered alongside a correction.
+///
+/// Deliberately carries no score, rank or "recommended" flag — non-negotiable 5 forbids
+/// ranking these, and the surest way to keep that true is for the type to have nowhere to
+/// put a rank.
+struct PromptGateAlternative: Identifiable, Equatable, Sendable {
+  let phrase: String
+  let alternative: String
+  let reason: String
+
+  /// Matches `ConsiderTap.id`, so a pick made here and a pick made in Learn are the same
+  /// decision and cannot mint two cards for one choice.
+  var id: String { "\(phrase)|\(alternative)" }
+}
+
 enum PromptGateKeyboardFocus: Equatable, Hashable, Sendable {
   case primaryAction
   case draftEditor

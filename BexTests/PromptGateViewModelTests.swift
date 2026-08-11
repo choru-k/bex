@@ -445,6 +445,94 @@ final class PromptGateViewModelTests: XCTestCase {
     }
   }
 
+  /// The alternatives panel is the sheet's only teaching, so what it offers has to come out
+  /// of the model's own "Consider:" section — and it must never carry a rank, a default, or
+  /// a pre-selected row (non-negotiable 5).
+  func testAlternativesComeFromTheConsiderSectionAndStartUnpicked() async throws {
+    let grammar = RecordingPromptGrammar(
+      explanation: """
+        Fixed:
+        [subject-verb-agreement] "are" → "is" — the subject is singular.
+
+        Consider:
+        "can you check" → "could you take a look" — softer, less like an order
+        "can you check" → "please verify" — more direct and formal
+        Which fits?
+        """
+    )
+    let fixture = try await Fixture(grammar: grammar)
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: "This are original.")))
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(
+      fixture.viewModel.alternatives.map(\.alternative),
+      ["could you take a look", "please verify"]
+    )
+    XCTAssertEqual(fixture.viewModel.alternativesPhrase, "can you check")
+    // "Which fits?" is prose with no arrow, so it must not become a pickable option.
+    XCTAssertEqual(fixture.viewModel.alternatives.count, 2)
+    XCTAssertNil(fixture.viewModel.pickedAlternativeID)
+    XCTAssertEqual(fixture.viewModel.changeCategorySummary, "Subject-verb agreement")
+  }
+
+  /// Picking records a Study card and leaves the message alone. Non-negotiable 5 forbids
+  /// auto-applying an alternative — a pick says "drill me on this", not "rewrite my text".
+  func testChoosingAnAlternativeRecordsATapWithoutTouchingTheCorrection() async throws {
+    let grammar = RecordingPromptGrammar(
+      explanation: """
+        Consider:
+        "can you check" → "please verify" — more direct and formal
+        """
+    )
+    let fixture = try await Fixture(grammar: grammar)
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: "This are original.")))
+    await fixture.viewModel.waitForCurrentWork()
+    let correctedBefore = try XCTUnwrap(fixture.viewModel.review?.corrected)
+
+    let alternative = try XCTUnwrap(fixture.viewModel.alternatives.first)
+    fixture.viewModel.choose(alternative)
+
+    XCTAssertEqual(fixture.viewModel.pickedAlternativeID, "can you check|please verify")
+    XCTAssertEqual(fixture.viewModel.review?.corrected, correctedBefore)
+
+    // The write is deliberately fire-and-forget so picking can never make Send wait, which
+    // is why this polls rather than awaiting the call itself.
+    var taps = await fixture.considerTaps.taps()
+    for _ in 0..<50 where taps.isEmpty {
+      try await Task.sleep(nanoseconds: 20_000_000)
+      taps = await fixture.considerTaps.taps()
+    }
+    XCTAssertEqual(taps.map(\.id), ["can you check|please verify"])
+    XCTAssertEqual(taps.first?.sourceOriginal, "This are original.")
+  }
+
+  /// The consent sheet draws each withheld span as a labelled chip, so the segments have to
+  /// come back in document order with the prose intact and every sentinel replaced.
+  func testOutboundSegmentsSplitProseFromMaskedSpans() async throws {
+    let fixture = try await Fixture(acceptedDisclosure: false)
+    let source = "I have the file /tmp/a.swift and use --dry-run please"
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: source)))
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.viewModel.phase, .onboarding)
+    let segments = fixture.viewModel.outboundSegments
+    XCTAssertEqual(segments.count, 5)
+    XCTAssertEqual(segments[0].content, .text("I have the file "))
+    XCTAssertEqual(segments[1].content, .masked(kind: "path"))
+    XCTAssertEqual(segments[2].content, .text(" and use "))
+    XCTAssertEqual(segments[3].content, .masked(kind: "flag"))
+    XCTAssertEqual(segments[4].content, .text(" please"))
+
+    XCTAssertEqual(fixture.viewModel.maskedSpanCount, 2)
+    XCTAssertTrue(fixture.viewModel.maskedSpanSummary.contains("2 spans stay on this Mac"))
+    // The chips are the whole point: no sentinel should be left for the owner to decode.
+    for segment in segments {
+      if case let .text(text) = segment.content {
+        XCTAssertFalse(text.contains("BEX_PROTECTED_"))
+      }
+    }
+  }
+
   /// The post-send micro-drill hangs off this callback, and non-negotiable 2 says it may
   /// never get in the way of shipping — so it has to fire *after* the prompt is delivered,
   /// naming where it went, and never when delivery failed and left the owner with
@@ -817,10 +905,14 @@ private actor RecordingPromptGrammar: PromptGrammarServicing {
   }
 
   private let mode: Mode
+  /// Explanation returned verbatim, so a test can hand the view model a real "Consider:"
+  /// section and exercise the expression-alternative parsing off it.
+  private let explanation: String
   private var calls: [PromptGrammarCall] = []
 
-  init(mode: Mode = .corrected) {
+  init(mode: Mode = .corrected, explanation: String = "Checked grammar.") {
     self.mode = mode
+    self.explanation = explanation
   }
 
   func checkPrompt(
@@ -839,7 +931,7 @@ private actor RecordingPromptGrammar: PromptGrammarServicing {
       mode == .unchanged
       ? text
       : text.replacingOccurrences(of: " are ", with: " is ")
-    return GrammarResult(corrected: corrected, explanation: "Checked grammar.")
+    return GrammarResult(corrected: corrected, explanation: explanation)
   }
 
   func checkPrompt(
@@ -860,7 +952,7 @@ private actor RecordingPromptGrammar: PromptGrammarServicing {
       : protectedText.masked.replacingOccurrences(of: " are ", with: " is ")
     return GrammarResult(
       corrected: try protectedText.restore(corrected),
-      explanation: "Checked grammar."
+      explanation: explanation
     )
   }
   func recordedCalls() -> [PromptGrammarCall] { calls }
@@ -994,6 +1086,10 @@ private final class Fixture {
   let responder = StubHookResponder()
   let receiptDirectory: URL
   let learningLogDirectory: URL
+  /// Pointed at a temp directory so a test that picks an expression alternative cannot
+  /// write a Study card into the real `~/Library/Application Support/Bex`.
+  let considerTaps: ConsiderTapStore
+  let considerTapDirectory: URL
   /// Names passed to `onDelivered`, in order. The post-send micro-drill hangs off this
   /// callback, so "did it fire, and only on a clean send" is worth pinning down.
   let deliveries = DeliveryRecorder()
@@ -1032,6 +1128,10 @@ private final class Fixture {
     let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
     target = StubPromptTarget(isAccessibilityTrusted: accessibilityTrusted)
 
+    considerTapDirectory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PromptGateConsiderTaps-\(UUID().uuidString)", isDirectory: true)
+    considerTaps = ConsiderTapStore(directoryURL: considerTapDirectory)
+
     let deliveries = self.deliveries
     viewModel = PromptGateViewModel(
       preferences: preferences,
@@ -1042,6 +1142,7 @@ private final class Fixture {
       hookManager: hooks,
       hookResponder: responder,
       learningLog: learningLog,
+      considerTaps: considerTaps,
       onClose: {},
       onOpenSettings: {},
       onDelivered: { deliveries.targetNames.append($0) }
@@ -1049,6 +1150,7 @@ private final class Fixture {
   }
 
   deinit {
+    try? FileManager.default.removeItem(at: considerTapDirectory)
     try? FileManager.default.removeItem(at: receiptDirectory)
     try? FileManager.default.removeItem(at: learningLogDirectory)
     UserDefaults.standard.removePersistentDomain(forName: suite)

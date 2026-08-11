@@ -513,6 +513,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         hookManager: services.hookManager,
         hookResponder: services.promptGateIPC,
         learningLog: services.learningLog,
+        considerTaps: services.considerTaps,
         onClose: { [weak self] in self?.closePromptGate() },
         onOpenSettings: { [weak self] in self?.showSettings(origin: .fixAndSend) },
         onDelivered: { [weak self] targetName in

@@ -39,6 +39,13 @@ final class PromptGateViewModel: ObservableObject {
   private let hookManager: any HookInstallationManaging
   private let hookResponder: any HookReviewResponding
   private let learningLog: LearningLogStore
+  /// Which alternative the owner picked for this correction, or `nil` for "not yet".
+  ///
+  /// Never pre-set. Non-negotiable 5 means there is no default answer to offer, and a
+  /// pre-selected radio would be a ranking by another name.
+  @Published private(set) var pickedAlternativeID: String?
+
+  private let considerTaps: ConsiderTapStore
   private let closePanel: @MainActor () -> Void
   private let openSettingsCallback: @MainActor () -> Void
   /// Called once, with the target application's name, after a prompt has fully shipped.
@@ -70,6 +77,7 @@ final class PromptGateViewModel: ObservableObject {
     hookManager: any HookInstallationManaging,
     hookResponder: any HookReviewResponding,
     learningLog: LearningLogStore = LearningLogStore(),
+    considerTaps: ConsiderTapStore = ConsiderTapStore(),
     onClose: @escaping @MainActor () -> Void,
     onOpenSettings: @escaping @MainActor () -> Void,
     onDelivered: @escaping @MainActor (String) -> Void = { _ in }
@@ -82,6 +90,7 @@ final class PromptGateViewModel: ObservableObject {
     self.hookManager = hookManager
     self.hookResponder = hookResponder
     self.learningLog = learningLog
+    self.considerTaps = considerTaps
     closePanel = onClose
     openSettingsCallback = onOpenSettings
     deliveredCallback = onDelivered
@@ -175,6 +184,59 @@ final class PromptGateViewModel: ObservableObject {
       "Bex will send the masked payload below to \(destination.disclosureTarget), model \(destination.model)."
   }
 
+  /// The unranked expression alternatives this correction offered.
+  ///
+  /// Computed from the review rather than stored, so it cannot drift out of sync with the
+  /// explanation it was parsed from — and so an edit-and-recheck automatically re-derives it
+  /// instead of leaving the previous correction's options on screen.
+  var alternatives: [PromptGateAlternative] {
+    guard let review else { return [] }
+    return LearningAggregator.parseConsiderSuggestions(from: review.explanation)
+      .compactMap { LearningAggregator.parseSuggestionLine($0) }
+      .map {
+        PromptGateAlternative(phrase: $0.phrase, alternative: $0.alternative, reason: $0.reason)
+      }
+  }
+
+  /// The phrase every alternative in this batch is offered for, e.g. "can you check".
+  var alternativesPhrase: String {
+    alternatives.first?.phrase ?? ""
+  }
+
+  /// Records which alternative the owner would actually say, minting a Study card from it.
+  ///
+  /// Two rules meet here. Non-negotiable 5: this never rewrites the final message — a pick
+  /// says "drill me on this", not "change my text", so the correction on screen is
+  /// untouched. Non-negotiable 2: the write is fire-and-forget, so picking can never make
+  /// Send wait on a disk write.
+  func choose(_ alternative: PromptGateAlternative) {
+    guard let review, pickedAlternativeID != alternative.id else { return }
+    pickedAlternativeID = alternative.id
+    let original = review.original
+    Task { [considerTaps] in
+      await considerTaps.record(
+        sourceOriginal: original,
+        phrase: alternative.phrase,
+        alternative: alternative.alternative,
+        reason: alternative.reason
+      )
+    }
+  }
+
+  /// The grammar rules this correction touched, e.g. "Subject–verb agreement, Spelling".
+  /// Reads the model's own `[tag]`s rather than guessing from the diff, so the summary line
+  /// beside the redline says what kind of mistake it was, not just how many there were.
+  var changeCategorySummary: String {
+    guard let review else { return "" }
+    var seen: [String] = []
+    for line in LearningAggregator.linesUnderFixed(in: review.explanation) {
+      guard let tag = LearningAggregator.leadingTag(in: line) else { continue }
+      let name = GrammarCategory(rawValue: tag)?.displayName ?? tag
+      if !seen.contains(name) { seen.append(name) }
+    }
+    return seen.joined(separator: ", ")
+  }
+
   var protectedSpanDisclosure: String {
     let kinds = PromptTechnicalSpanProtector.userFacingProtectedSpanKinds.joined(separator: ", ")
     let provider =
@@ -186,6 +248,47 @@ final class PromptGateViewModel: ObservableObject {
 
   var outboundPayload: String {
     pendingCorrection?.protectedText.masked ?? ""
+  }
+
+  /// The masked payload split into prose and the spans held back.
+  ///
+  /// The consent sheet used to show raw `[[[BEX_PROTECTED_…]]]` placeholders inline, which
+  /// asked the owner to read a sentinel and infer that something had been withheld.
+  /// Segments let the sheet draw each one as a labelled chip instead, so "what leaves this
+  /// Mac" is legible at a glance — the only thing non-negotiable 3 actually cares about
+  /// them understanding.
+  var outboundSegments: [OutboundSegment] {
+    guard let protectedText = pendingCorrection?.protectedText else { return [] }
+    var segments: [OutboundSegment] = []
+    var rest = Substring(protectedText.masked)
+    for (index, sentinel) in protectedText.sentinels.enumerated() {
+      guard let range = rest.range(of: sentinel) else { continue }
+      let before = rest[..<range.lowerBound]
+      if !before.isEmpty {
+        segments.append(OutboundSegment(id: segments.count, content: .text(String(before))))
+      }
+      let kind = index < protectedText.kinds.count ? protectedText.kinds[index] : "masked"
+      segments.append(OutboundSegment(id: segments.count, content: .masked(kind: kind)))
+      rest = rest[range.upperBound...]
+    }
+    if !rest.isEmpty {
+      segments.append(OutboundSegment(id: segments.count, content: .text(String(rest))))
+    }
+    return segments
+  }
+
+  var maskedSpanCount: Int {
+    pendingCorrection?.protectedText.sentinels.count ?? 0
+  }
+
+  /// How many spans stayed behind, said plainly. Masking is best-effort and `docs/purpose.md`
+  /// requires that limit be stated rather than implied, so this counts what was caught and
+  /// never claims the text is clean.
+  var maskedSpanSummary: String {
+    let count = maskedSpanCount
+    guard count > 0 else { return "No technical spans were recognized in this prompt." }
+    return "\(count) span\(count == 1 ? "" : "s") stay\(count == 1 ? "s" : "") on this Mac and "
+      + "\(count == 1 ? "is" : "are") restored after correction."
   }
 
   var confirmationActionLabel: String {
@@ -599,6 +702,9 @@ final class PromptGateViewModel: ObservableObject {
     self.review = nil
     errorMessage = nil
     deliveryFailureEffect = nil
+    // A recheck produces its own alternatives; carrying the old pick over would leave a
+    // radio selected against a list it no longer belongs to.
+    pickedAlternativeID = nil
     phase = .composing
     requestFocus(keyboard: .draftEditor, accessibility: .composerHeading)
     announce("Back to the prompt editor. The correction is checkpointed.")
@@ -1218,6 +1324,7 @@ final class PromptGateViewModel: ObservableObject {
     replacementConfirmedDraft = nil
     isClosing = false
     isLoadingSession = false
+    pickedAlternativeID = nil
     deliveryFailureEffect = nil
     errorMessage = nil
     showsDiscardConfirmation = false

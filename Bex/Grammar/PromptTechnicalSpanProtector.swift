@@ -4,11 +4,22 @@ struct PromptTechnicalSpanProtector: Sendable {
   struct ProtectedText: Sendable {
     let masked: String
     let sentinels: [String]
+    /// What each sentinel replaced — "path", "url", "flag" and so on, parallel to
+    /// `sentinels`. Display only: the consent sheet labels each masked span so the owner
+    /// can see *what* is being held back at a glance instead of reading a placeholder.
+    /// Nothing about masking or restoration reads this.
+    let kinds: [String]
     private let originals: [String]
 
-    fileprivate init(masked: String, sentinels: [String], originals: [String]) {
+    fileprivate init(
+      masked: String,
+      sentinels: [String],
+      kinds: [String],
+      originals: [String]
+    ) {
       self.masked = masked
       self.sentinels = sentinels
+      self.kinds = kinds
       self.originals = originals
     }
 
@@ -88,62 +99,71 @@ struct PromptTechnicalSpanProtector: Sendable {
 
   func protect(_ text: String) -> ProtectedText {
     let source = text as NSString
-    var claimed: [NSRange] = []
+    var claimed: [(range: NSRange, kind: String)] = []
 
     func overlapsClaimed(_ range: NSRange) -> Bool {
-      claimed.contains { NSIntersectionRange($0, range).length > 0 }
+      claimed.contains { NSIntersectionRange($0.range, range).length > 0 }
     }
 
-    func claim(_ range: NSRange) {
+    // The kind travels with the range from the pattern that matched it, purely so the
+    // consent sheet can label the chip. First claim wins, exactly as before.
+    func claim(_ range: NSRange, _ kind: String) {
       guard range.length > 0, !overlapsClaimed(range) else { return }
-      claimed.append(range)
+      claimed.append((range, kind))
     }
 
     for range in fencedBlockRanges(in: source) {
-      claim(range)
+      claim(range, "code")
     }
-    for range in inlineCodeRanges(in: source, excluding: claimed) {
-      claim(range)
+    for range in inlineCodeRanges(in: source, excluding: claimed.map(\.range)) {
+      claim(range, "code")
     }
     for pattern in Self.templatePatterns {
       for range in regexRanges(pattern, in: source, options: [.dotMatchesLineSeparators]) {
-        claim(range)
+        claim(range, "template")
       }
     }
     for range in regexRanges(Self.tagPattern, in: source) {
-      claim(range)
+      claim(range, "tag")
     }
     if let detector = try? NSDataDetector(
       types: NSTextCheckingResult.CheckingType.link.rawValue
     ) {
       let whole = NSRange(location: 0, length: source.length)
       for match in detector.matches(in: text, options: [], range: whole) {
-        claim(match.range)
+        claim(match.range, "url")
       }
     }
     for range in regexRanges(Self.pathPattern, in: source) {
-      claim(range)
+      claim(range, "path")
     }
     for range in regexRanges(Self.flagPattern, in: source) {
-      claim(range)
+      claim(range, "flag")
     }
     for range in regexRanges(Self.variablePattern, in: source) {
-      claim(range)
+      claim(range, "variable")
     }
     for range in regexRanges(Self.mentionPattern, in: source) {
-      claim(range)
+      claim(range, "mention")
     }
 
     let ordered = claimed.sorted { lhs, rhs in
-      lhs.location == rhs.location ? lhs.length < rhs.length : lhs.location < rhs.location
+      lhs.range.location == rhs.range.location
+        ? lhs.range.length < rhs.range.length
+        : lhs.range.location < rhs.range.location
     }
     let sentinels = ordered.indices.map { "[[[BEX_PROTECTED_\(identifier)_\($0)]]]" }
-    let originals = ordered.map { source.substring(with: $0) }
+    let originals = ordered.map { source.substring(with: $0.range) }
     let masked = NSMutableString(string: text)
     for ordinal in ordered.indices.reversed() {
-      masked.replaceCharacters(in: ordered[ordinal], with: sentinels[ordinal])
+      masked.replaceCharacters(in: ordered[ordinal].range, with: sentinels[ordinal])
     }
-    return ProtectedText(masked: masked as String, sentinels: sentinels, originals: originals)
+    return ProtectedText(
+      masked: masked as String,
+      sentinels: sentinels,
+      kinds: ordered.map(\.kind),
+      originals: originals
+    )
   }
 
   private func regexRanges(

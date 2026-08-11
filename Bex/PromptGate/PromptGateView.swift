@@ -12,8 +12,8 @@ struct PromptGateView: View {
   @ObservedObject var viewModel: PromptGateViewModel
   @FocusState private var keyboardFocus: PromptGateKeyboardFocus?
   @AccessibilityFocusState private var accessibilityFocus: PromptGateAccessibilityFocus?
-  @State private var isOriginalExpanded = false
-  @State private var isAINoteExpanded = false
+  @State private var isDetailsExpanded = false
+  @State private var isMaskingExpanded = false
 
   var body: some View {
     GeometryReader { geometry in
@@ -35,8 +35,8 @@ struct PromptGateView: View {
       minHeight: PromptGatePanelLayout.minimumContentSize.height
     )
     .onChange(of: viewModel.session?.id) { _ in
-      isOriginalExpanded = false
-      isAINoteExpanded = false
+      isDetailsExpanded = false
+      isMaskingExpanded = false
     }
     .onExitCommand { viewModel.cancel() }
     .onReceive(viewModel.$focusRequest.compactMap { $0 }) { request in
@@ -123,22 +123,68 @@ struct PromptGateView: View {
 
       Text(viewModel.providerDisclosure)
 
-      GroupBox("Masked payload sent for correction") {
-        Text(viewModel.outboundPayload)
-          .font(.body.monospaced())
-          .textSelection(.enabled)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .accessibilityLabel("Masked Prompt Gate payload")
-          .accessibilityValue(viewModel.outboundPayload)
-          .accessibilityIdentifier("prompt-gate-outbound-payload")
-      }
+      // The payload with every withheld span drawn as a chip rather than as a
+      // `[[[BEX_PROTECTED_…]]]` placeholder. Same guarantee, but now readable in one look:
+      // this is the sentence that leaves, and those are the pieces that do not.
+      Text(maskedPayloadText)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .overlay {
+          RoundedRectangle(cornerRadius: 8)
+            .stroke(Color(nsColor: .separatorColor))
+        }
+        .accessibilityLabel("Masked Prompt Gate payload")
+        .accessibilityValue(viewModel.outboundPayload)
+        .accessibilityIdentifier("prompt-gate-outbound-payload")
 
-      Text(viewModel.protectedSpanDisclosure)
+      Text(viewModel.maskedSpanSummary)
+        .font(.caption)
         .foregroundStyle(.secondary)
-        .accessibilityIdentifier("prompt-gate-protected-span-disclosure")
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityIdentifier("prompt-gate-masked-span-summary")
+
+      DisclosureGroup(isExpanded: $isMaskingExpanded) {
+        Text(viewModel.protectedSpanDisclosure)
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+          .padding(.top, 6)
+          .accessibilityIdentifier("prompt-gate-protected-span-disclosure")
+      } label: {
+        Button("What masking covers") { isMaskingExpanded.toggle() }
+          .buttonStyle(.plain)
+          .accessibilityIdentifier("prompt-gate-masking-disclosure")
+      }
 
       permissionSection
     }
+  }
+
+  /// The masked payload as one flowing attributed string: prose in monospace, each withheld
+  /// span as a lock chip naming what it was.
+  ///
+  /// An `AttributedString` rather than real chip views because macOS 13 has no wrapping
+  /// stack, and a payload has to wrap — a row of views would either clip or scroll
+  /// sideways, and a payload the owner cannot fully read is not a payload they can approve.
+  private var maskedPayloadText: AttributedString {
+    var result = AttributedString()
+    for segment in viewModel.outboundSegments {
+      switch segment.content {
+      case let .text(text):
+        var run = AttributedString(text)
+        run.font = .body.monospaced()
+        result += run
+      case let .masked(kind):
+        var run = AttributedString(" 🔒 \(kind) ")
+        run.font = .caption.weight(.semibold)
+        run.foregroundColor = .green
+        run.backgroundColor = .green.opacity(0.16)
+        result += run
+      }
+    }
+    return result
   }
 
   private var composer: some View {
@@ -188,8 +234,10 @@ struct PromptGateView: View {
       if let review = viewModel.review {
         let changes = DiffChange.make(from: review.diff)
         VStack(alignment: .leading, spacing: 6) {
-          Text("Final Message — Editable")
-            .font(.headline)
+          Text("Final message · editable")
+            .font(.caption.weight(.semibold))
+            .textCase(.uppercase)
+            .foregroundStyle(.secondary)
             .accessibilityAddTraits(.isHeader)
             .accessibilityFocused($accessibilityFocus, equals: .finalMessageHeading)
             .accessibilityIdentifier("prompt-gate-final-message-heading")
@@ -197,116 +245,216 @@ struct PromptGateView: View {
             review.corrected,
             height: PromptGateLayout.finalEditorHeight(for: availableHeight)
           )
+          // The redline sits directly under the message it describes, one line, so "what
+          // did it change" is answered without reading a second panel.
+          if changes.isEmpty {
+            Text("No grammar changes. You can still edit the final message.")
+              .font(.caption)
+              .foregroundStyle(.secondary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("prompt-gate-no-changes")
+          } else {
+            DiffRedline(changes: changes, categorySummary: viewModel.changeCategorySummary)
+              .accessibilityHidden(true)
+              .overlay {
+                DiffSummaryAccessibilityElement(
+                  changeCount: changes.count,
+                  summary: viewModel.accessibleDiffSummary
+                )
+              }
+          }
         }
 
         error
 
-        if changes.isEmpty {
-          VStack(alignment: .leading, spacing: 3) {
-            Text("No Changes")
-              .font(.headline)
-              .accessibilityIdentifier("prompt-gate-no-changes")
-            Text("Bex found no grammar changes. You can still edit the final message.")
+        alternativesPanel
+
+        details(review: review)
+      }
+    }
+  }
+
+  /// The unranked alternatives, given the most visual weight on the sheet.
+  ///
+  /// This used to be a grey bullet list under the diff, which had it exactly backwards:
+  /// `docs/purpose.md` says correcting and teaching are separate jobs and *teaching is the
+  /// higher priority*, and this panel is the only teaching on the sheet. The grammar fixes
+  /// are already applied and need no decision; this is the one thing asking the owner to
+  /// think.
+  @ViewBuilder
+  private var alternativesPanel: some View {
+    let alternatives = viewModel.alternatives
+    if !alternatives.isEmpty {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack(alignment: .firstTextBaseline) {
+          Text("Which fits?")
+            .font(.headline)
+            .accessibilityAddTraits(.isHeader)
+          Text("— your pick becomes a Study card")
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+          Spacer(minLength: 8)
+          if !viewModel.alternativesPhrase.isEmpty {
+            Text("for “\(viewModel.alternativesPhrase)”")
+              .font(.caption)
+              .foregroundStyle(.tertiary)
+          }
+        }
+        .accessibilityIdentifier("prompt-gate-better-expression")
+
+        ForEach(alternatives) { alternative in
+          alternativeRow(alternative)
+        }
+
+        Text("Unranked — pick what you would actually say, or skip; ⌘⏎ sends as-is.")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+          .fixedSize(horizontal: false, vertical: true)
+          .accessibilityIdentifier("prompt-gate-alternatives-unranked-note")
+      }
+      .padding(14)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+      .overlay {
+        RoundedRectangle(cornerRadius: 10)
+          .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
+      }
+    }
+  }
+
+  private func alternativeRow(_ alternative: PromptGateAlternative) -> some View {
+    let isPicked = viewModel.pickedAlternativeID == alternative.id
+    return Button {
+      viewModel.choose(alternative)
+    } label: {
+      HStack(alignment: .top, spacing: 10) {
+        Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
+          .foregroundStyle(isPicked ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
+        VStack(alignment: .leading, spacing: 2) {
+          Text(alternative.alternative)
+            .fontWeight(.medium)
+          if !alternative.reason.isEmpty {
+            Text(alternative.reason)
+              .font(.caption)
               .foregroundStyle(.secondary)
               .fixedSize(horizontal: false, vertical: true)
           }
-        } else {
-          DiffChangeRows(changes: changes)
-            .accessibilityHidden(true)
-            .overlay {
-              DiffSummaryAccessibilityElement(
-                changeCount: changes.count,
-                summary: viewModel.accessibleDiffSummary
-              )
-            }
         }
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 12)
+      .padding(.vertical, 9)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .contentShape(Rectangle())
+      .background(
+        RoundedRectangle(cornerRadius: 9)
+          .fill(isPicked ? AnyShapeStyle(.tint.opacity(0.16)) : AnyShapeStyle(.quaternary))
+      )
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(isPicked ? [.isSelected] : [])
+    .accessibilityIdentifier("prompt-gate-alternative-\(alternative.id)")
+  }
 
-        let betterExpressionSuggestions = LearningAggregator.parseConsiderSuggestions(
-          from: review.explanation
-        )
-        if !betterExpressionSuggestions.isEmpty {
-          VStack(alignment: .leading, spacing: 6) {
-            Label("Better expression", systemImage: "lightbulb")
-              .font(.headline)
-              .accessibilityAddTraits(.isHeader)
-              .accessibilityIdentifier("prompt-gate-better-expression")
-            ForEach(Array(betterExpressionSuggestions.enumerated()), id: \.offset) {
-              index, suggestion in
-              Text("• \(suggestion)")
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("prompt-gate-suggestion-\(index)")
-            }
-          }
-        }
-
-        DisclosureGroup(isExpanded: $isOriginalExpanded) {
+  /// Everything that used to have its own heading: the original message, the model's grammar
+  /// notes, the provider, and what each delivery button does.
+  ///
+  /// One disclosure instead of four sections. None of it is a decision — it is all there to
+  /// be checked when something looks wrong, and four open panels of reference material was
+  /// what pushed the actual choice off the bottom of the sheet.
+  @ViewBuilder
+  private func details(review: PromptGateReview) -> some View {
+    DisclosureGroup(isExpanded: $isDetailsExpanded) {
+      VStack(alignment: .leading, spacing: 12) {
+        detailSection("Original message") {
           Text(review.original)
-            .frame(maxWidth: .infinity, alignment: .leading)
             .textSelection(.enabled)
-            .padding(.top, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel("Original message, read only")
             .accessibilityValue(review.original)
             .accessibilityIdentifier("prompt-gate-original")
-        } label: {
-          Button("Original Message") { isOriginalExpanded.toggle() }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("prompt-gate-original-disclosure")
         }
 
         let grammarNotes = LearningAggregator.explanationWithoutConsider(from: review.explanation)
         if !grammarNotes.isEmpty {
-          DisclosureGroup(isExpanded: $isAINoteExpanded) {
+          detailSection("Grammar notes") {
             VStack(alignment: .leading, spacing: 6) {
               Text(grammarNotes)
-                .foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .accessibilityIdentifier("prompt-gate-explanation")
               if review.hasHumanEdits {
-                Text("This AI note describes the original suggestion and may not reflect your edits.")
-                  .font(.caption)
-                  .foregroundStyle(.secondary)
-                  .fixedSize(horizontal: false, vertical: true)
-                  .accessibilityIdentifier("prompt-gate-ai-note-stale")
+                Text(
+                  "This AI note describes the original suggestion and may not reflect your edits."
+                )
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("prompt-gate-ai-note-stale")
               }
             }
-            .padding(.top, 6)
-          } label: {
-            Button("Grammar notes") { isAINoteExpanded.toggle() }
-              .buttonStyle(.plain)
-              .accessibilityIdentifier("prompt-gate-ai-note-disclosure")
+            .frame(maxWidth: .infinity, alignment: .leading)
+          }
+        }
+
+        if let target = viewModel.session?.target {
+          detailSection("Delivery") {
+            VStack(alignment: .leading, spacing: 6) {
+              Text(viewModel.deliveryGuidanceIntroduction)
+                .fixedSize(horizontal: false, vertical: true)
+              ForEach(target.availableDeliveryActions, id: \.self) { action in
+                Text(
+                  "\(viewModel.deliveryActionLabel(action)): "
+                    + viewModel.deliveryEffectDescription(for: action)
+                )
+                .fixedSize(horizontal: false, vertical: true)
+              }
+              if viewModel.session?.hookRequestID != nil,
+                viewModel.hookClientStatus.permitsReceipt
+              {
+                Text(
+                  "Approval is acknowledged for this request only and expires after two minutes."
+                )
+                .fixedSize(horizontal: false, vertical: true)
+              }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("prompt-gate-delivery-guidance")
           }
         }
       }
-
-      if let target = viewModel.session?.target {
-        GroupBox("Delivery") {
-          VStack(alignment: .leading, spacing: 6) {
-            Text(viewModel.deliveryGuidanceIntroduction)
-              .fixedSize(horizontal: false, vertical: true)
-            ForEach(target.availableDeliveryActions, id: \.self) { action in
-              Text(
-                "\(viewModel.deliveryActionLabel(action)): \(viewModel.deliveryEffectDescription(for: action))"
-              )
-              .fixedSize(horizontal: false, vertical: true)
-            }
-            if viewModel.session?.hookRequestID != nil,
-              viewModel.hookClientStatus.permitsReceipt
-            {
-              Text(
-                "Approval is acknowledged for this request only and expires after two minutes."
-              )
-              .fixedSize(horizontal: false, vertical: true)
-            }
-          }
+      .padding(.top, 8)
+    } label: {
+      Button {
+        isDetailsExpanded.toggle()
+      } label: {
+        // States plainly that nothing has left yet — the reassurance belongs on the label,
+        // where it is read, not inside a panel nobody opened.
+        Text(detailsSummary)
           .font(.caption)
           .foregroundStyle(.secondary)
-          .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityIdentifier("prompt-gate-delivery-guidance")
       }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("prompt-gate-details-disclosure")
     }
+  }
+
+  private var detailsSummary: String {
+    "Details — original message · grammar notes · checked by "
+      + "\(viewModel.selectedProvider.displayName) \(viewModel.selectedModel) · nothing sent yet"
+  }
+
+  private func detailSection<Content: View>(
+    _ title: String,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 4) {
+      Text(title)
+        .font(.caption.weight(.semibold))
+        .textCase(.uppercase)
+        .foregroundStyle(.tertiary)
+      content()
+    }
+    .font(.callout)
+    .foregroundStyle(.secondary)
   }
 
   private func correctedEditor(_ value: String, height: CGFloat) -> some View {
