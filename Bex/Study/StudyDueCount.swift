@@ -45,6 +45,26 @@ enum StudyDueCount {
     }
   }
 
+  /// Rough seconds one drill card costs, used only to phrase the workload as a price.
+  //
+  // ponytail: a flat per-card constant, not a rolling average of the owner's real answer
+  // times. Ceiling: if the estimate ever reads as wrong, time the drill and average the
+  // last few answers here instead.
+  private static let secondsPerCard: Double = 24
+
+  /// The menu-bar hub's header line: what today's remaining stack *costs*, not how many
+  /// cards it is.
+  ///
+  /// A count is the wrong unit for the thing non-negotiable 6 asks for. "5 cards" reads
+  /// as a queue with a number attached; "2 min today" reads as a price the owner can
+  /// decide to pay right now, and it shrinks visibly with every card cleared. Zero says
+  /// so plainly rather than reporting "0 min".
+  static func costLabel(remaining: Int) -> String {
+    guard remaining > 0 else { return "Nothing due" }
+    let minutes = max(1, Int((Double(remaining) * secondsPerCard / 60).rounded()))
+    return "\(minutes) min today"
+  }
+
   /// What the single menu-bar status-item title should show. `AppDelegate` has exactly
   /// one slot (the status item's title/badge) but two things that want it: Study's due
   /// count and `LearningBadge`'s "new corrections" count. This struct is the answer;

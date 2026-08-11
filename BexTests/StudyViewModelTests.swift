@@ -338,4 +338,53 @@ final class StudyViewModelTests: XCTestCase {
     XCTAssertEqual(viewModel.sessionTotal, StudyDailyPlan.newCardBatchSize)
     XCTAssertEqual(viewModel.sessionTotal, 10)
   }
+
+  /// The menu-bar hub and the Learn deck share one instance, and both call
+  /// `loadIfNeeded()` every time they appear. If that reloaded mid-session it would reset
+  /// `completedCount` and reshuffle the queue — rewinding the progress dots and
+  /// re-presenting the card the owner is looking at.
+  func testLoadIfNeededPreservesAnInFlightSession() async {
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+    await appendEntry(to: learningLog, wrong: "at", correct: "to")
+
+    let viewModel = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
+    await viewModel.loadIfNeeded()
+    XCTAssertEqual(viewModel.sessionTotal, 2)
+    XCTAssertEqual(viewModel.remainingCount, 2)
+
+    await viewModel.select(viewModel.currentCard?.correct ?? "")
+    viewModel.advance()
+    let cardMidSession = viewModel.currentCard?.id
+    XCTAssertEqual(viewModel.completedCount, 1)
+    XCTAssertEqual(viewModel.remainingCount, 1)
+
+    await viewModel.loadIfNeeded()
+
+    XCTAssertEqual(viewModel.completedCount, 1, "reopening a surface must not rewind progress")
+    XCTAssertEqual(viewModel.currentCard?.id, cardMidSession)
+  }
+
+  /// The other half of the guard: once the session is spent, reopening either surface
+  /// should pick up anything that has come due since rather than showing "done" forever.
+  func testLoadIfNeededRebuildsAFinishedSession() async {
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+
+    let viewModel = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
+    await viewModel.loadIfNeeded()
+    await viewModel.select(viewModel.currentCard?.correct ?? "")
+    viewModel.advance()
+    XCTAssertTrue(viewModel.isFinished)
+
+    await appendEntry(to: learningLog, wrong: "at", correct: "to")
+    await viewModel.loadIfNeeded()
+
+    XCTAssertEqual(viewModel.completedCount, 0)
+    XCTAssertEqual(viewModel.currentCard?.id, cardID(wrong: "at", correct: "to"))
+  }
 }

@@ -18,15 +18,32 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   private var promptGateReinvokeCancellable: AnyCancellable?
   private var pendingManualFixAndSendDraft: String?
   private var welcomeWindowController: NSWindowController?
-  private var historyWindowController: NSWindowController?
-  private var learningWindowController: NSWindowController?
-  private var studyWindowController: NSWindowController?
-  private var profilesWindowController: NSWindowController?
-  private var settingsWindowController: NSWindowController?
-  private var settingsViewModel: SettingsViewModel?
-  /// Set by `AppDelegate` after construction so opening Learning can refresh the
+  private var mainWindowController: NSWindowController?
+  private var mainWindowModel: MainWindowModel?
+  private var mainWindowPageCancellable: AnyCancellable?
+  private var studyViewModel: StudyViewModel?
+  /// Set by `AppDelegate` after construction so opening Learn can refresh the
   /// menu-bar badge it owns, without `WindowCoordinator` holding a reference back to it.
   var onLearningViewed: (() -> Void)?
+
+  /// The one drill session, shared by the menu-bar hub and the Learn deck.
+  ///
+  /// Two instances would mean two queues over the same persisted state: a card cleared in
+  /// the popover would still be sitting in the window's session, and the owner would be
+  /// asked the same question twice. Sharing one makes "clear a card from the menu bar" and
+  /// "keep going in the window" the same session, which is exactly what the redesign
+  /// promises. Created on first use so launch does not read the learning log before
+  /// anything has asked for a card.
+  func studyDrill() -> StudyViewModel {
+    if let studyViewModel { return studyViewModel }
+    let viewModel = StudyViewModel(
+      learningLog: services.learningLog,
+      considerTaps: services.considerTaps,
+      studyState: services.studyState
+    )
+    studyViewModel = viewModel
+    return viewModel
+  }
   struct StandardWindowConfiguration {
     let title: String
     let defaultContentSize: NSSize
@@ -41,35 +58,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     frameAutosaveName: "Bex.WelcomeWindow"
   )
 
-  static let historyWindowConfiguration = StandardWindowConfiguration(
-    title: "History",
-    defaultContentSize: NSSize(width: 760, height: 560),
-    minimumContentSize: NSSize(width: 620, height: 400),
-    frameAutosaveName: "Bex.HistoryWindow"
-  )
-  static let learningWindowConfiguration = StandardWindowConfiguration(
-    title: "Learning",
-    defaultContentSize: NSSize(width: 620, height: 520),
-    minimumContentSize: NSSize(width: 480, height: 360),
-    frameAutosaveName: "Bex.LearningWindow"
-  )
-  static let studyWindowConfiguration = StandardWindowConfiguration(
-    title: "Study",
-    defaultContentSize: NSSize(width: 620, height: 520),
-    minimumContentSize: NSSize(width: 480, height: 360),
-    frameAutosaveName: "Bex.StudyWindow"
-  )
-  static let writingStylesWindowConfiguration = StandardWindowConfiguration(
-    title: "Writing Styles",
-    defaultContentSize: NSSize(width: 620, height: 520),
-    minimumContentSize: NSSize(width: 580, height: 360),
-    frameAutosaveName: "Bex.WritingStylesWindow"
-  )
-  static let settingsWindowConfiguration = StandardWindowConfiguration(
-    title: "Settings",
-    defaultContentSize: NSSize(width: 640, height: 620),
-    minimumContentSize: NSSize(width: 520, height: 480),
-    frameAutosaveName: "Bex.SettingsWindow"
+  /// The one window. Replaces the five separate configurations Bex used to keep — History,
+  /// Learning, Study, Writing Styles and Settings each had their own frame, title and
+  /// autosave name, which is five windows the owner had to find and arrange for one app.
+  /// Sized to hold the widest page (Settings) next to a 196pt sidebar.
+  static let mainWindowConfiguration = StandardWindowConfiguration(
+    title: "Bex",
+    defaultContentSize: NSSize(width: 920, height: 560),
+    minimumContentSize: NSSize(width: 720, height: 440),
+    frameAutosaveName: "Bex.MainWindow"
   )
 
   init(services: AppServices) {
@@ -138,7 +135,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           return
         }
         quickCheckViewModel.replaceDraft(with: draft)
-        historyWindowController?.close()
+        mainWindowController?.close()
         quickCheckPanelController?.show()
       }
     } else {
@@ -256,42 +253,72 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     show(welcomeWindowController)
   }
 
-  func showHistory() {
+  /// Brings up the one window on `page`, building it the first time.
+  ///
+  /// Every former `showHistory()`/`showLearning()`/`showStudy()`/`showProfiles()` call
+  /// site funnels through here, so "open Bex at Writing Styles" and "the owner clicked
+  /// Writing Styles in the sidebar" are the same operation and cannot drift apart.
+  func showMain(_ page: MainWindowPage) {
     quickCheckViewModel?.dismiss(.auxiliaryNavigation)
-    if historyWindowController == nil {
-      let viewModel = HistoryViewModel(
-        data: services.data,
-        useAsNewInput: { [weak self] text in
-          self?.replaceQuickCheckDraftFromHistory(with: text)
-        },
-        openQuickCheck: { [weak self] in
-          self?.historyWindowController?.close()
-          self?.showQuickCheck()
-        }
+    if mainWindowController == nil {
+      let model = MainWindowModel(
+        page: page,
+        study: studyDrill(),
+        learning: LearningViewModel(
+          learningLog: services.learningLog,
+          considerTaps: services.considerTaps
+        ),
+        history: HistoryViewModel(
+          data: services.data,
+          useAsNewInput: { [weak self] text in
+            self?.replaceQuickCheckDraftFromHistory(with: text)
+          },
+          openQuickCheck: { [weak self] in
+            self?.mainWindowController?.close()
+            self?.showQuickCheck()
+          }
+        ),
+        profiles: ProfilesViewModel(
+          data: services.data,
+          preferences: services.preferences,
+          grammar: services.grammar
+        ),
+        settings: makeSettingsViewModel()
       )
-      historyWindowController = Self.makeWindowController(
-        configuration: Self.historyWindowConfiguration,
-        rootView: HistoryView(viewModel: viewModel),
+      mainWindowModel = model
+      mainWindowController = Self.makeWindowController(
+        configuration: Self.mainWindowConfiguration,
+        rootView: BexMainWindow(
+          model: model,
+          openQuickCheck: { [weak self] in self?.showQuickCheck() }
+        ),
         delegate: self
       )
+      observeMainWindowPage(model)
     }
-    show(historyWindowController)
+    mainWindowModel?.page = page
+    show(mainWindowController)
   }
 
-  func showLearning() {
-    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
-    if learningWindowController == nil {
-      let viewModel = LearningViewModel(
-        learningLog: services.learningLog, considerTaps: services.considerTaps)
-      learningWindowController = Self.makeWindowController(
-        configuration: Self.learningWindowConfiguration,
-        rootView: LearningView(viewModel: viewModel),
-        delegate: self
-      )
-    }
-    show(learningWindowController)
-    // Clears the ambient badge: opening the window counts as reviewing everything up to
-    // now. `Date()` belongs here only — never in the pure `LearningBadge` logic/tests.
+  /// Retitles the window for whichever page is showing, whether that page was routed to
+  /// or picked in the sidebar.
+  ///
+  /// One window with four pages still needs to say which one it is — in the Window menu,
+  /// in Mission Control, and to anything driving the app through accessibility. Titling it
+  /// "Bex" throughout would make all four indistinguishable from outside.
+  private func observeMainWindowPage(_ model: MainWindowModel) {
+    mainWindowPageCancellable = model.$page
+      .removeDuplicates()
+      .sink { [weak self] page in
+        self?.mainWindowController?.window?.title = page.title
+        if page == .learn { self?.markLearningViewed() }
+      }
+  }
+
+  /// Clears the ambient "new corrections" badge: landing on Learn counts as reviewing
+  /// everything up to now. `Date()` belongs here only — never in the pure `LearningBadge`
+  /// logic or its tests.
+  private func markLearningViewed() {
     Task { [weak self] in
       guard let self else { return }
       await self.services.preferences.setLastLearningViewedAt(Date())
@@ -299,22 +326,20 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
   }
 
-  /// Opens the Study drill window. Unlike `showLearning()`, there is no "viewed"
-  /// badge to clear here — Study Mode has no ambient badge semantics of its own yet.
+  func showHistory() {
+    showMain(.history)
+  }
+
+  func showLearning() {
+    showMain(.learn)
+  }
+
+  /// The drill now lives in Learn's Deck tab, so "open Study" and "open Learning" land on
+  /// the same page. Kept as a distinct entry point because the daily reminder
+  /// notification and `bex://study` both mean "put a card in front of me", and that
+  /// intent is worth keeping legible at the call site.
   func showStudy() {
-    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
-    if studyWindowController == nil {
-      let viewModel = StudyViewModel(
-        learningLog: services.learningLog,
-        considerTaps: services.considerTaps,
-        studyState: services.studyState)
-      studyWindowController = Self.makeWindowController(
-        configuration: Self.studyWindowConfiguration,
-        rootView: StudyView(viewModel: viewModel),
-        delegate: self
-      )
-    }
-    show(studyWindowController)
+    showMain(.learn)
   }
 
   private func replaceQuickCheckDraftFromHistory(with text: String) {
@@ -336,66 +361,47 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   }
 
   func showProfiles() {
-    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
-    if profilesWindowController == nil {
-      let viewModel = ProfilesViewModel(
-        data: services.data,
-        preferences: services.preferences,
-        grammar: services.grammar
-      )
-      profilesWindowController = Self.makeWindowController(
-        configuration: Self.writingStylesWindowConfiguration,
-        rootView: ProfilesView(viewModel: viewModel),
-        delegate: self
-      )
-    }
-    show(profilesWindowController)
+    showMain(.writingStyles)
   }
 
   func showSettings(origin: SettingsSetupOrigin? = nil) {
-    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
     if origin == .fixAndSend {
       promptGatePanelController?.orderOut()
     }
-    if settingsWindowController == nil {
-      let viewModel = SettingsViewModel(
-        preferences: services.preferences,
-        keychain: services.keychain,
-        grammar: services.grammar,
-        codexOAuth: services.codexOAuth,
-        promptTarget: services.promptTarget,
-        hookManager: services.hookManager,
-        applyAppearance: { [weak self] appearance in
-          self?.applyAppearance(appearance)
-        },
-        setupOrigin: origin,
-        onDeleteSavedDraft: { [weak self, preferences = services.preferences] in
-          if let quickCheckViewModel = self?.quickCheckViewModel {
-            await quickCheckViewModel.deletePersistedDraft()
-          } else {
-            await preferences.deleteSavedQuickDraft()
-          }
-        },
-        onClearHistory: { [data = services.data] in
-          try await data.clearHistory()
-        },
-        onSetupRoute: { [weak self] intent in
-          self?.handleSettingsRoute(intent)
+    showMain(.settings)
+    mainWindowModel?.settings.setSetupOrigin(origin)
+  }
+
+  private func makeSettingsViewModel() -> SettingsViewModel {
+    SettingsViewModel(
+      preferences: services.preferences,
+      keychain: services.keychain,
+      grammar: services.grammar,
+      codexOAuth: services.codexOAuth,
+      promptTarget: services.promptTarget,
+      hookManager: services.hookManager,
+      applyAppearance: { [weak self] appearance in
+        self?.applyAppearance(appearance)
+      },
+      setupOrigin: nil,
+      onDeleteSavedDraft: { [weak self, preferences = services.preferences] in
+        if let quickCheckViewModel = self?.quickCheckViewModel {
+          await quickCheckViewModel.deletePersistedDraft()
+        } else {
+          await preferences.deleteSavedQuickDraft()
         }
-      )
-      settingsViewModel = viewModel
-      settingsWindowController = Self.makeWindowController(
-        configuration: Self.settingsWindowConfiguration,
-        rootView: SettingsView(viewModel: viewModel),
-        delegate: self
-      )
-    }
-    settingsViewModel?.setSetupOrigin(origin)
-    show(settingsWindowController)
+      },
+      onClearHistory: { [data = services.data] in
+        try await data.clearHistory()
+      },
+      onSetupRoute: { [weak self] intent in
+        self?.handleSettingsRoute(intent)
+      }
+    )
   }
 
   private func handleSettingsRoute(_ intent: SettingsRouteIntent) {
-    settingsWindowController?.close()
+    mainWindowController?.close()
     switch intent {
     case .returnToQuickCheck:
       if let quickCheckViewModel {
@@ -454,17 +460,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       welcomeWindowController = nil
       return
     }
-    if window === historyWindowController?.window {
-      historyWindowController = nil
-    } else if window === learningWindowController?.window {
-      learningWindowController = nil
-    } else if window === studyWindowController?.window {
-      studyWindowController = nil
-    } else if window === profilesWindowController?.window {
-      profilesWindowController = nil
-    } else if window === settingsWindowController?.window {
-      settingsWindowController = nil
-      settingsViewModel = nil
+    if window === mainWindowController?.window {
+      mainWindowController = nil
+      mainWindowModel = nil
+      mainWindowPageCancellable = nil
+      // `studyViewModel` deliberately survives: it is the session the menu-bar hub is
+      // still showing, and closing the window is not finishing the drill.
     }
   }
 

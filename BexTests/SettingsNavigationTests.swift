@@ -7,7 +7,7 @@ import XCTest
 
 @MainActor
 final class SettingsNavigationTests: XCTestCase {
-  func testStatusAndApplicationMenusKeepTaskFallbacksAndNativeCommands() {
+  func testApplicationMenuKeepsTaskFallbacksAndNativeCommands() throws {
     let quickCheckChord = KeyChord(
       keyCode: UInt32(kVK_ANSI_K),
       modifiers: UInt32(cmdKey | optionKey)
@@ -18,32 +18,29 @@ final class SettingsNavigationTests: XCTestCase {
     )
 
     let menuTarget = MenuTargetProbe()
-    let statusMenu = AppDelegate.makeStatusMenu(
+    let mainMenu = AppDelegate.makeMainMenu(
       target: menuTarget,
       quickCheckChord: quickCheckChord,
       fixAndSendChord: fixAndSendChord
     )
-    XCTAssertEqual(Array(statusMenu.items.prefix(2).map(\.title)), ["Quick Check", "Fix & Send…"])
-    XCTAssertEqual(statusMenu.items[1].action, NSSelectorFromString("openPromptGate"))
-    XCTAssertTrue(
-      NSApp.sendAction(statusMenu.items[1].action!, to: statusMenu.items[1].target, from: nil)
+
+    // The status item is a popover now (see `MenuBarHubView`), so the application menu is
+    // the only menu left carrying the task commands — and it has to keep carrying them:
+    // it is the fallback the hot-key conflict message points the owner at.
+    let toolsMenu = mainMenu.item(withTitle: "Tools")?.submenu
+    XCTAssertEqual(
+      toolsMenu?.items.map(\.title),
+      ["Quick Check", "Fix & Send…", "", "Learn", "History", "Writing Styles"]
     )
+    let fixAndSendItem = try XCTUnwrap(toolsMenu?.item(withTitle: "Fix & Send…"))
+    XCTAssertEqual(fixAndSendItem.action, NSSelectorFromString("openPromptGate"))
+    XCTAssertTrue(NSApp.sendAction(fixAndSendItem.action!, to: fixAndSendItem.target, from: nil))
     XCTAssertEqual(menuTarget.fixAndSendInvocations, 1)
-    XCTAssertEqual(statusMenu.item(withTitle: "Writing Styles")?.title, "Writing Styles")
-    XCTAssertNil(statusMenu.item(withTitle: "Profiles"))
-
-    let statusQuickCheck = shortcutItem(.quickCheck, in: statusMenu)
-    let statusFixAndSend = shortcutItem(.fixAndSend, in: statusMenu)
-    XCTAssertEqual(statusQuickCheck?.keyEquivalent, "k")
-    XCTAssertEqual(statusQuickCheck?.keyEquivalentModifierMask, [.command, .option])
-    XCTAssertEqual(statusFixAndSend?.keyEquivalent, "j")
-    XCTAssertEqual(statusFixAndSend?.keyEquivalentModifierMask, [.control, .shift])
-
-    let mainMenu = AppDelegate.makeMainMenu(
-      target: nil,
-      quickCheckChord: quickCheckChord,
-      fixAndSendChord: fixAndSendChord
-    )
+    XCTAssertNil(toolsMenu?.item(withTitle: "Profiles"))
+    // Learning and Study collapsed into the one Learn page; two names for one destination
+    // would just be a way for them to drift apart.
+    XCTAssertNil(toolsMenu?.item(withTitle: "Learning"))
+    XCTAssertNil(toolsMenu?.item(withTitle: "Study"))
     XCTAssertEqual(mainMenu.items.map(\.title), ["Bex", "Edit", "Tools", "Window", "Help"])
 
     let appItems = mainMenu.item(withTitle: "Bex")?.submenu?.items ?? []
@@ -75,6 +72,22 @@ final class SettingsNavigationTests: XCTestCase {
 
     XCTAssertEqual(shortcutItem(.quickCheck, in: mainMenu)?.keyEquivalent, "k")
     XCTAssertEqual(shortcutItem(.fixAndSend, in: mainMenu)?.keyEquivalent, "j")
+  }
+
+  /// The hub shows one conflict line, so both failures have to fit in it — reporting them
+  /// one at a time would mean the second silently replaced the first.
+  func testHotKeyConflictMessageNamesEveryShortcutThatFailed() {
+    XCTAssertNil(AppDelegate.hotKeyConflictMessage(for: []))
+    XCTAssertEqual(
+      AppDelegate.hotKeyConflictMessage(for: [.fixAndSend]),
+      "Fix & Send shortcut could not be registered. The command remains available here and "
+        + "in the Bex menu."
+    )
+    XCTAssertEqual(
+      AppDelegate.hotKeyConflictMessage(for: [.quickCheck, .fixAndSend]),
+      "Quick Check and Fix & Send shortcuts could not be registered. The commands remain "
+        + "available here and in the Bex menu."
+    )
   }
 
   func testShortcutEditingRejectsDuplicatesAndOSConflictsWithoutChangingPersistence() async {
@@ -335,14 +348,13 @@ final class SettingsNavigationTests: XCTestCase {
 
   func testStandardWindowsHaveDistinctAutosaveNamesAndContentMinimums() throws {
     let configurations = [
-      WindowCoordinator.historyWindowConfiguration,
-      WindowCoordinator.writingStylesWindowConfiguration,
-      WindowCoordinator.settingsWindowConfiguration,
+      WindowCoordinator.mainWindowConfiguration,
+      WindowCoordinator.welcomeWindowConfiguration,
     ]
 
     XCTAssertEqual(
       Set(configurations.map(\.frameAutosaveName)),
-      Set(["Bex.HistoryWindow", "Bex.WritingStylesWindow", "Bex.SettingsWindow"])
+      Set(["Bex.MainWindow", "Bex.WelcomeWindow"])
     )
     for configuration in configurations {
       let controller = WindowCoordinator.makeWindowController(

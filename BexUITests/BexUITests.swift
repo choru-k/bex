@@ -579,12 +579,18 @@ final class BexUITests: XCTestCase {
     let statusItem = app.statusItems["bex-status-item"]
     XCTAssertTrue(statusItem.waitForExistence(timeout: 3))
     statusItem.click()
-    let fallback =
-      "Keyboard shortcuts could not be registered. "
-      + "Quick Check and Fix & Send remain available from the Bex menu."
-    let message = app.menuItems[fallback]
+    // The status item opens the hub popover now, not an `NSMenu`, so the fallback notice
+    // is a line in the popover rather than a disabled menu item.
+    let message = app.descendants(matching: .any)["hub-shortcut-conflict"]
     XCTAssertTrue(message.waitForExistence(timeout: 3))
-    XCTAssertFalse(message.isEnabled)
+    XCTAssertEqual(
+      accessibilityText(of: message),
+      "Quick Check and Fix & Send shortcuts could not be registered. The commands remain "
+        + "available here and in the Bex menu."
+    )
+    // The commands it points at have to actually be there.
+    XCTAssertTrue(app.descendants(matching: .any)["hub-quick-check"].exists)
+    XCTAssertTrue(app.descendants(matching: .any)["hub-fix-and-send"].exists)
   }
 
   func testQuickCheckAuxiliaryNavigationPreservesInFlightResultErrorDraftAndFocus() {

@@ -1,6 +1,7 @@
 import AppKit
 import Carbon.HIToolbox
 import OSLog
+import SwiftUI
 import UserNotifications
 
 @MainActor
@@ -9,8 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var services: AppServices?
   private var windowCoordinator: WindowCoordinator?
   private var statusItem: NSStatusItem?
-  private var statusMenu: NSMenu?
-  private var learningMenuItem: NSMenuItem?
+  private var hubController: MenuBarHubController?
+  private let hubModel = MenuBarHubModel()
   private var learningLogChangeTask: Task<Void, Never>?
   private var studyStateChangeTask: Task<Void, Never>?
   private var studyNotificationScheduler: StudyNotificationScheduler?
@@ -166,6 +167,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let self else { return }
         self.shortcutChords = chords
         self.refreshShortcutMenuItems()
+        // Failures are collected rather than reported one at a time: the hub shows one
+        // conflict line, so two per-shortcut messages would mean the second silently
+        // replaced the first and the owner only ever heard about one of them.
+        var unregistered: [BexShortcut] = []
         for shortcut in BexShortcut.allCases {
           let chord = chords[shortcut] ?? shortcut.defaultChord
           do {
@@ -174,12 +179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               action: self.shortcutAction(for: shortcut)
             )
           } catch {
-            self.showHotKeyConflict(
-              "\(shortcut.title) shortcut could not be registered: \(error.localizedDescription) "
-                + "The command remains available from the Bex menu."
-            )
+            unregistered.append(shortcut)
           }
         }
+        self.showHotKeyConflict(for: unregistered)
         BexShortcutBridge.updater = { [weak self] shortcut, chord in
           guard let self else { throw HotKeyRegistrationError.updaterUnavailable }
           try self.replaceShortcut(shortcut, with: chord)
@@ -386,9 +389,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       )
     )
     toolsMenu.addItem(.separator())
+    // One item per page of the one window. "Learning" and "Study" used to be two commands
+    // opening two windows; they are now one page, so listing both would be two names for
+    // the same destination.
+    toolsMenu.addItem(command("Learn", "openLearning", target: target))
     toolsMenu.addItem(command("History", "openHistory", target: target))
-    toolsMenu.addItem(command("Learning", "openLearning", target: target))
-    toolsMenu.addItem(command("Study", "openStudy", target: target))
     toolsMenu.addItem(command("Writing Styles", "openProfiles", target: target))
     mainMenu.addItem(rootItem(title: "Tools", submenu: toolsMenu))
 
@@ -427,57 +432,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       button.setAccessibilityLabel("Bex")
     }
 
-    let menu = Self.makeStatusMenu(
-      target: self,
-      quickCheckChord: shortcutChords[.quickCheck] ?? .defaultQuickCheck,
-      fixAndSendChord: shortcutChords[.fixAndSend] ?? .defaultFixAndSend
-    )
-    item.menu = menu
+    // A popover, not an `NSMenu`. The hub has a text field in it — the owner answers a
+    // card without opening a window — and `NSMenu` cannot host a first responder, so the
+    // one behaviour this surface exists for is impossible in a menu. See `MenuBarHubView`.
+    item.button?.action = #selector(toggleHub(_:))
+    item.button?.target = self
+    hubController = MenuBarHubController(rootView: AnyView(makeHubView()))
     statusItem = item
-    statusMenu = menu
-    learningMenuItem = menu.items.first {
-      $0.identifier?.rawValue == "bex-learning-status-item"
-    }
-    trackShortcutItems(in: menu)
+    refreshHubChords()
   }
 
-  static func makeStatusMenu(
-    target: AnyObject?,
-    quickCheckChord: KeyChord,
-    fixAndSendChord: KeyChord
-  ) -> NSMenu {
-    let menu = NSMenu()
-    menu.addItem(
-      shortcutCommand(
-        "Quick Check",
-        "openQuickCheck",
-        shortcut: .quickCheck,
-        chord: quickCheckChord,
-        target: target
-      )
+  private func makeHubView() -> MenuBarHubView {
+    MenuBarHubView(
+      hub: hubModel,
+      study: coordinator().studyDrill(),
+      openQuickCheck: { [weak self] in
+        self?.hubController?.close()
+        self?.openQuickCheck()
+      },
+      openFixAndSend: { [weak self] in
+        self?.hubController?.close()
+        self?.openPromptGate()
+      },
+      openMainWindow: { [weak self] in
+        self?.hubController?.close()
+        self?.coordinator().showMain(.learn)
+      },
+      openSettings: { [weak self] in
+        self?.hubController?.close()
+        self?.openSettings()
+      },
+      openWelcome: { [weak self] in
+        self?.hubController?.close()
+        self?.openWelcome()
+      },
+      quit: { NSApp.terminate(nil) }
     )
-    menu.addItem(
-      shortcutCommand(
-        "Fix & Send…",
-        "openPromptGate",
-        shortcut: .fixAndSend,
-        chord: fixAndSendChord,
-        target: target
-      )
-    )
-    menu.addItem(command("History", "openHistory", target: target))
-    let learningItem = command("Learning", "openLearning", target: target)
-    learningItem.identifier = NSUserInterfaceItemIdentifier("bex-learning-status-item")
-    menu.addItem(learningItem)
-    menu.addItem(command("Study", "openStudy", target: target))
-    menu.addItem(command("Writing Styles", "openProfiles", target: target))
-    menu.addItem(command("Settings…", "openSettings", target: target))
-    menu.addItem(.separator())
-    menu.addItem(command("Welcome to Bex", "openWelcome", target: target))
-    menu.addItem(command("About Bex", "orderFrontStandardAboutPanel:"))
-    menu.addItem(.separator())
-    menu.addItem(command("Quit Bex", "quit", "q", target: target))
-    return menu
+  }
+
+  @objc private func toggleHub(_ sender: Any?) {
+    guard let button = statusItem?.button, let hubController else { return }
+    hubController.toggle(relativeTo: button)
+  }
+
+  /// Mirrors whatever is currently bound onto the hub's shortcut labels, so a rebind in
+  /// Settings shows up in the popover rather than leaving it advertising the old keys.
+  private func refreshHubChords() {
+    hubModel.quickCheckChord = shortcutChords[.quickCheck] ?? .defaultQuickCheck
+    hubModel.fixAndSendChord = shortcutChords[.fixAndSend] ?? .defaultFixAndSend
   }
 
   private static func command(
@@ -537,6 +539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.keyEquivalentModifierMask = chord.modifierMask
       }
     }
+    refreshHubChords()
   }
 
   private func replaceShortcut(_ shortcut: BexShortcut, with chord: KeyChord) throws {
@@ -562,12 +565,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  private func showHotKeyConflict(_ title: String) {
-    guard let statusMenu else { return }
-    let message = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-    message.isEnabled = false
-    statusMenu.insertItem(message, at: 0)
-    statusMenu.insertItem(.separator(), at: 1)
+  /// Surfaces hot-key registration failures at the top of the hub, or clears the line when
+  /// everything registered.
+  ///
+  /// Same job as the disabled `NSMenuItem` this replaces: the commands still work, they
+  /// just have to be clicked instead of typed, and the owner has to be told that rather
+  /// than left wondering why the keys went dead. Naming the surfaces they are still
+  /// reachable from is the actionable half — the popover the message appears in is one of
+  /// them.
+  static func hotKeyConflictMessage(for unregistered: [BexShortcut]) -> String? {
+    guard !unregistered.isEmpty else { return nil }
+    let names = unregistered.map(\.title).joined(separator: " and ")
+    let subject = unregistered.count == 1 ? "shortcut" : "shortcuts"
+    let commands = unregistered.count == 1 ? "The command remains" : "The commands remain"
+    return "\(names) \(subject) could not be registered. \(commands) available here and in "
+      + "the Bex menu."
+  }
+
+  private func showHotKeyConflict(for unregistered: [BexShortcut]) {
+    hubModel.conflictMessage = Self.hotKeyConflictMessage(for: unregistered)
   }
 
   #if DEBUG
@@ -773,7 +789,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let severity = StudyDueCount.severity(maxOverdueDays: plan.maxOverdueDays)
 
     applyMenuBarBadge(StudyDueCount.badge(studyDue: studyDue, learning: learningStatus))
-    learningMenuItem?.title = learningStatus.count > 0 ? "Learning (\(learningStatus.count))" : "Learning"
     await studyNotificationScheduler?.reschedule(dueCount: studyDue)
 
     let nextCard = plan.cardIDs.first

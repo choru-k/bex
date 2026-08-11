@@ -115,4 +115,18 @@ final class StudyDueCountTests: XCTestCase {
   func testSeverityLateAtFiveOverdueDays() {
     XCTAssertEqual(StudyDueCount.severity(maxOverdueDays: 5), .late)
   }
+
+  /// The hub header states a price, not a queue length — and the price has to be able to
+  /// reach zero, which is non-negotiable 6 applied to the one line the owner sees most.
+  func testCostLabelReportsMinutesAndSaysNothingDueAtZero() {
+    XCTAssertEqual(StudyDueCount.costLabel(remaining: 0), "Nothing due")
+    XCTAssertEqual(StudyDueCount.costLabel(remaining: 5), "2 min today")
+    XCTAssertEqual(StudyDueCount.costLabel(remaining: 20), "8 min today")
+  }
+
+  /// A single remaining card rounds to under half a minute; reporting "0 min today" would
+  /// read as nothing to do while a card is still sitting there.
+  func testCostLabelNeverReportsZeroMinutesWhileWorkRemains() {
+    XCTAssertEqual(StudyDueCount.costLabel(remaining: 1), "1 min today")
+  }
 }

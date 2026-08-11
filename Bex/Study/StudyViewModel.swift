@@ -79,6 +79,27 @@ final class StudyViewModel: ObservableObject {
     !isLoading && sessionTotal > 0 && currentCard == nil
   }
 
+  /// Cards still to answer in the session in flight. The single number the sidebar
+  /// badge, the hub's pile dots, and the hub's cost label all read, so those three can
+  /// never disagree about how much is left.
+  var remainingCount: Int {
+    max(0, sessionTotal - completedCount)
+  }
+
+  /// Loads only when there is nothing in flight.
+  ///
+  /// One `StudyViewModel` instance is shared by the menu-bar hub and the Learn deck (see
+  /// `WindowCoordinator.studyDrill`) so a card cleared in the popover is the same card
+  /// the window has already moved past. That sharing is only safe if reopening either
+  /// surface does not call `load()`, which resets `completedCount` and reshuffles the
+  /// queue — mid-session that would rewind the progress dots and re-present the card the
+  /// owner is looking at. A finished or empty session does reload, since new cards may
+  /// have come due since.
+  func loadIfNeeded() async {
+    guard isLoading || (currentCard == nil && sessionQueue.isEmpty) else { return }
+    await load()
+  }
+
   /// Reads the learning log, builds this run's drill cards, and assembles the session
   /// queue from whatever is currently due. Safe to call again (e.g. reopening the
   /// window) — it rebuilds the queue from scratch each time.
