@@ -246,6 +246,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         await self?.refreshMenuBarBadge()
       }
     }
+    coordinator.onRunBackgroundAgent = { [weak self] in
+      self?.runBackgroundAgentNow()
+    }
     return coordinator
   }
 
@@ -851,6 +854,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   // provider ever needs to be visible, surface it in the Study window rather than here.
   private func classifyStudyPatternsIfNeeded() async {
     guard let services else { return }
+    guard await services.preferences.backgroundAgentEnabled() else { return }
     guard let destination = try? await services.preferences.outboundDestination(for: .background),
       await services.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
     else { return }
@@ -859,6 +863,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let cards = StudyCardBuilder.cards(
       from: LearningLogSamples.merged(entries, taps: await services.considerTaps.taps()))
     let pendingIDs = Set(await services.studyPatterns.unclassifiedIDs(among: cards))
+    // Recorded even when there was nothing to classify: "last run 12:04, grouped 0" is the
+    // answer to "is this thing actually running", and silence is not.
+    await services.preferences.setLastBackgroundRun(
+      BackgroundRunSummary(
+        finishedAt: Date(), correctionsRead: entries.count, cardsGrouped: pendingIDs.count))
     guard !pendingIDs.isEmpty else { return }
 
     let pending = cards.filter { pendingIDs.contains($0.id) }
@@ -867,6 +876,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         cards: pending, destination: destination)
     else { return }
     await services.studyPatterns.assign(assignments)
+  }
+
+  /// Runs the hourly pass now, for the Run now button in Settings.
+  ///
+  /// Same two gates as the timer path — the button cannot be used to slip past the master
+  /// switch or the outbound disclosure.
+  func runBackgroundAgentNow() {
+    Task { [weak self] in
+      await self?.classifyStudyPatternsIfNeeded()
+      await self?.refreshWriterLevelIfNeeded()
+      await self?.refreshMenuBarBadge()
+    }
   }
 
   /// Recomputes what Bex knows about the owner's level, on the same launch + hourly tick as
@@ -878,6 +899,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// accumulate, so the accumulating happens here (docs/learning-mode-plan.md v7.1).
   private func refreshWriterLevelIfNeeded() async {
     guard let services else { return }
+    guard await services.preferences.backgroundAgentEnabled() else { return }
     guard let destination = try? await services.preferences.outboundDestination(for: .background),
       await services.preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
     else { return }

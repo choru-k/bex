@@ -8,6 +8,7 @@ struct SettingsView: View {
     case provider
     case fixAndSend
     case integrations
+    case agent
     case privacy
   }
 
@@ -60,6 +61,13 @@ struct SettingsView: View {
           .tabItem {
             Label("Integrations", systemImage: "puzzlepiece.extension")
               .accessibilityIdentifier("settings-category-integrations")
+          }
+
+        backgroundAgentCategory
+          .tag(Category.agent)
+          .tabItem {
+            Label("Agent", systemImage: "clock.arrow.2.circlepath")
+              .accessibilityIdentifier("settings-category-agent")
           }
 
         privacyCategory
@@ -816,6 +824,110 @@ struct SettingsView: View {
     .formStyle(.grouped)
     .padding()
     .frame(maxWidth: .infinity)
+  }
+
+  /// Design 2d. The hourly work already existed and had no controls at all — it ran, it sent
+  /// masked excerpts to a provider, and the only evidence was the grouping quietly improving.
+  /// This is the switch, the sources, the standing approval, and what the last pass did.
+  private var backgroundAgentCategory: some View {
+    Form {
+      Section {
+        Toggle("Background agent", isOn: backgroundAgentBinding)
+          .accessibilityIdentifier("settings-background-agent")
+        Text(
+          "Runs hourly, off the interactive path. Groups your drill cards by the English rule "
+            + "they exemplify and keeps your writer profile current. Never on the correction "
+            + "path — non-negotiable 1 keeps that under two seconds, so nothing here can slow it."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+
+      Section("Sources") {
+        ForEach(BackgroundSource.allCases) { source in
+          VStack(alignment: .leading, spacing: 2) {
+            HStack {
+              Text(source.title)
+              Spacer()
+              if source.isAvailable {
+                Label("Read", systemImage: "checkmark.circle.fill")
+                  .labelStyle(.titleAndIcon)
+                  .font(.caption)
+                  .foregroundStyle(Color.green)
+              } else {
+                Text("Off")
+                  .font(.caption)
+                  .foregroundStyle(.tertiary)
+              }
+            }
+            Text(source.detail)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            if let reason = source.unavailableReason {
+              Text(reason)
+                .font(.caption)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+          }
+          .accessibilityIdentifier("settings-background-source-\(source.rawValue)")
+        }
+      }
+
+      Section("What leaves this Mac") {
+        Text(
+          "Masked excerpts go to \(viewModel.backgroundDestinationLabel) for analysis. This is "
+            + "the same standing approval your interactive checks use, and it covers background "
+            + "work only — Fix & Send still shows you its payload every time."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+        HStack {
+          if viewModel.backgroundConsentAccepted {
+            Label("Approved", systemImage: "checkmark.shield")
+              .font(.caption)
+              .foregroundStyle(Color.green)
+            Spacer()
+            Button("Revoke") { viewModel.revokeBackgroundConsent() }
+              .accessibilityIdentifier("settings-background-revoke")
+          } else {
+            Label(
+              "Not approved — the agent is not sending anything.",
+              systemImage: "exclamationmark.shield"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+          }
+        }
+        .accessibilityIdentifier("settings-background-consent")
+      }
+
+      Section {
+        HStack {
+          Text(viewModel.lastBackgroundRunDescription)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .accessibilityIdentifier("settings-background-last-run")
+          Spacer()
+          Button("Run now") { viewModel.runBackgroundAgentNow() }
+            .disabled(!viewModel.backgroundAgentEnabled)
+            .accessibilityIdentifier("settings-background-run-now")
+        }
+      }
+    }
+    .formStyle(.grouped)
+    .padding()
+    .frame(maxWidth: .infinity)
+  }
+
+  private var backgroundAgentBinding: Binding<Bool> {
+    Binding(
+      get: { viewModel.backgroundAgentEnabled },
+      set: { viewModel.setBackgroundAgentEnabled($0) }
+    )
   }
 
   private var privacyCategory: some View {

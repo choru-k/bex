@@ -26,6 +26,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   /// Set by `AppDelegate` after construction so opening Learn can refresh the
   /// menu-bar badge it owns, without `WindowCoordinator` holding a reference back to it.
   var onLearningViewed: (() -> Void)?
+  /// Set by `AppDelegate`, which owns the hourly timer — Settings' "Run now" calls the same
+  /// gated pass rather than a second copy of it that could drift from the timer's rules.
+  var onRunBackgroundAgent: (() -> Void)?
 
   /// The one drill session, shared by the menu-bar hub and the Learn deck.
   ///
@@ -429,6 +432,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       },
       onSetupRoute: { [weak self] intent in
         self?.handleSettingsRoute(intent)
+      },
+      onRunBackgroundAgent: { [weak self] in
+        self?.onRunBackgroundAgent?()
       }
     )
   }

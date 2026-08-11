@@ -46,6 +46,10 @@ actor PreferencesStore {
     static let confirmsHookOutboundPayloads = "promptGate.confirmsHookOutboundPayloads"
     static let codexPriorityTier = "providers.codexPriorityTier"
     static let lastLearningViewedAt = "learning.lastViewedAt"
+    static let backgroundAgentEnabled = "backgroundAgent.enabled"
+    static let lastBackgroundRunAt = "backgroundAgent.lastRunAt"
+    static let lastBackgroundRunCorrections = "backgroundAgent.lastRunCorrections"
+    static let lastBackgroundRunGrouped = "backgroundAgent.lastRunGrouped"
 
     static func outboundDisclosureVersion(for destination: OutboundDestination) -> String {
       guard destination.provider == .ollama, let endpoint = destination.ollamaEndpoint else {
@@ -315,6 +319,45 @@ actor PreferencesStore {
 
   func hasAcceptedCurrentOutboundDisclosure(for destination: OutboundDestination) -> Bool {
     outboundDisclosureVersion(for: destination) >= Self.currentOutboundDisclosureVersion
+  }
+
+  /// Withdraws the standing approval for one destination.
+  ///
+  /// Non-negotiable 3 says nothing leaves the Mac without explicit approval; an approval that
+  /// cannot be taken back is not really a choice. Revoking stops the background agent
+  /// immediately (it is gated on this) and puts the interactive flows back to asking per
+  /// payload.
+  func revokeOutboundDisclosure(for destination: OutboundDestination) {
+    defaults.removeObject(forKey: Key.outboundDisclosureVersion(for: destination))
+  }
+
+  /// Whether the hourly agent runs at all.
+  ///
+  /// Defaults to on because this work already ran before it had a switch — defaulting it off
+  /// would silently stop pattern grouping and the writer profile for anyone updating.
+  func backgroundAgentEnabled() -> Bool {
+    defaults.object(forKey: Key.backgroundAgentEnabled) as? Bool ?? true
+  }
+
+  func setBackgroundAgentEnabled(_ enabled: Bool) {
+    defaults.set(enabled, forKey: Key.backgroundAgentEnabled)
+  }
+
+  /// What the last hourly pass actually did, so "it runs in the background" is inspectable
+  /// rather than a claim.
+  func lastBackgroundRun() -> BackgroundRunSummary? {
+    guard let date = defaults.object(forKey: Key.lastBackgroundRunAt) as? Date else { return nil }
+    return BackgroundRunSummary(
+      finishedAt: date,
+      correctionsRead: defaults.integer(forKey: Key.lastBackgroundRunCorrections),
+      cardsGrouped: defaults.integer(forKey: Key.lastBackgroundRunGrouped)
+    )
+  }
+
+  func setLastBackgroundRun(_ summary: BackgroundRunSummary) {
+    defaults.set(summary.finishedAt, forKey: Key.lastBackgroundRunAt)
+    defaults.set(summary.correctionsRead, forKey: Key.lastBackgroundRunCorrections)
+    defaults.set(summary.cardsGrouped, forKey: Key.lastBackgroundRunGrouped)
   }
 
   func quickCheckKeyChord() -> KeyChord {

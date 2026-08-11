@@ -79,6 +79,69 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertNil(override)
   }
 
+  /// The hourly work existed before it had a switch, so the switch has to default on —
+  /// shipping it off would silently stop pattern grouping and the writer profile.
+  func testBackgroundAgentDefaultsOnAndPersistsOptOut() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+    let preferences = fixture.store
+
+    let enabledByDefault = await preferences.backgroundAgentEnabled()
+    XCTAssertTrue(enabledByDefault)
+
+    await preferences.setBackgroundAgentEnabled(false)
+    let afterOptOut = await preferences.backgroundAgentEnabled()
+    XCTAssertFalse(afterOptOut)
+  }
+
+  /// Non-negotiable 3: an approval that cannot be taken back is not a choice. Revoking has to
+  /// return the destination to unapproved, which is what stops the background pass.
+  func testRevokingTheOutboundDisclosureReturnsToUnapproved() async throws {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+    let preferences = fixture.store
+
+    await preferences.setSelectedProvider(.claude)
+    let destination = try await preferences.outboundDestination()
+    await preferences.acceptCurrentOutboundDisclosure(for: destination)
+    let accepted = await preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+    XCTAssertTrue(accepted)
+
+    await preferences.revokeOutboundDisclosure(for: destination)
+    let revoked = await preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+    XCTAssertFalse(revoked)
+  }
+
+  /// A background pass that leaves no trace is indistinguishable from one that never ran.
+  func testLastBackgroundRunRoundTrips() async {
+    let fixture = PreferencesFixture()
+    defer { fixture.remove() }
+    let preferences = fixture.store
+
+    let never = await preferences.lastBackgroundRun()
+    XCTAssertNil(never)
+
+    let finishedAt = Date(timeIntervalSince1970: 1_800_000_000)
+    await preferences.setLastBackgroundRun(
+      BackgroundRunSummary(finishedAt: finishedAt, correctionsRead: 41, cardsGrouped: 3))
+
+    let stored = await preferences.lastBackgroundRun()
+    XCTAssertEqual(stored?.correctionsRead, 41)
+    XCTAssertEqual(stored?.cardsGrouped, 3)
+    XCTAssertEqual(stored?.finishedAt, finishedAt)
+  }
+
+  /// The two session sources are listed but inert until the corpus gate has been run on them
+  /// (non-negotiable 8). If one ever flips to available by accident, this fails.
+  func testOnlyTheAlreadyLocalBackgroundSourceIsRead() {
+    XCTAssertTrue(BackgroundSource.bexHistory.isAvailable)
+    XCTAssertNil(BackgroundSource.bexHistory.unavailableReason)
+    for source in [BackgroundSource.claudeCodeSessions, .codexSessions] {
+      XCTAssertFalse(source.isAvailable, "\(source.rawValue) needs a corpus measurement first")
+      XCTAssertNotNil(source.unavailableReason)
+    }
+  }
+
   func testHookOutboundConfirmationDefaultsOnAndPersistsOptOut() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }

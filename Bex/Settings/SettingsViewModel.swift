@@ -80,6 +80,14 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var isDeletingSavedDraft = false
   @Published private(set) var savedDraftDeletionError: String?
   @Published private(set) var isRequestingSetupRoute = false
+  @Published private(set) var backgroundAgentEnabled = true
+  @Published private(set) var lastBackgroundRun: BackgroundRunSummary?
+  /// Whether the standing approval the background agent runs under is in place.
+  ///
+  /// Same acceptance the interactive flows use, deliberately: non-negotiable 3 is about the
+  /// destination, and inventing a second consent for the same provider would let one be
+  /// revoked while the other quietly kept sending.
+  @Published private(set) var backgroundConsentAccepted = false
 
   static let draftRetentionDisclosure =
     "When enabled, Bex saves the current Quick Check draft in this Mac’s app preferences so it can be restored after Bex relaunches or when Quick Check is temporarily hidden for navigation. Closing or canceling Quick Check deletes the saved draft. Don’t Save and Not Decided never block correction and do not save new drafts."
@@ -97,6 +105,7 @@ final class SettingsViewModel: ObservableObject {
   private let onDeleteSavedDraft: @MainActor () async throws -> Void
   private let onClearHistory: @MainActor () async throws -> Void
   private let onSetupRoute: @MainActor (SettingsRouteIntent) -> Void
+  private let onRunBackgroundAgent: @MainActor () -> Void
 
   private var modelTask: Task<Void, Never>?
   private var ollamaTask: Task<Void, Never>?
@@ -123,7 +132,8 @@ final class SettingsViewModel: ObservableObject {
     },
     onDeleteSavedDraft: @escaping @MainActor () async throws -> Void = {},
     onClearHistory: @escaping @MainActor () async throws -> Void = {},
-    onSetupRoute: @escaping @MainActor (SettingsRouteIntent) -> Void = { _ in }
+    onSetupRoute: @escaping @MainActor (SettingsRouteIntent) -> Void = { _ in },
+    onRunBackgroundAgent: @escaping @MainActor () -> Void = {}
   ) {
     self.preferences = preferences
     self.keychain = keychain
@@ -137,6 +147,7 @@ final class SettingsViewModel: ObservableObject {
     self.onDeleteSavedDraft = onDeleteSavedDraft
     self.onClearHistory = onClearHistory
     self.onSetupRoute = onSetupRoute
+    self.onRunBackgroundAgent = onRunBackgroundAgent
     self.ompExecutablePath = Self.defaultOMPExecutablePath()
   }
 
@@ -238,6 +249,7 @@ final class SettingsViewModel: ObservableObject {
     historyRetentionChoice = await savedHistoryRetention
     quickCheckKeyChord = await savedQuickCheckChord
     fixAndSendKeyChord = await savedFixAndSendChord
+    await refreshBackgroundAgentState()
     isLoaded = true
     await refreshCredentialState()
     await refreshCodexState()
@@ -306,6 +318,64 @@ final class SettingsViewModel: ObservableObject {
   /// what it costs rather than refusing (non-negotiable 1 is a budget, not a lock).
   var correctionLatencyWarning: String? {
     ModelLatencyWarning.warning(forCorrectionModel: model)
+  }
+
+  // MARK: - Background agent
+
+  func setBackgroundAgentEnabled(_ enabled: Bool) {
+    backgroundAgentEnabled = enabled
+    enqueuePreferenceUpdate { [preferences] in
+      await preferences.setBackgroundAgentEnabled(enabled)
+    }
+  }
+
+  /// Where the background pass sends its analysis, named so the consent line is specific
+  /// rather than "a provider".
+  var backgroundDestinationLabel: String {
+    "\(provider.displayName) · \(resolvedModel(for: .background))"
+  }
+
+  func runBackgroundAgentNow() {
+    onRunBackgroundAgent()
+    // The pass writes its summary when it finishes; re-read shortly after so the line moves
+    // without the owner having to reopen Settings.
+    Task { [weak self] in
+      try? await Task.sleep(nanoseconds: 500_000_000)
+      await self?.refreshBackgroundAgentState()
+    }
+  }
+
+  /// Withdraws the standing approval, which stops the background pass on its next tick and
+  /// puts the interactive flows back to asking per payload.
+  func revokeBackgroundConsent() {
+    Task { [weak self, preferences] in
+      guard let destination = try? await preferences.outboundDestination(for: .background) else {
+        return
+      }
+      await preferences.revokeOutboundDisclosure(for: destination)
+      await self?.refreshBackgroundAgentState()
+    }
+  }
+
+  func refreshBackgroundAgentState() async {
+    backgroundAgentEnabled = await preferences.backgroundAgentEnabled()
+    lastBackgroundRun = await preferences.lastBackgroundRun()
+    if let destination = try? await preferences.outboundDestination(for: .background) {
+      backgroundConsentAccepted = await preferences.hasAcceptedCurrentOutboundDisclosure(
+        for: destination)
+    } else {
+      backgroundConsentAccepted = false
+    }
+  }
+
+  /// "Last run 12:04 · read 41 corrections · grouped 3 cards", or a plain never-run line.
+  var lastBackgroundRunDescription: String {
+    guard let run = lastBackgroundRun else { return "Has not run yet." }
+    let formatter = DateFormatter()
+    formatter.timeStyle = .short
+    formatter.dateStyle = .none
+    return "Last run \(formatter.string(from: run.finishedAt)) · read \(run.correctionsRead) "
+      + "corrections · grouped \(run.cardsGrouped) cards"
   }
 
   private func loadedModelOverrides(provider: LLMProvider) async -> [ModelJob: String] {
