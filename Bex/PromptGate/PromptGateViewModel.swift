@@ -41,6 +41,10 @@ final class PromptGateViewModel: ObservableObject {
   private let learningLog: LearningLogStore
   private let closePanel: @MainActor () -> Void
   private let openSettingsCallback: @MainActor () -> Void
+  /// Called once, with the target application's name, after a prompt has fully shipped.
+  /// Fires only on the clean success path — a partial delivery leaves the owner with
+  /// something to finish by hand, which is not the moment to offer them a drill.
+  private let deliveredCallback: @MainActor (String) -> Void
 
   private var currentTask: Task<Void, Never>?
   private var currentWorkID: UUID?
@@ -67,7 +71,8 @@ final class PromptGateViewModel: ObservableObject {
     hookResponder: any HookReviewResponding,
     learningLog: LearningLogStore = LearningLogStore(),
     onClose: @escaping @MainActor () -> Void,
-    onOpenSettings: @escaping @MainActor () -> Void
+    onOpenSettings: @escaping @MainActor () -> Void,
+    onDelivered: @escaping @MainActor (String) -> Void = { _ in }
   ) {
     self.preferences = preferences
     self.keychain = keychain
@@ -79,6 +84,7 @@ final class PromptGateViewModel: ObservableObject {
     self.learningLog = learningLog
     closePanel = onClose
     openSettingsCallback = onOpenSettings
+    deliveredCallback = onDelivered
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
   }
 
@@ -539,7 +545,9 @@ final class PromptGateViewModel: ObservableObject {
         activeReceiptID = nil
         finishWork(workID)
         announce(successAnnouncement(for: outcome, target: session.target))
+        let deliveredTo = session.target.applicationName
         closeCurrentSession()
+        deliveredCallback(deliveredTo)
       } catch is CancellationError {
         if let issuedReceipt {
           try? await approvalStore.revoke(id: issuedReceipt)

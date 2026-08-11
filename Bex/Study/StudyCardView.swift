@@ -1,5 +1,60 @@
 import SwiftUI
 
+/// How large a card is drawn. Only type scale and padding change between these — the
+/// geometry never does, which is the whole point of one template (design 3b).
+enum StudyCardScale {
+  /// The menu-bar popover, 320pt wide.
+  case compact
+  /// A card sharing the window with chrome around it.
+  case regular
+  /// A drill that has taken the window over. Nothing else is on screen, so the sentence
+  /// gets the room — the single biggest thing the takeover buys.
+  case takeover
+
+  var promptSize: CGFloat {
+    switch self {
+    case .compact: return 15
+    case .regular: return 21
+    case .takeover: return 28
+    }
+  }
+
+  var answerSize: CGFloat {
+    switch self {
+    case .compact: return 13
+    case .regular: return 16
+    case .takeover: return 18
+    }
+  }
+
+  var categorySize: CGFloat {
+    switch self {
+    case .compact: return 9
+    case .regular, .takeover: return 10
+    }
+  }
+
+  var spacing: CGFloat {
+    switch self {
+    case .compact: return 10
+    case .regular: return 18
+    case .takeover: return 26
+    }
+  }
+
+  /// Width of the answer control. Compact fills the popover; the others stay narrow enough
+  /// that the answer reads as one short thing rather than a paragraph field.
+  var answerWidth: CGFloat? {
+    switch self {
+    case .compact: return nil
+    case .regular: return 320
+    case .takeover: return 360
+    }
+  }
+
+  var isCompact: Bool { self == .compact }
+}
+
 /// The single drill-card template, shared by every surface that presents a card.
 ///
 /// Design 3b's rule, and the reason this is one view rather than one per surface: every
@@ -12,9 +67,7 @@ import SwiftUI
 struct StudyCardView: View {
   @ObservedObject var viewModel: StudyViewModel
   let card: StudyCard
-  /// Popover-sized rather than window-sized. Changes type scale and padding only — the
-  /// geometry above stays identical in both, which is the whole point of one template.
-  var isCompact: Bool = false
+  var scale: StudyCardScale = .regular
   /// Trailing half of the category line, e.g. "card 3 of 5". Empty hides it.
   var subtitle: String = ""
 
@@ -24,10 +77,10 @@ struct StudyCardView: View {
   @FocusState private var answerFocused: Bool
 
   var body: some View {
-    VStack(spacing: isCompact ? 10 : 18) {
+    VStack(spacing: scale.spacing) {
       categoryLine
       Text(card.promptWithBlank)
-        .font(.system(size: isCompact ? 15 : 21, weight: .medium))
+        .font(.system(size: scale.promptSize, weight: .medium))
         .multilineTextAlignment(.center)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("study-prompt")
@@ -51,7 +104,7 @@ struct StudyCardView: View {
 
   private var categoryLine: some View {
     Text(subtitle.isEmpty ? card.displayCategory : "\(card.displayCategory) · \(subtitle)")
-      .font(.system(size: isCompact ? 9 : 10, weight: .semibold))
+      .font(.system(size: scale.categorySize, weight: .semibold))
       .textCase(.uppercase)
       .kerning(0.9)
       .foregroundStyle(.tint)
@@ -62,51 +115,55 @@ struct StudyCardView: View {
   private var answerControl: some View {
     switch card.answerMode {
     case .typed:
-      TextField(isCompact ? "Type it…" : "Type the correction…", text: $viewModel.typedAnswer)
-        .textFieldStyle(.roundedBorder)
-        .font(.system(size: isCompact ? 13 : 16))
-        .multilineTextAlignment(.leading)
-        .frame(maxWidth: isCompact ? .infinity : 320)
-        .focused($answerFocused)
-        .onSubmit {
-          Task { await viewModel.submitTypedAnswer() }
-        }
-        .accessibilityIdentifier("study-answer-field")
+      TextField(
+        scale.isCompact ? "Type it…" : "Type the correction…",
+        text: $viewModel.typedAnswer
+      )
+      .textFieldStyle(.roundedBorder)
+      .font(.system(size: scale.answerSize))
+      .multilineTextAlignment(.leading)
+      .frame(maxWidth: scale.answerWidth ?? .infinity)
+      .focused($answerFocused)
+      .onSubmit {
+        Task { await viewModel.submitTypedAnswer() }
+      }
+      .accessibilityIdentifier("study-answer-field")
     case .choices:
       VStack(spacing: 6) {
         ForEach(Array(viewModel.choices.enumerated()), id: \.offset) { index, choice in
           choiceButton(choice: choice, index: index)
         }
       }
-      .frame(maxWidth: isCompact ? .infinity : 320)
+      .frame(maxWidth: scale.answerWidth ?? .infinity)
     }
   }
 
   /// The answer, its verdict, and the key that moves on — the three things worth showing
   /// once a card is graded, in one row so a compact popover does not have to grow.
   private var revealed: some View {
-    VStack(spacing: isCompact ? 6 : 10) {
+    VStack(spacing: scale.isCompact ? 6 : 10) {
       HStack(spacing: 8) {
         Text(submittedAnswer)
-          .font(.system(size: isCompact ? 13 : 16, weight: .medium))
+          .font(.system(size: scale.answerSize, weight: .medium))
           .lineLimit(1)
           .truncationMode(.tail)
         Spacer(minLength: 8)
         Label(
           viewModel.lastAnswerWasCorrect ? "Correct" : "It's “\(card.correct)”",
-          systemImage: viewModel.lastAnswerWasCorrect ? "checkmark.circle.fill" : "xmark.circle.fill"
+          systemImage: viewModel.lastAnswerWasCorrect
+            ? "checkmark.circle.fill" : "xmark.circle.fill"
         )
         .labelStyle(.titleAndIcon)
-        .font(.system(size: isCompact ? 12 : 14, weight: .medium))
+        .font(.system(size: scale.isCompact ? 12 : 14, weight: .medium))
         .foregroundStyle(viewModel.lastAnswerWasCorrect ? Color.green : Color.red)
       }
       .padding(.horizontal, 12)
-      .padding(.vertical, isCompact ? 7 : 9)
+      .padding(.vertical, scale.isCompact ? 7 : 9)
       .background(
         RoundedRectangle(cornerRadius: 8)
           .strokeBorder(viewModel.lastAnswerWasCorrect ? Color.green : Color.red, lineWidth: 1.5)
       )
-      .frame(maxWidth: isCompact ? .infinity : 320)
+      .frame(maxWidth: scale.answerWidth ?? .infinity)
       .accessibilityIdentifier("study-feedback")
 
       if !card.reason.isEmpty {
@@ -114,6 +171,7 @@ struct StudyCardView: View {
           .font(.caption)
           .foregroundStyle(.secondary)
           .multilineTextAlignment(.center)
+          .frame(maxWidth: 420)
           .accessibilityIdentifier("study-reason")
       }
 
@@ -121,7 +179,7 @@ struct StudyCardView: View {
         viewModel.advance()
       }
       .keyboardShortcut(.defaultAction)
-      .controlSize(isCompact ? .small : .regular)
+      .controlSize(scale.isCompact ? .small : .regular)
       .accessibilityIdentifier("study-next")
     }
   }
@@ -146,7 +204,7 @@ struct StudyCardView: View {
           .foregroundStyle(.tertiary)
       }
       .padding(.horizontal, 12)
-      .padding(.vertical, isCompact ? 6 : 9)
+      .padding(.vertical, scale.isCompact ? 6 : 9)
       .frame(maxWidth: .infinity, alignment: .leading)
       .contentShape(Rectangle())
       .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
@@ -166,6 +224,50 @@ struct StudyCardView: View {
   private static func choiceKey(for index: Int) -> KeyEquivalent {
     guard index < 9, let digit = "\(index + 1)".first else { return KeyEquivalent("\u{0}") }
     return KeyEquivalent(digit)
+  }
+}
+
+/// The current card with the rest of the stack peeking out behind it.
+///
+/// Design 1b's card pile. It is doing one job: showing that the deck is *finite* without
+/// putting a number on it. The dots below say how far along the session is; this says there
+/// is a small pile, not a stream.
+struct StudyCardStack<Content: View>: View {
+  /// Cards left including the one on top. Two layers is the cap — a third reads as texture
+  /// rather than as "there are more".
+  let remaining: Int
+  var cornerRadius: CGFloat = 14
+  @ViewBuilder var content: () -> Content
+
+  var body: some View {
+    ZStack {
+      if remaining > 2 {
+        layer.offset(x: 14, y: 14).opacity(0.5)
+      }
+      if remaining > 1 {
+        layer.offset(x: 7, y: 7).opacity(0.75)
+      }
+      content()
+        .padding(28)
+        .background(
+          RoundedRectangle(cornerRadius: cornerRadius)
+            .fill(Color(nsColor: .controlBackgroundColor))
+            .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
+        )
+        .overlay(
+          RoundedRectangle(cornerRadius: cornerRadius)
+            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+        )
+    }
+  }
+
+  private var layer: some View {
+    RoundedRectangle(cornerRadius: cornerRadius)
+      .fill(.quaternary)
+      .overlay(
+        RoundedRectangle(cornerRadius: cornerRadius)
+          .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 1)
+      )
   }
 }
 

@@ -445,6 +445,39 @@ final class PromptGateViewModelTests: XCTestCase {
     }
   }
 
+  /// The post-send micro-drill hangs off this callback, and non-negotiable 2 says it may
+  /// never get in the way of shipping — so it has to fire *after* the prompt is delivered,
+  /// naming where it went, and never when delivery failed and left the owner with
+  /// something to finish by hand.
+  func testDeliveredCallbackFiresOnlyAfterACleanSend() async throws {
+    let fixture = try await Fixture()
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: "This are original.")))
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.deliveries.targetNames, [])
+
+    fixture.viewModel.approve()
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.target.deliveries.count, 1)
+    XCTAssertEqual(fixture.deliveries.targetNames, ["Editor"])
+  }
+
+  func testDeliveredCallbackDoesNotFireWhenDeliveryFails() async throws {
+    let fixture = try await Fixture()
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: "This are original.")))
+    await fixture.viewModel.waitForCurrentWork()
+    fixture.target.deliveryError = PromptDeliveryFailure(
+      effect: .copied,
+      underlyingError: BexError.promptDeliveryFailed("Terminal delivery failure.")
+    )
+
+    fixture.viewModel.approve()
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
+    XCTAssertEqual(fixture.deliveries.targetNames, [])
+  }
+
   func testCancelDuringDeliveryIsIgnoredUntilFailureEffectIsSurfaced() async throws {
     let fixture = try await Fixture()
     XCTAssertTrue(
@@ -961,7 +994,15 @@ private final class Fixture {
   let responder = StubHookResponder()
   let receiptDirectory: URL
   let learningLogDirectory: URL
+  /// Names passed to `onDelivered`, in order. The post-send micro-drill hangs off this
+  /// callback, so "did it fire, and only on a clean send" is worth pinning down.
+  let deliveries = DeliveryRecorder()
   private let suite: String
+
+  @MainActor
+  final class DeliveryRecorder {
+    var targetNames: [String] = []
+  }
 
   init(
     acceptedDisclosure: Bool = true,
@@ -991,6 +1032,7 @@ private final class Fixture {
     let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
     target = StubPromptTarget(isAccessibilityTrusted: accessibilityTrusted)
 
+    let deliveries = self.deliveries
     viewModel = PromptGateViewModel(
       preferences: preferences,
       keychain: keychain,
@@ -1001,7 +1043,8 @@ private final class Fixture {
       hookResponder: responder,
       learningLog: learningLog,
       onClose: {},
-      onOpenSettings: {}
+      onOpenSettings: {},
+      onDelivered: { deliveries.targetNames.append($0) }
     )
   }
 

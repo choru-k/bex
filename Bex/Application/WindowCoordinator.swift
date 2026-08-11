@@ -22,6 +22,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   private var mainWindowModel: MainWindowModel?
   private var mainWindowPageCancellable: AnyCancellable?
   private var studyViewModel: StudyViewModel?
+  private var microDrillPanelController: StudyMicroDrillPanelController?
   /// Set by `AppDelegate` after construction so opening Learn can refresh the
   /// menu-bar badge it owns, without `WindowCoordinator` holding a reference back to it.
   var onLearningViewed: (() -> Void)?
@@ -228,6 +229,37 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
   func closePromptGate() {
     promptGatePanelController?.orderOut()
+  }
+
+  /// Offers one card in the corner after a prompt ships, and only if something is already
+  /// due (design 1f).
+  ///
+  /// "Only when due" is doing real work here: a drill that appeared after *every* send
+  /// would be a toll on shipping, and non-negotiable 2 forbids that. The card comes from
+  /// the same shared session as the hub and the deck, so answering it here is not extra
+  /// work on top of today's stack — it is today's stack, cleared at the cheapest moment
+  /// in the day.
+  private func showMicroDrillIfDue(targetName: String) {
+    Task { [weak self] in
+      guard let self else { return }
+      let study = studyDrill()
+      await study.loadIfNeeded()
+      guard study.currentCard != nil else { return }
+      // Rebuilt per delivery rather than reused: the header names the app the prompt went
+      // to, and a cached panel would keep announcing the previous one.
+      microDrillPanelController?.close()
+      let controller = StudyMicroDrillPanelController(
+        rootView: AnyView(
+          StudyMicroDrillView(
+            viewModel: study,
+            targetName: targetName,
+            dismiss: { [weak self] in self?.microDrillPanelController?.close() }
+          )
+        )
+      )
+      microDrillPanelController = controller
+      controller.show()
+    }
   }
 
   func showWelcome() {
@@ -482,7 +514,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         hookResponder: services.promptGateIPC,
         learningLog: services.learningLog,
         onClose: { [weak self] in self?.closePromptGate() },
-        onOpenSettings: { [weak self] in self?.showSettings(origin: .fixAndSend) }
+        onOpenSettings: { [weak self] in self?.showSettings(origin: .fixAndSend) },
+        onDelivered: { [weak self] targetName in
+          self?.showMicroDrillIfDue(targetName: targetName)
+        }
       )
       promptGateViewModel = viewModel
       promptGatePanelController = PromptGatePanelController(

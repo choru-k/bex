@@ -29,20 +29,61 @@ struct LearnView: View {
     }
   }
 
+  /// Owns the takeover flag and the sidebar state, both of which a drill has to change.
+  @ObservedObject var model: MainWindowModel
+  /// Observed explicitly rather than reached through `model`: SwiftUI only invalidates on
+  /// the objects a view actually observes, and these two are what change while drilling.
   @ObservedObject var study: StudyViewModel
   @ObservedObject var learning: LearningViewModel
   @State private var tab: Tab = .deck
 
   var body: some View {
+    Group {
+      if model.isDrillTakeover, let card = study.currentCard {
+        StudyTakeoverView(viewModel: study, card: card, end: endDrill)
+      } else {
+        chrome
+      }
+    }
+    .task {
+      await learning.load()
+    }
+    .task {
+      await study.loadIfNeeded()
+      // Opening Learn with cards due drops straight into the drill. `docs/purpose.md`
+      // records why: the first version was a read-only surface the owner did not open, and
+      // a surface nobody opens teaches nothing. Once they have pressed Esc,
+      // `hasLeftDrill` keeps Bex from putting them back.
+      startDrillIfDue()
+    }
+  }
+
+  private var chrome: some View {
     VStack(spacing: 0) {
       header
       Divider()
       page
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-    .task {
-      await learning.load()
-    }
+  }
+
+  // MARK: - Takeover
+
+  private func startDrillIfDue() {
+    guard tab == .deck, !model.hasLeftDrill, study.currentCard != nil else { return }
+    startDrill()
+  }
+
+  private func startDrill() {
+    guard study.currentCard != nil else { return }
+    model.isDrillTakeover = true
+    model.columnVisibility = .detailOnly
+  }
+
+  private func endDrill() {
+    model.hasLeftDrill = true
+    model.isDrillTakeover = false
+    model.columnVisibility = .all
   }
 
   // MARK: - Header
@@ -86,7 +127,7 @@ struct LearnView: View {
   private var page: some View {
     switch tab {
     case .deck:
-      StudyView(viewModel: study)
+      StudyDeckView(viewModel: study, start: startDrill)
     case .suggestions:
       LearnSuggestionsView(viewModel: learning)
     case .progress:

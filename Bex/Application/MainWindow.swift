@@ -50,6 +50,23 @@ enum MainWindowPage: String, CaseIterable, Identifiable, Hashable {
 final class MainWindowModel: ObservableObject {
   @Published var page: MainWindowPage
 
+  /// True while a drill has taken the window over: no sidebar, no tabs, no counters —
+  /// design 3a. Lives here rather than on `StudyViewModel` because it is a fact about this
+  /// window; the menu-bar hub shows the very same session and never takes anything over.
+  @Published var isDrillTakeover = false
+
+  /// Whether the owner has already pressed Esc out of a drill in this window.
+  ///
+  /// Without it, every return to Learn — and every fresh card — would drop them straight
+  /// back into a takeover they had just chosen to leave. Bex pushing a card is the point;
+  /// Bex ignoring "not now" is not.
+  @Published var hasLeftDrill = false
+
+  /// The real sidebar state, so collapsing it during a drill and the owner collapsing it
+  /// themselves are the same thing — a one-way binding forced open between drills would
+  /// take away a window control they are entitled to.
+  @Published var columnVisibility: NavigationSplitViewVisibility = .all
+
   let study: StudyViewModel
   let learning: LearningViewModel
   let history: HistoryViewModel
@@ -82,13 +99,17 @@ struct BexMainWindow: View {
   let openQuickCheck: () -> Void
 
   var body: some View {
-    NavigationSplitView {
+    NavigationSplitView(columnVisibility: $model.columnVisibility) {
       sidebar
         .navigationSplitViewColumnWidth(min: 180, ideal: 196, max: 260)
     } detail: {
       detail
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
+    // Hides the whole toolbar, including the sidebar-toggle button, while a drill has the
+    // window: leaving a control on screen that undoes the takeover would make it a
+    // suggestion rather than a mode.
+    .toolbar(model.isDrillTakeover ? .hidden : .automatic)
     // No `.navigationTitle` on purpose: `WindowCoordinator` owns the window title so that
     // routing to a page and clicking that page in the sidebar cannot disagree about it.
   }
@@ -158,7 +179,7 @@ struct BexMainWindow: View {
   private var detail: some View {
     switch model.page {
     case .learn:
-      LearnView(study: model.study, learning: model.learning)
+      LearnView(model: model, study: model.study, learning: model.learning)
     case .history:
       HistoryView(viewModel: model.history)
     case .writingStyles:

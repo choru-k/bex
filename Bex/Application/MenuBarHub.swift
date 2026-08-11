@@ -127,7 +127,7 @@ struct MenuBarHubView: View {
         StudyCardView(
           viewModel: study,
           card: card,
-          isCompact: true,
+          scale: .compact,
           subtitle: "card \(min(study.completedCount + 1, study.sessionTotal)) of \(study.sessionTotal)"
         )
         .padding(14)
