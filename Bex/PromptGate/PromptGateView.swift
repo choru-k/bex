@@ -220,6 +220,8 @@ struct PromptGateView: View {
 
   private func review(availableHeight: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 12) {
+      // The target row and provenance line stay host-side: they are exactly what design
+      // 4a deletes for Quick Check, so they are not part of the shared card.
       VStack(alignment: .leading, spacing: 4) {
         Text(viewModel.reviewTitle)
           .font(.title2.bold())
@@ -235,261 +237,69 @@ struct PromptGateView: View {
       }
 
       if let review = viewModel.review {
-        let changes = DiffChange.make(from: review.diff)
+        ReviewCardView(
+          idPrefix: "prompt-gate",
+          review: review,
+          corrected: Binding(
+            get: { viewModel.review?.corrected ?? review.corrected },
+            set: { viewModel.updateCorrected($0) }
+          ),
+          editorHeight: PromptGateLayout.finalEditorHeight(for: availableHeight),
+          canEditCorrection: viewModel.canEditCorrection,
+          correctedFieldLabel: "Final message for \(viewModel.destinationLabel), editable",
+          errorMessage: viewModel.errorMessage,
+          alternatives: viewModel.alternatives,
+          alternativesPhrase: viewModel.alternativesPhrase,
+          pickedAlternativeID: viewModel.pickedAlternativeID,
+          onChooseAlternative: { viewModel.choose($0) },
+          changeCategorySummary: viewModel.changeCategorySummary,
+          accessibleDiffSummary: viewModel.accessibleDiffSummary,
+          detailsSummary: detailsSummary,
+          isDetailsExpanded: $isDetailsExpanded,
+          askThread: askThread,
+          keyboardFocus: $keyboardFocus,
+          accessibilityFocus: $accessibilityFocus,
+          detailsExtra: { deliveryDetails }
+        )
+      }
+    }
+  }
+
+  /// What each delivery button does, inside the card's Details disclosure. Delivery is
+  /// Fix & Send's business, which is why this rides in through `detailsExtra` rather
+  /// than living in the shared card.
+  @ViewBuilder
+  private var deliveryDetails: some View {
+    if let target = viewModel.session?.target {
+      ReviewCardDetailSection(title: "Delivery") {
         VStack(alignment: .leading, spacing: 6) {
-          Text("Final message · editable")
-            .font(.caption.weight(.semibold))
-            .textCase(.uppercase)
-            .foregroundStyle(.secondary)
-            .accessibilityAddTraits(.isHeader)
-            .accessibilityFocused($accessibilityFocus, equals: .finalMessageHeading)
-            .accessibilityIdentifier("prompt-gate-final-message-heading")
-          correctedEditor(
-            review.corrected,
-            height: PromptGateLayout.finalEditorHeight(for: availableHeight)
-          )
-          // The redline sits directly under the message it describes, one line, so "what
-          // did it change" is answered without reading a second panel.
-          if changes.isEmpty {
-            Text("No grammar changes. You can still edit the final message.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-              .accessibilityIdentifier("prompt-gate-no-changes")
-          } else {
-            DiffRedline(changes: changes, categorySummary: viewModel.changeCategorySummary)
-              .accessibilityHidden(true)
-              .overlay {
-                DiffSummaryAccessibilityElement(
-                  changeCount: changes.count,
-                  summary: viewModel.accessibleDiffSummary
-                )
-              }
+          Text(viewModel.deliveryGuidanceIntroduction)
+            .fixedSize(horizontal: false, vertical: true)
+          ForEach(target.availableDeliveryActions, id: \.self) { action in
+            Text(
+              "\(viewModel.deliveryActionLabel(action)): "
+                + viewModel.deliveryEffectDescription(for: action)
+            )
+            .fixedSize(horizontal: false, vertical: true)
+          }
+          if viewModel.session?.hookRequestID != nil,
+            viewModel.hookClientStatus.permitsReceipt
+          {
+            Text(
+              "Approval is acknowledged for this request only and expires after two minutes."
+            )
+            .fixedSize(horizontal: false, vertical: true)
           }
         }
-
-        error
-
-        alternativesPanel
-
-        AskThreadView(viewModel: askThread)
-          .padding(14)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Color.accentColor.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
-          // Keyed on the original rather than the corrected text: editing the final message
-          // must not throw away a question the owner already asked about it.
-          .onAppear { askThread.reset(context: review.original) }
-          .onChange(of: review.original) { original in
-            askThread.reset(context: original)
-          }
-
-        details(review: review)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityIdentifier("prompt-gate-delivery-guidance")
       }
-    }
-  }
-
-  /// The unranked alternatives, given the most visual weight on the sheet.
-  ///
-  /// This used to be a grey bullet list under the diff, which had it exactly backwards:
-  /// `docs/purpose.md` says correcting and teaching are separate jobs and *teaching is the
-  /// higher priority*, and this panel is the only teaching on the sheet. The grammar fixes
-  /// are already applied and need no decision; this is the one thing asking the owner to
-  /// think.
-  @ViewBuilder
-  private var alternativesPanel: some View {
-    let alternatives = viewModel.alternatives
-    if !alternatives.isEmpty {
-      VStack(alignment: .leading, spacing: 10) {
-        HStack(alignment: .firstTextBaseline) {
-          Text("Which fits?")
-            .font(.headline)
-            .accessibilityAddTraits(.isHeader)
-          Text("— your pick becomes a Study card")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-          Spacer(minLength: 8)
-          if !viewModel.alternativesPhrase.isEmpty {
-            Text("for “\(viewModel.alternativesPhrase)”")
-              .font(.caption)
-              .foregroundStyle(.tertiary)
-          }
-        }
-        .accessibilityIdentifier("prompt-gate-better-expression")
-
-        ForEach(alternatives) { alternative in
-          alternativeRow(alternative)
-        }
-
-        Text("Unranked — pick what you would actually say, or skip; ⌘⏎ sends as-is.")
-          .font(.caption)
-          .foregroundStyle(.tertiary)
-          .fixedSize(horizontal: false, vertical: true)
-          .accessibilityIdentifier("prompt-gate-alternatives-unranked-note")
-      }
-      .padding(14)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .background(Color.accentColor.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
-      .overlay {
-        RoundedRectangle(cornerRadius: 10)
-          .strokeBorder(Color.accentColor.opacity(0.25), lineWidth: 1)
-      }
-    }
-  }
-
-  private func alternativeRow(_ alternative: PromptGateAlternative) -> some View {
-    let isPicked = viewModel.pickedAlternativeID == alternative.id
-    return Button {
-      viewModel.choose(alternative)
-    } label: {
-      HStack(alignment: .top, spacing: 10) {
-        Image(systemName: isPicked ? "checkmark.circle.fill" : "circle")
-          .foregroundStyle(isPicked ? AnyShapeStyle(.tint) : AnyShapeStyle(.tertiary))
-        VStack(alignment: .leading, spacing: 2) {
-          Text(alternative.alternative)
-            .fontWeight(.medium)
-          if !alternative.reason.isEmpty {
-            Text(alternative.reason)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-              .fixedSize(horizontal: false, vertical: true)
-          }
-        }
-        Spacer(minLength: 0)
-      }
-      .padding(.horizontal, 12)
-      .padding(.vertical, 9)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .contentShape(Rectangle())
-      .background(
-        RoundedRectangle(cornerRadius: 9)
-          .fill(isPicked ? AnyShapeStyle(.tint.opacity(0.16)) : AnyShapeStyle(.quaternary))
-      )
-    }
-    .buttonStyle(.plain)
-    .accessibilityAddTraits(isPicked ? [.isSelected] : [])
-    .accessibilityIdentifier("prompt-gate-alternative-\(alternative.id)")
-  }
-
-  /// Everything that used to have its own heading: the original message, the model's grammar
-  /// notes, the provider, and what each delivery button does.
-  ///
-  /// One disclosure instead of four sections. None of it is a decision — it is all there to
-  /// be checked when something looks wrong, and four open panels of reference material was
-  /// what pushed the actual choice off the bottom of the sheet.
-  @ViewBuilder
-  private func details(review: PromptGateReview) -> some View {
-    DisclosureGroup(isExpanded: $isDetailsExpanded) {
-      VStack(alignment: .leading, spacing: 12) {
-        detailSection("Original message") {
-          Text(review.original)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityLabel("Original message, read only")
-            .accessibilityValue(review.original)
-            .accessibilityIdentifier("prompt-gate-original")
-        }
-
-        let grammarNotes = LearningAggregator.explanationWithoutConsider(from: review.explanation)
-        if !grammarNotes.isEmpty {
-          detailSection("Grammar notes") {
-            VStack(alignment: .leading, spacing: 6) {
-              Text(grammarNotes)
-                .textSelection(.enabled)
-                .accessibilityIdentifier("prompt-gate-explanation")
-              if review.hasHumanEdits {
-                Text(
-                  "This AI note describes the original suggestion and may not reflect your edits."
-                )
-                .font(.caption)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier("prompt-gate-ai-note-stale")
-              }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-          }
-        }
-
-        if let target = viewModel.session?.target {
-          detailSection("Delivery") {
-            VStack(alignment: .leading, spacing: 6) {
-              Text(viewModel.deliveryGuidanceIntroduction)
-                .fixedSize(horizontal: false, vertical: true)
-              ForEach(target.availableDeliveryActions, id: \.self) { action in
-                Text(
-                  "\(viewModel.deliveryActionLabel(action)): "
-                    + viewModel.deliveryEffectDescription(for: action)
-                )
-                .fixedSize(horizontal: false, vertical: true)
-              }
-              if viewModel.session?.hookRequestID != nil,
-                viewModel.hookClientStatus.permitsReceipt
-              {
-                Text(
-                  "Approval is acknowledged for this request only and expires after two minutes."
-                )
-                .fixedSize(horizontal: false, vertical: true)
-              }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityIdentifier("prompt-gate-delivery-guidance")
-          }
-        }
-      }
-      .padding(.top, 8)
-    } label: {
-      Button {
-        isDetailsExpanded.toggle()
-      } label: {
-        // States plainly that nothing has left yet — the reassurance belongs on the label,
-        // where it is read, not inside a panel nobody opened.
-        Text(detailsSummary)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-      }
-      .buttonStyle(.plain)
-      .accessibilityIdentifier("prompt-gate-details-disclosure")
     }
   }
 
   private var detailsSummary: String {
     "Details — original message · grammar notes · checked by "
       + "\(viewModel.selectedProvider.displayName) \(viewModel.selectedModel) · nothing sent yet"
-  }
-
-  private func detailSection<Content: View>(
-    _ title: String,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    VStack(alignment: .leading, spacing: 4) {
-      Text(title)
-        .font(.caption.weight(.semibold))
-        .textCase(.uppercase)
-        .foregroundStyle(.tertiary)
-      content()
-    }
-    .font(.callout)
-    .foregroundStyle(.secondary)
-  }
-
-  private func correctedEditor(_ value: String, height: CGFloat) -> some View {
-    TextEditor(
-      text: Binding(
-        get: { viewModel.review?.corrected ?? value },
-        set: { viewModel.updateCorrected($0) }
-      )
-    )
-    .padding(5)
-    .frame(height: height)
-    .background(Color(nsColor: .textBackgroundColor))
-    .clipShape(RoundedRectangle(cornerRadius: 7))
-    .overlay {
-      RoundedRectangle(cornerRadius: 7)
-        .stroke(Color(nsColor: .separatorColor))
-    }
-    .disabled(!viewModel.canEditCorrection)
-    .focused($keyboardFocus, equals: .correctedEditor)
-    .accessibilityLabel("Final message for \(viewModel.destinationLabel), editable")
-    .accessibilityIdentifier("prompt-gate-corrected")
   }
 
   private var invalidated: some View {
