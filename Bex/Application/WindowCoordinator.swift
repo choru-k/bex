@@ -95,6 +95,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         grammar: services.grammar,
         pasteboard: services.pasteboard,
         learningLog: services.learningLog,
+        considerTaps: services.considerTaps,
         onDismiss: { [weak self] reason in
           self?.closeQuickCheck(reason: reason)
         }
@@ -102,6 +103,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       quickCheckViewModel = viewModel
       let rootView = QuickCheckView(
         viewModel: viewModel,
+        askThread: makeAskThread(),
         openSettings: { [weak self] in self?.showSettings(origin: .quickCheck) },
         openWritingStyles: { [weak self] in self?.showProfiles() },
         openHistory: { [weak self] in self?.showHistory() }

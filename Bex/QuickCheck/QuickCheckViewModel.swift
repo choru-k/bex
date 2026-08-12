@@ -19,13 +19,6 @@ struct QuickCheckAccessibilityAnnouncement: Equatable, Sendable {
   let message: String
 }
 
-struct QuickCheckResultProvenance: Equatable, Sendable {
-  let provider: LLMProvider
-  let model: String
-  let writingStyleName: String
-  let completedAt: Date
-}
-
 @MainActor
 final class QuickCheckViewModel: ObservableObject {
   static let historyStorageDisclosure =
@@ -45,21 +38,23 @@ final class QuickCheckViewModel: ObservableObject {
   @Published private(set) var model: String = LLMProvider.openAI.defaultModel
   @Published private(set) var availableWritingStyles: [Profile] = []
   @Published private(set) var selectedWritingStyleID: UUID?
-  @Published private(set) var result: GrammarResult?
-  @Published private(set) var resultProvenance: QuickCheckResultProvenance?
-  @Published private(set) var diff: [DiffSegment] = []
+  /// The completed check as the shared review card consumes it (design 4a): original,
+  /// editable corrected text, explanation, and the diff derived from both. Replaces the
+  /// old separate `result`/`diff`/`provenance` trio — one value, same shape Fix & Send
+  /// reviews, so the two surfaces cannot drift.
+  @Published private(set) var review: PromptGateReview?
+  /// Which alternative the owner picked for this correction, or `nil` for "not yet".
+  /// Never pre-set — non-negotiable 5 means there is no default answer to offer.
+  @Published private(set) var pickedAlternativeID: String?
   @Published private(set) var isChecking = false
-  @Published private(set) var rewritingIntent: RewriteIntent?
   @Published private(set) var isLookingUp = false
   @Published private(set) var lookup: DictionaryLookup?
   @Published private(set) var lookupSavedToStudy = false
   @Published private(set) var isPreparingOutbound = false
   @Published private(set) var outboundSummary: QuickCheckOutboundSummary?
-  @Published var changesOnly = false
   @Published private(set) var setupError: String?
   @Published private(set) var userVisibleError: String?
   @Published private(set) var isContextLoaded = false
-  @Published private(set) var copied = false
   @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var editorFocusRequest = 0
@@ -72,16 +67,16 @@ final class QuickCheckViewModel: ObservableObject {
   private let grammar: any GrammarServicing
   private let pasteboard: any PasteboardWriting
   private let learningLog: LearningLogStore
+  private let considerTaps: ConsiderTapStore
   private let onDismiss: @MainActor (QuickCheckDismissalReason) -> Void
 
   private var contextLoadTask: Task<Void, Never>?
   private var outboundGateTask: Task<Void, Never>?
   private var operationTask: Task<Void, Never>?
   private var draftTask: Task<Void, Never>?
-  private var copiedTask: Task<Void, Never>?
   private var historyTask: Task<Void, Never>?
   private var studyLogTask: Task<Void, Never>?
-  private var historyID: UUID?
+  private var considerTapTask: Task<Void, Never>?
   private var pendingOutbound: PendingOutbound?
   private var activeOperationID: UUID?
   private var currentDestination: OutboundDestination?
@@ -99,6 +94,7 @@ final class QuickCheckViewModel: ObservableObject {
     grammar: any GrammarServicing,
     pasteboard: any PasteboardWriting,
     learningLog: LearningLogStore = LearningLogStore(),
+    considerTaps: ConsiderTapStore = ConsiderTapStore(),
     onDismiss: @escaping @MainActor (QuickCheckDismissalReason) -> Void
   ) {
     self.preferences = preferences
@@ -107,6 +103,7 @@ final class QuickCheckViewModel: ObservableObject {
     self.grammar = grammar
     self.pasteboard = pasteboard
     self.learningLog = learningLog
+    self.considerTaps = considerTaps
     self.onDismiss = onDismiss
   }
 
@@ -122,7 +119,7 @@ final class QuickCheckViewModel: ObservableObject {
   }
 
   var isBusy: Bool {
-    isPreparingOutbound || isChecking || rewritingIntent != nil || isLookingUp
+    isPreparingOutbound || isChecking || isLookingUp
   }
 
   var busyLabel: String? {
@@ -132,9 +129,6 @@ final class QuickCheckViewModel: ObservableObject {
     if isChecking {
       return "Checking…"
     }
-    if let rewritingIntent {
-      return "Applying \(rewritingIntent.label)…"
-    }
     if isLookingUp {
       return "Looking up…"
     }
@@ -142,7 +136,7 @@ final class QuickCheckViewModel: ObservableObject {
   }
 
   var hasPreservedUserWork: Bool {
-    !input.isEmpty || isBusy || outboundSummary != nil || result != nil
+    !input.isEmpty || isBusy || outboundSummary != nil || review != nil
       || userVisibleError != nil || lookup != nil
   }
 
@@ -155,8 +149,65 @@ final class QuickCheckViewModel: ObservableObject {
       && setupError == nil && !isBusy && outboundSummary == nil
   }
 
-  var diffAccessibilitySummary: String {
-    AccessibleDiffSummary.make(from: diff)
+  var accessibleDiffSummary: String {
+    guard let review else { return "No differences" }
+    return AccessibleDiffSummary.make(from: review.diff)
+  }
+
+  /// The unranked expression alternatives this correction offered. Computed from the
+  /// review rather than stored, so it cannot drift out of sync with the explanation it
+  /// was parsed from — same rule as Fix & Send.
+  var alternatives: [PromptGateAlternative] {
+    guard let review else { return [] }
+    return LearningAggregator.parseConsiderSuggestions(from: review.explanation)
+      .compactMap { LearningAggregator.parseSuggestionLine($0) }
+      .map {
+        PromptGateAlternative(phrase: $0.phrase, alternative: $0.alternative, reason: $0.reason)
+      }
+  }
+
+  var alternativesPhrase: String {
+    alternatives.first?.phrase ?? ""
+  }
+
+  /// The grammar rules this correction touched, for the summary beside the redline.
+  var changeCategorySummary: String {
+    guard let review else { return "" }
+    var seen: [String] = []
+    for line in LearningAggregator.linesUnderFixed(in: review.explanation) {
+      guard let tag = LearningAggregator.leadingTag(in: line) else { continue }
+      let name = GrammarCategory(rawValue: tag)?.displayName ?? tag
+      if !seen.contains(name) { seen.append(name) }
+    }
+    return seen.joined(separator: ", ")
+  }
+
+  var canCopyCorrection: Bool {
+    review?.corrected.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+      && !isBusy && outboundSummary == nil
+  }
+
+  /// Records which alternative the owner would actually say, minting a Study card.
+  /// Fire-and-forget like Fix & Send's: picking never makes the panel wait on disk.
+  func choose(_ alternative: PromptGateAlternative) {
+    guard let review, pickedAlternativeID != alternative.id else { return }
+    pickedAlternativeID = alternative.id
+    let original = review.original
+    considerTapTask = Task { [considerTaps] in
+      await considerTaps.record(
+        sourceOriginal: original,
+        phrase: alternative.phrase,
+        alternative: alternative.alternative,
+        reason: alternative.reason
+      )
+    }
+  }
+
+  /// Edits to the final message, straight onto the review so the redline follows.
+  func updateCorrected(_ value: String) {
+    guard var review else { return }
+    review.updateCorrected(value)
+    self.review = review
   }
 
   var processingDisclosure: String {
@@ -261,19 +312,6 @@ final class QuickCheckViewModel: ObservableObject {
     sessionDidShow()
   }
 
-  func rewrite(_ intent: RewriteIntent) {
-    guard let current = result, !isBusy, outboundSummary == nil else { return }
-    prepareOutbound(
-      .rewrite(
-        RewritePayload(
-          original: input,
-          current: current,
-          intent: intent
-        )
-      )
-    )
-  }
-
   func lookUp() {
     guard canLookUp else { return }
     prepareOutbound(.define(DefinePayload(term: input)))
@@ -337,17 +375,12 @@ final class QuickCheckViewModel: ObservableObject {
     await preferences.deleteSavedQuickDraft()
   }
 
+  /// Copies the (possibly owner-edited) correction. `closeAfter` is the ⏎ path — copy
+  /// and dismiss in one stroke; ⇧⌘C keeps the panel up.
   func copy(closeAfter: Bool) {
-    guard let corrected = result?.corrected else { return }
+    guard let corrected = review?.corrected else { return }
     do {
       try pasteboard.write(corrected)
-      copied = true
-      copiedTask?.cancel()
-      copiedTask = Task { [weak self] in
-        try? await Task.sleep(nanoseconds: 2_000_000_000)
-        guard !Task.isCancelled else { return }
-        self?.copied = false
-      }
       if closeAfter {
         dismiss(.completed)
       }
@@ -359,25 +392,12 @@ final class QuickCheckViewModel: ObservableObject {
   func performPrimaryAction() {
     if outboundSummary != nil {
       confirmOutbound()
-    } else if result != nil {
+    } else if review != nil {
       guard !isBusy else { return }
       copy(closeAfter: true)
     } else {
       check()
     }
-  }
-
-  func useResultAsInput() {
-    guard let corrected = result?.corrected else { return }
-    input = corrected
-    clearRenderedResult()
-    sessionDidShow()
-  }
-
-  func recheck() {
-    guard !isBusy else { return }
-    clearRenderedResult()
-    check()
   }
 
   func backToInput() {
@@ -394,11 +414,8 @@ final class QuickCheckViewModel: ObservableObject {
     activeOperationID = nil
     operationTask?.cancel()
     isChecking = false
-    rewritingIntent = nil
     isLookingUp = false
 
-    copiedTask?.cancel()
-    copied = false
     clearRenderedResult()
     userVisibleError = nil
     sessionDidShow()
@@ -426,6 +443,7 @@ final class QuickCheckViewModel: ObservableObject {
     await historyTask?.value
     await draftTask?.value
     await studyLogTask?.value
+    await considerTapTask?.value
   }
 
   private func performInitialContextLoad(
@@ -487,7 +505,6 @@ final class QuickCheckViewModel: ObservableObject {
     outboundSummary = nil
     isPreparingOutbound = true
     userVisibleError = nil
-    copied = false
     let generation = sessionGeneration
     outboundGateTask = Task { [weak self, preferences] in
       do {
@@ -526,8 +543,6 @@ final class QuickCheckViewModel: ObservableObject {
     switch outbound {
     case .check(let request):
       startCheck(request)
-    case .rewrite(let request):
-      startRewrite(request)
     case .define(let request):
       startDefine(request)
     }
@@ -540,17 +555,13 @@ final class QuickCheckViewModel: ObservableObject {
 
     isLookingUp = true
     userVisibleError = nil
-    copied = false
     lookup = nil
     lookupSavedToStudy = false
     // A lookup and a grammar check answer different questions about different text; leaving
-    // the previous check's diff on screen under a dictionary entry would read as if the
+    // the previous check's review on screen under a dictionary entry would read as if the
     // entry were the correction.
-    result = nil
-    resultProvenance = nil
-    diff = []
-    changesOnly = false
-    historyID = nil
+    review = nil
+    pickedAlternativeID = nil
     announce("Lookup started.")
 
     operationTask = Task { [weak self, grammar] in
@@ -582,16 +593,11 @@ final class QuickCheckViewModel: ObservableObject {
     activeOperationID = operationID
 
     isChecking = true
-    rewritingIntent = nil
     userVisibleError = nil
-    copied = false
     lookup = nil
     lookupSavedToStudy = false
-    result = nil
-    resultProvenance = nil
-    diff = []
-    changesOnly = false
-    historyID = nil
+    review = nil
+    pickedAlternativeID = nil
     announce("Checking started.")
 
     operationTask = Task { [weak self, grammar] in
@@ -604,14 +610,11 @@ final class QuickCheckViewModel: ObservableObject {
         )
         try Task.checkCancellation()
         guard self.activeOperationID == operationID else { return }
-        self.result = checked
-        self.resultProvenance = QuickCheckResultProvenance(
-          provider: request.destination.provider,
-          model: request.destination.model,
-          writingStyleName: request.writingStyle?.name ?? "Bex Standard",
-          completedAt: Date()
+        self.review = PromptGateReview(
+          original: request.original,
+          corrected: checked.corrected,
+          explanation: checked.explanation
         )
-        self.diff = WordDiff.compute(original: request.original, corrected: checked.corrected)
         self.finishOperation(operationID, announcement: "Check complete.")
         self.saveInitialHistory(
           original: request.original,
@@ -632,64 +635,10 @@ final class QuickCheckViewModel: ObservableObject {
     }
   }
 
-  private func startRewrite(_ request: RewriteRequest) {
-    operationTask?.cancel()
-    let operationID = UUID()
-    activeOperationID = operationID
-    let priorHistoryTask = historyTask
-
-    rewritingIntent = request.intent
-    userVisibleError = nil
-    copied = false
-    announce("\(request.intent.label) rewrite started.")
-
-    operationTask = Task { [weak self, grammar] in
-      guard let self else { return }
-      do {
-        let rewritten = try await grammar.rewrite(
-          text: request.current.corrected,
-          intent: request.intent,
-          destination: request.destination
-        )
-        try Task.checkCancellation()
-        guard self.activeOperationID == operationID else { return }
-        let explanation =
-          "\(request.current.explanation)\n\nRewrite applied: \(request.intent.label)"
-        let rewrittenResult = GrammarResult(
-          corrected: rewritten,
-          explanation: explanation
-        )
-        self.result = rewrittenResult
-        self.resultProvenance = QuickCheckResultProvenance(
-          provider: request.destination.provider,
-          model: request.destination.model,
-          writingStyleName: self.resultProvenance?.writingStyleName ?? "Bex Standard",
-          completedAt: Date()
-        )
-        self.diff = WordDiff.compute(original: request.original, corrected: rewritten)
-        self.finishOperation(operationID, announcement: "Rewrite complete.")
-        self.saveRewriteHistory(
-          corrected: rewritten,
-          explanation: explanation,
-          after: priorHistoryTask
-        )
-      } catch {
-        guard self.activeOperationID == operationID else { return }
-        if Task.isCancelled || error is CancellationError || error as? BexError == .cancellation {
-          self.finishOperation(operationID, announcement: "Rewrite canceled.")
-        } else {
-          self.show(error)
-          self.finishOperation(operationID, announcement: "Rewrite failed.")
-        }
-      }
-    }
-  }
-
   private func finishOperation(_ operationID: UUID, announcement: String) {
     guard activeOperationID == operationID else { return }
     activeOperationID = nil
     isChecking = false
-    rewritingIntent = nil
     isLookingUp = false
     announce(announcement)
   }
@@ -720,7 +669,6 @@ final class QuickCheckViewModel: ObservableObject {
     activeOperationID = nil
     operationTask?.cancel()
     isChecking = false
-    rewritingIntent = nil
     isLookingUp = false
 
     draftPersistenceGeneration &+= 1
@@ -732,8 +680,6 @@ final class QuickCheckViewModel: ObservableObject {
       await preferences.deleteSavedQuickDraft()
     }
 
-    copiedTask?.cancel()
-    copied = false
     clearRenderedResult()
     userVisibleError = nil
   }
@@ -785,10 +731,9 @@ final class QuickCheckViewModel: ObservableObject {
     model: String,
     writingStyleName: String?
   ) {
-    let id = UUID()
     let generation = historyPersistenceGeneration
     let entry = HistoryEntry(
-      id: id,
+      id: UUID(),
       original: original,
       corrected: result.corrected,
       explanation: result.explanation,
@@ -797,7 +742,6 @@ final class QuickCheckViewModel: ObservableObject {
       timestamp: Date(),
       profileName: writingStyleName
     )
-    historyID = id
     historyTask = Task { [weak self, preferences, data] in
       guard let self, self.historyRetentionChoice == .enabled else { return }
       let storedChoice = await preferences.historyRetentionChoice()
@@ -814,48 +758,15 @@ final class QuickCheckViewModel: ObservableObject {
     }
   }
 
-  private func saveRewriteHistory(
-    corrected: String,
-    explanation: String,
-    after priorHistoryTask: Task<Void, Never>?
-  ) {
-    let generation = historyPersistenceGeneration
-    guard let historyID else { return }
-    historyTask = Task { [weak self, preferences, data] in
-      await priorHistoryTask?.value
-      guard let self, self.historyRetentionChoice == .enabled else { return }
-      let storedChoice = await preferences.historyRetentionChoice()
-      guard
-        !Task.isCancelled,
-        self.historyPersistenceGeneration == generation,
-        storedChoice == .enabled
-      else { return }
-      do {
-        try await data.updateHistory(
-          id: historyID,
-          corrected: corrected,
-          explanation: explanation
-        )
-      } catch {
-        self.userVisibleError = "Rewrite complete, but history could not be updated."
-      }
-    }
-  }
-
   /// What to announce when an in-flight operation is torn down, for whichever of the
-  /// three kinds is running.
+  /// two kinds is running.
   private var canceledAnnouncement: String {
-    if isChecking { return "Check canceled." }
-    if isLookingUp { return "Lookup canceled." }
-    return "Rewrite canceled."
+    isLookingUp ? "Lookup canceled." : "Check canceled."
   }
 
   private func clearRenderedResult() {
-    result = nil
-    resultProvenance = nil
-    diff = []
-    changesOnly = false
-    historyID = nil
+    review = nil
+    pickedAlternativeID = nil
     lookup = nil
     lookupSavedToStudy = false
   }
@@ -882,19 +793,12 @@ extension QuickCheckViewModel {
     let writingStyle: Profile?
   }
 
-  fileprivate struct RewritePayload {
-    let original: String
-    let current: GrammarResult
-    let intent: RewriteIntent
-  }
-
   fileprivate struct DefinePayload {
     let term: String
   }
 
   fileprivate enum OutboundPayload {
     case check(CheckPayload)
-    case rewrite(RewritePayload)
     case define(DefinePayload)
 
     func configured(for destination: OutboundDestination) -> PendingOutbound {
@@ -909,15 +813,6 @@ extension QuickCheckViewModel {
             writingStyle: payload.writingStyle
           )
         )
-      case .rewrite(let payload):
-        return .rewrite(
-          RewriteRequest(
-            original: payload.original,
-            current: payload.current,
-            intent: payload.intent,
-            destination: destination
-          )
-        )
       }
     }
   }
@@ -928,13 +823,6 @@ extension QuickCheckViewModel {
     let writingStyle: Profile?
   }
 
-  fileprivate struct RewriteRequest {
-    let original: String
-    let current: GrammarResult
-    let intent: RewriteIntent
-    let destination: OutboundDestination
-  }
-
   fileprivate struct DefineRequest {
     let term: String
     let destination: OutboundDestination
@@ -942,13 +830,11 @@ extension QuickCheckViewModel {
 
   fileprivate enum PendingOutbound {
     case check(CheckRequest)
-    case rewrite(RewriteRequest)
     case define(DefineRequest)
 
     var destination: OutboundDestination {
       switch self {
       case .check(let request): request.destination
-      case .rewrite(let request): request.destination
       case .define(let request): request.destination
       }
     }
@@ -976,16 +862,6 @@ extension QuickCheckViewModel {
           fullDraft: request.original,
           disclosure:
             "The full draft shown here will be sent to \(request.destination.disclosureTarget)."
-        )
-      case .rewrite(let request):
-        return QuickCheckOutboundSummary(
-          action: "Apply \(request.intent.label)",
-          provider: request.destination.provider.displayName,
-          model: request.destination.model,
-          writingStyle: nil,
-          fullDraft: request.current.corrected,
-          disclosure:
-            "The full corrected draft shown here will be sent to \(request.destination.disclosureTarget)."
         )
       }
     }

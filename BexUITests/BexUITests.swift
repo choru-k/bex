@@ -17,7 +17,7 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(app.windows["Welcome to Bex"].waitForNonExistence(timeout: 3))
   }
 
-  func testCheckRewriteCopyCloseAndHistory() throws {
+  func testCheckShowsReviewCardCopiesCorrectionAndSavesHistory() throws {
     continueAfterFailure = false
     let (app, copySink) = launch(openQuickCheck: true, scenario: "configured-provider")
     defer {
@@ -46,38 +46,27 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(check.isEnabled)
     check.click()
 
-    let corrected = app.staticTexts["quick-check-corrected"]
+    // The result is the shared review card (design 4a): an editable final message with
+    // the redline under it, grammar notes behind one Details disclosure, and the footer
+    // as the only surface difference from Fix & Send.
+    let corrected = app.textViews["quick-check-corrected"]
     XCTAssertTrue(corrected.waitForExistence(timeout: 5))
     XCTAssertEqual(corrected.value as? String, "this is a test")
-    XCTAssertEqual(
-      app.staticTexts["quick-check-grammar-notes"].value as? String,
-      "Changed subject-verb agreement."
-    )
-    let diffElement = app.descendants(matching: .any)["quick-check-diff"]
+    let diffElement = app.descendants(matching: .any)["quick-check-diff-summary"]
     let diffSummary = accessibilityText(of: diffElement)
     XCTAssertTrue(diffSummary.contains("Removed “are” between"))
     XCTAssertTrue(diffSummary.contains("Inserted “is” between"))
 
-    let formal = app.buttons["quick-check-rewrite-formal"]
-    XCTAssertTrue(formal.waitForExistence(timeout: 2))
-    formal.click()
-    let formalResult = app.staticTexts["quick-check-corrected"]
-    let formalValue = NSPredicate(format: "value == %@", "This is a test.")
-    let formalExpectation = XCTNSPredicateExpectation(
-      predicate: formalValue,
-      object: formalResult
-    )
-    XCTAssertEqual(XCTWaiter.wait(for: [formalExpectation], timeout: 5), .completed)
-    XCTAssertTrue(
-      ((app.staticTexts["quick-check-grammar-notes"].value as? String) ?? "")
-        .contains("Rewrite applied: More Formal")
-    )
+    app.buttons["quick-check-details-disclosure"].click()
+    let grammarNotes = app.descendants(matching: .any)["quick-check-explanation"]
+    XCTAssertTrue(grammarNotes.waitForExistence(timeout: 3))
+    XCTAssertEqual(accessibilityText(of: grammarNotes), "Changed subject-verb agreement.")
 
-    app.buttons["quick-check-copy-close"].click()
+    app.buttons["quick-check-copy-correction"].click()
     XCTAssertTrue(app.windows["Quick Check"].waitForNonExistence(timeout: 3))
     XCTAssertEqual(
       try String(contentsOf: copySink, encoding: .utf8),
-      "This is a test."
+      "this is a test"
     )
 
     openMenuCommand("Quick Check", in: app)
@@ -93,15 +82,7 @@ final class BexUITests: XCTestCase {
       NSPredicate(format: "label == 'Corrected'")
     ).firstMatch
     XCTAssertTrue(historyCorrected.waitForExistence(timeout: 3))
-    XCTAssertEqual(historyCorrected.value as? String, "This is a test.")
-    let rewrittenExplanation = historyWindow.descendants(matching: .any).matching(
-      NSPredicate(format: "label == 'Explanation'")
-    ).firstMatch
-    XCTAssertTrue(rewrittenExplanation.waitForExistence(timeout: 3))
-    XCTAssertTrue(
-      ((rewrittenExplanation.value as? String) ?? "")
-        .contains("Rewrite applied: More Formal")
-    )
+    XCTAssertEqual(historyCorrected.value as? String, "this is a test")
   }
 
   func testMissingCredentialShowsSetupAndNavigatesToSettings() {
@@ -614,23 +595,30 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(waitForKeyboardFocus(on: input))
 
     postUITestingCommand("com.bex.desktop.ui-testing.release-grammar")
-    let corrected = app.descendants(matching: .any)["quick-check-corrected"]
+    let corrected = app.textViews["quick-check-corrected"]
     XCTAssertTrue(corrected.waitForExistence(timeout: 5))
     XCTAssertEqual(accessibilityText(of: corrected), "this is a test")
 
-    app.buttons["quick-check-history"].click()
-    XCTAssertTrue(app.windows["History"].waitForExistence(timeout: 5))
+    // The post-check state is the shared review card, so auxiliary navigation now goes
+    // through the context row (provider/model route to Settings). The card must survive
+    // the round trip.
+    app.buttons["quick-check-provider"].click()
+    XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
     openMenuCommand("Quick Check", in: app)
+    XCTAssertTrue(app.textViews["quick-check-corrected"].waitForExistence(timeout: 5))
+    XCTAssertEqual(
+      accessibilityText(of: app.textViews["quick-check-corrected"]),
+      "this is a test"
+    )
+
+    // ⌘[ returns to the draft, which still holds the original text; the scenario fails
+    // the second check deterministically, and the error must survive navigation too.
+    app.typeKey("[", modifierFlags: .command)
     input = app.textViews["quick-check-input"]
     XCTAssertTrue(input.waitForExistence(timeout: 5))
     XCTAssertEqual(input.value as? String, "this are a test")
-    XCTAssertEqual(
-      accessibilityText(of: app.descendants(matching: .any)["quick-check-corrected"]),
-      "this is a test"
-    )
     XCTAssertTrue(waitForKeyboardFocus(on: input))
-
-    app.buttons["Recheck"].click()
+    app.buttons["quick-check-check"].click()
     let error = app.descendants(matching: .any)["quick-check-error"]
     XCTAssertTrue(error.waitForExistence(timeout: 5))
     XCTAssertEqual(accessibilityText(of: error), "Forced UI test grammar failure.")

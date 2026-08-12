@@ -20,33 +20,27 @@ private enum QuickCheckStubError: LocalizedError {
 actor QuickCheckGrammarStub: GrammarServicing {
 
   private var checkCalls: [QuickCheckCall] = []
-  private var rewriteCalls = 0
   private var defineTerms: [String] = []
   private var failDefine = false
   private var delayCheck = false
-  private var delayRewrite = false
   private var failCheck = false
+  private var checkExplanation = "Changed subject-verb agreement."
   private var checkWaiters: [CheckedContinuation<Void, Never>] = []
-  private var rewriteWaiters: [CheckedContinuation<Void, Never>] = []
 
   func setDelayCheck(_ value: Bool) {
     delayCheck = value
-  }
-
-  func setDelayRewrite(_ value: Bool) {
-    delayRewrite = value
   }
 
   func setFailCheck(_ value: Bool) {
     failCheck = value
   }
 
-  fileprivate func recordedChecks() -> [QuickCheckCall] {
-    checkCalls
+  func setCheckExplanation(_ value: String) {
+    checkExplanation = value
   }
 
-  func recordedRewriteCount() -> Int {
-    rewriteCalls
+  fileprivate func recordedChecks() -> [QuickCheckCall] {
+    checkCalls
   }
 
   func setFailDefine(_ value: Bool) {
@@ -61,13 +55,6 @@ actor QuickCheckGrammarStub: GrammarServicing {
     delayCheck = false
     let waiters = checkWaiters
     checkWaiters.removeAll()
-    waiters.forEach { $0.resume() }
-  }
-
-  func resumeRewrites() {
-    delayRewrite = false
-    let waiters = rewriteWaiters
-    rewriteWaiters.removeAll()
     waiters.forEach { $0.resume() }
   }
 
@@ -95,22 +82,18 @@ actor QuickCheckGrammarStub: GrammarServicing {
     }
     return GrammarResult(
       corrected: "this is a test",
-      explanation: "Changed subject-verb agreement."
+      explanation: checkExplanation
     )
   }
 
+  /// Quick Check no longer rewrites — the shared review card replaced the rewrite row —
+  /// but the protocol still requires it for the surfaces that do.
   func rewrite(
     text: String,
     intent: RewriteIntent,
     destination: OutboundDestination
   ) async throws -> String {
-    rewriteCalls += 1
-    if delayRewrite {
-      await withCheckedContinuation { continuation in
-        rewriteWaiters.append(continuation)
-      }
-    }
-    return "This is a test."
+    "This is a test."
   }
 
   func define(
@@ -184,7 +167,7 @@ private final class QuickCheckDismissalRecorder {
 
 @MainActor
 final class QuickCheckViewModelTests: XCTestCase {
-  func testCheckCopyAndFormalRewriteUpdateOneHistoryEntry() async throws {
+  func testCheckProducesReviewCopiesEditsAndSavesOneHistoryEntry() async throws {
     let fixture = try await makeFixture()
     defer { fixture.removeFiles() }
 
@@ -193,30 +176,22 @@ final class QuickCheckViewModelTests: XCTestCase {
     fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
 
-    XCTAssertEqual(
-      fixture.viewModel.result,
-      GrammarResult(
-        corrected: "this is a test",
-        explanation: "Changed subject-verb agreement."
-      )
-    )
-    let provenance = try XCTUnwrap(fixture.viewModel.resultProvenance)
-    XCTAssertEqual(provenance.provider, .openAI)
-    XCTAssertEqual(provenance.model, LLMProvider.openAI.defaultModel)
-    XCTAssertEqual(provenance.writingStyleName, "Bex Standard")
-    XCTAssertLessThanOrEqual(provenance.completedAt, Date())
+    let review = try XCTUnwrap(fixture.viewModel.review)
+    XCTAssertEqual(review.original, "this are a test")
+    XCTAssertEqual(review.corrected, "this is a test")
+    XCTAssertEqual(review.explanation, "Changed subject-verb agreement.")
     XCTAssertTrue(
-      fixture.viewModel.diff.contains { $0.kind == .removed && $0.text == "are" }
+      review.diff.contains { $0.kind == .removed && $0.text == "are" }
     )
     XCTAssertTrue(
-      fixture.viewModel.diff.contains { $0.kind == .inserted && $0.text == "is" }
+      review.diff.contains { $0.kind == .inserted && $0.text == "is" }
     )
     XCTAssertEqual(
-      fixture.viewModel.diffAccessibilitySummary,
-      AccessibleDiffSummary.make(from: fixture.viewModel.diff)
+      fixture.viewModel.accessibleDiffSummary,
+      AccessibleDiffSummary.make(from: review.diff)
     )
 
-    var history = try await fixture.data.loadHistory()
+    let history = try await fixture.data.loadHistory()
     XCTAssertEqual(history.count, 1)
     XCTAssertEqual(history[0].original, "this are a test")
     XCTAssertEqual(history[0].corrected, "this is a test")
@@ -226,21 +201,58 @@ final class QuickCheckViewModelTests: XCTestCase {
     fixture.viewModel.copy(closeAfter: false)
     XCTAssertEqual(fixture.pasteboard.value, "this is a test")
 
-    fixture.viewModel.rewrite(.formal)
+    // The final message is editable, and what ships is the edited text — including the
+    // redline following the edit, exactly like Fix & Send.
+    fixture.viewModel.updateCorrected("this is a better test")
+    XCTAssertEqual(fixture.viewModel.review?.hasHumanEdits, true)
+    XCTAssertTrue(
+      fixture.viewModel.review?.diff.contains {
+        $0.kind == .inserted && $0.text.contains("better")
+      } == true
+    )
+    fixture.viewModel.copy(closeAfter: false)
+    XCTAssertEqual(fixture.pasteboard.value, "this is a better test")
+  }
+
+  func testAlternativesAreParsedUnrankedAndAPickMintsExactlyOneTap() async throws {
+    let fixture = try await makeFixture()
+    defer { fixture.removeFiles() }
+    await fixture.grammar.setCheckExplanation(
+      """
+      Fixed:
+      [subject-verb-agreement] "are" → "is"
+      Consider:
+      "can you check" → "could you check" — softer
+      "can you check" → "mind checking" — casual
+      Which fits?
+      """
+    )
+
+    await fixture.viewModel.loadContext()
+    fixture.viewModel.input = "this are a test, can you check"
+    fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
 
-    XCTAssertEqual(fixture.viewModel.result?.corrected, "This is a test.")
-    XCTAssertEqual(
-      fixture.viewModel.result?.explanation,
-      "Changed subject-verb agreement.\n\nRewrite applied: More Formal"
-    )
-    history = try await fixture.data.loadHistory()
-    XCTAssertEqual(history.count, 1)
-    XCTAssertEqual(history[0].corrected, "This is a test.")
-    XCTAssertEqual(
-      history[0].explanation,
-      "Changed subject-verb agreement.\n\nRewrite applied: More Formal"
-    )
+    let alternatives = fixture.viewModel.alternatives
+    XCTAssertEqual(alternatives.map(\.alternative), ["could you check", "mind checking"])
+    XCTAssertEqual(fixture.viewModel.alternativesPhrase, "can you check")
+    XCTAssertEqual(fixture.viewModel.changeCategorySummary, "Subject-verb agreement")
+    // Never pre-picked: non-negotiable 5.
+    XCTAssertNil(fixture.viewModel.pickedAlternativeID)
+
+    let first = try XCTUnwrap(alternatives.first)
+    fixture.viewModel.choose(first)
+    XCTAssertEqual(fixture.viewModel.pickedAlternativeID, first.id)
+    await fixture.viewModel.waitForCurrentWork()
+    var taps = await fixture.considerTaps.taps()
+    XCTAssertEqual(taps.map(\.alternative), ["could you check"])
+    XCTAssertEqual(taps.first?.sourceOriginal, "this are a test, can you check")
+
+    // Choosing the same alternative again must not mint a second card.
+    fixture.viewModel.choose(first)
+    await fixture.viewModel.waitForCurrentWork()
+    taps = await fixture.considerTaps.taps()
+    XCTAssertEqual(taps.count, 1)
   }
 
   func testFreshRetentionChoicesBlockDraftAndHistoryWrites() async throws {
@@ -377,12 +389,7 @@ final class QuickCheckViewModelTests: XCTestCase {
       confirmedCalls.first?.writingStylePrompt,
       "Prefer short sentences.\nKeep every technical qualifier."
     )
-
-    fixture.viewModel.rewrite(.formal)
-    await fixture.viewModel.waitForCurrentWork()
     XCTAssertNil(fixture.viewModel.outboundSummary)
-    let rewriteCount = await fixture.grammar.recordedRewriteCount()
-    XCTAssertEqual(rewriteCount, 1)
   }
 
   func testManualActionsUseDestinationScopedDisclosureAcceptance() async throws {
@@ -504,7 +511,7 @@ final class QuickCheckViewModelTests: XCTestCase {
 
     await fixture.grammar.resumeChecks()
     await fixture.viewModel.waitForCurrentWork()
-    XCTAssertNotNil(fixture.viewModel.result)
+    XCTAssertNotNil(fixture.viewModel.review)
   }
 
   func testPreservedUserWorkBoundaryProtectsHistoryDraftReplacement() async throws {
@@ -525,7 +532,7 @@ final class QuickCheckViewModelTests: XCTestCase {
     await fixture.grammar.resumeChecks()
     await fixture.viewModel.waitForCurrentWork()
     XCTAssertEqual(fixture.viewModel.input, "history replacement")
-    XCTAssertNil(fixture.viewModel.result)
+    XCTAssertNil(fixture.viewModel.review)
     XCTAssertFalse(fixture.viewModel.isBusy)
     XCTAssertTrue(fixture.viewModel.hasPreservedUserWork)
 
@@ -542,27 +549,30 @@ final class QuickCheckViewModelTests: XCTestCase {
     fixture.viewModel.input = "this are the original draft"
     fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
-    XCTAssertNotNil(fixture.viewModel.result)
+    XCTAssertNotNil(fixture.viewModel.review)
 
-    await fixture.grammar.setDelayRewrite(true)
-    fixture.viewModel.rewrite(.formal)
-    try await waitUntil { fixture.viewModel.rewritingIntent == .formal }
     let focusBeforeBack = fixture.viewModel.editorFocusRequest
-
     fixture.viewModel.backToInput()
     XCTAssertEqual(fixture.viewModel.input, "this are the original draft")
-    XCTAssertNil(fixture.viewModel.result)
+    XCTAssertNil(fixture.viewModel.review)
     XCTAssertNil(fixture.viewModel.outboundSummary)
     XCTAssertNil(fixture.viewModel.userVisibleError)
     XCTAssertFalse(fixture.viewModel.isBusy)
     XCTAssertGreaterThan(fixture.viewModel.editorFocusRequest, focusBeforeBack)
 
-    await fixture.grammar.resumeRewrites()
+    // Back while a check is still in flight abandons that check for good.
+    await fixture.grammar.setDelayCheck(true)
+    fixture.viewModel.check()
+    try await waitUntil { fixture.viewModel.isChecking }
+    fixture.viewModel.backToInput()
+    XCTAssertEqual(fixture.viewModel.input, "this are the original draft")
+    XCTAssertFalse(fixture.viewModel.isBusy)
+    await fixture.grammar.resumeChecks()
     await fixture.viewModel.waitForCurrentWork()
-    XCTAssertNil(fixture.viewModel.result)
+    XCTAssertNil(fixture.viewModel.review)
   }
 
-  func testAuxiliaryNavigationPreservesResultErrorAndRewriteState() async throws {
+  func testAuxiliaryNavigationPreservesReviewAndErrorState() async throws {
     let fixture = try await makeFixture()
     defer { fixture.removeFiles() }
 
@@ -570,23 +580,11 @@ final class QuickCheckViewModelTests: XCTestCase {
     fixture.viewModel.input = "this are a test"
     fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
-    let completedResult = fixture.viewModel.result
+    let completedReview = fixture.viewModel.review
 
     fixture.viewModel.panelDidDismiss(.auxiliaryNavigation)
     await fixture.viewModel.loadContext()
-    XCTAssertEqual(fixture.viewModel.result, completedResult)
-
-    await fixture.grammar.setDelayRewrite(true)
-    fixture.viewModel.rewrite(.formal)
-    try await waitUntil { fixture.viewModel.rewritingIntent == .formal }
-    fixture.viewModel.panelDidDismiss(.auxiliaryNavigation)
-    await fixture.viewModel.loadContext()
-    XCTAssertEqual(fixture.viewModel.rewritingIntent, .formal)
-    XCTAssertEqual(fixture.viewModel.result, completedResult)
-
-    await fixture.grammar.resumeRewrites()
-    await fixture.viewModel.waitForCurrentWork()
-    XCTAssertEqual(fixture.viewModel.result?.corrected, "This is a test.")
+    XCTAssertEqual(fixture.viewModel.review, completedReview)
 
     let failure = try await makeFixture()
     defer { failure.removeFiles() }
@@ -611,7 +609,7 @@ final class QuickCheckViewModelTests: XCTestCase {
       await fixture.viewModel.waitForCurrentWork()
 
       XCTAssertEqual(fixture.viewModel.input, "")
-      XCTAssertNil(fixture.viewModel.result)
+      XCTAssertNil(fixture.viewModel.review)
       XCTAssertNil(fixture.viewModel.userVisibleError)
       XCTAssertFalse(fixture.viewModel.isBusy)
       XCTAssertFalse(fixture.viewModel.wantsEditorFocus)
@@ -666,32 +664,9 @@ final class QuickCheckViewModelTests: XCTestCase {
     XCTAssertEqual(fixture.pasteboard.value, "this is a test")
     XCTAssertEqual(fixture.dismissals.reasons, [.completed])
     XCTAssertEqual(fixture.viewModel.input, "")
-    XCTAssertNil(fixture.viewModel.result)
+    XCTAssertNil(fixture.viewModel.review)
     let storedDraft = await fixture.preferences.quickDraft()
     XCTAssertEqual(storedDraft, "")
-  }
-
-  func testRewriteHistoryFinishesAfterImmediateCopyAndClose() async throws {
-    let fixture = try await makeFixture()
-    defer { fixture.removeFiles() }
-
-    await fixture.viewModel.loadContext()
-    fixture.viewModel.input = "this are a test"
-    fixture.viewModel.check()
-    await fixture.viewModel.waitForCurrentWork()
-
-    fixture.viewModel.rewrite(.formal)
-    try await waitUntil {
-      fixture.viewModel.result?.corrected == "This is a test."
-        && !fixture.viewModel.isBusy
-    }
-    fixture.viewModel.copy(closeAfter: true)
-    await fixture.viewModel.waitForCurrentWork()
-
-    let history = try await fixture.data.loadHistory()
-    XCTAssertEqual(history.count, 1)
-    XCTAssertEqual(history.first?.corrected, "This is a test.")
-    XCTAssertTrue(history.first?.explanation.contains("Rewrite applied: More Formal") == true)
   }
 
   func testAsyncOperationsPublishExactlyOneStartAndTerminalAnnouncementState() async throws {
@@ -717,20 +692,16 @@ final class QuickCheckViewModelTests: XCTestCase {
       QuickCheckAccessibilityAnnouncement(sequence: 2, message: "Check complete.")
     )
 
-    await fixture.grammar.setDelayRewrite(true)
-    fixture.viewModel.rewrite(.formal)
-    try await waitUntil { fixture.viewModel.rewritingIntent == .formal }
-    XCTAssertEqual(fixture.viewModel.busyLabel, "Applying More Formal…")
-    XCTAssertEqual(
-      fixture.viewModel.accessibilityAnnouncement,
-      QuickCheckAccessibilityAnnouncement(sequence: 3, message: "More Formal rewrite started.")
-    )
-    await fixture.grammar.resumeRewrites()
-    await fixture.viewModel.waitForCurrentWork()
+    // The stub answers lookups instantly, so the started state cannot be caught in
+    // flight — the sequence number carries the proof instead: landing on 4 means the
+    // lookup published exactly one start (3) and one terminal (4) announcement.
+    fixture.viewModel.backToInput()
+    fixture.viewModel.lookUp()
+    try await waitUntil { fixture.viewModel.accessibilityAnnouncement?.sequence == 4 }
     XCTAssertNil(fixture.viewModel.busyLabel)
     XCTAssertEqual(
       fixture.viewModel.accessibilityAnnouncement,
-      QuickCheckAccessibilityAnnouncement(sequence: 4, message: "Rewrite complete.")
+      QuickCheckAccessibilityAnnouncement(sequence: 4, message: "Lookup complete.")
     )
   }
 
@@ -829,10 +800,12 @@ final class QuickCheckViewModelTests: XCTestCase {
     let grammar = QuickCheckGrammarStub()
     let pasteboard = RecordingPasteboard()
     let dismissals = QuickCheckDismissalRecorder()
-    // Always a temp directory: the default `LearningLogStore()` writes to the real
-    // ~/Library/Application Support, and a test that saves a lookup would append to the
-    // owner's actual study deck.
+    // Always a temp directory: the default `LearningLogStore()` and `ConsiderTapStore()`
+    // write to the real ~/Library/Application Support, and a test that saves a lookup or
+    // picks an alternative would append to the owner's actual study deck.
     let learningLog = LearningLogStore(
+      directoryURL: directory.appendingPathComponent("LearningLog", isDirectory: true))
+    let considerTaps = ConsiderTapStore(
       directoryURL: directory.appendingPathComponent("LearningLog", isDirectory: true))
     let viewModel = QuickCheckViewModel(
       preferences: preferences,
@@ -841,6 +814,7 @@ final class QuickCheckViewModelTests: XCTestCase {
       grammar: grammar,
       pasteboard: pasteboard,
       learningLog: learningLog,
+      considerTaps: considerTaps,
       onDismiss: { reason in dismissals.record(reason) }
     )
     return QuickCheckFixture(
@@ -852,6 +826,7 @@ final class QuickCheckViewModelTests: XCTestCase {
       pasteboard: pasteboard,
       dismissals: dismissals,
       learningLog: learningLog,
+      considerTaps: considerTaps,
       viewModel: viewModel
     )
   }
@@ -877,6 +852,7 @@ private struct QuickCheckFixture {
   let pasteboard: RecordingPasteboard
   let dismissals: QuickCheckDismissalRecorder
   let learningLog: LearningLogStore
+  let considerTaps: ConsiderTapStore
   let viewModel: QuickCheckViewModel
 
   func removeFiles() {

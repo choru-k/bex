@@ -139,6 +139,9 @@ struct DiffRedline: View {
 struct DiffSummaryAccessibilityElement: NSViewRepresentable {
   let changeCount: Int
   let summary: String
+  /// Per-surface id ("prompt-gate-diff-summary", "quick-check-diff-summary") now that
+  /// the review card is shared.
+  var identifier: String = "prompt-gate-diff-summary"
 
   func makeNSView(context: Context) -> NSView {
     let view = NSView()
@@ -155,7 +158,7 @@ struct DiffSummaryAccessibilityElement: NSViewRepresentable {
     view.setAccessibilityRole(.group)
     view.setAccessibilityLabel("\(changeCount) changes")
     view.setAccessibilityValue(summary)
-    view.setAccessibilityIdentifier("prompt-gate-diff-summary")
+    view.setAccessibilityIdentifier(identifier)
   }
 }
 

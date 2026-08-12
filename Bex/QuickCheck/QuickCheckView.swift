@@ -7,32 +7,33 @@ enum QuickCheckLayout {
   }
 }
 
+/// Quick Check: a draft editor that becomes the shared review card once a check runs.
+///
+/// Design 4a. After a check, this is the same `ReviewCardView` Fix & Send shows —
+/// same editable final message, same one-line redline, same alternatives panel and ask
+/// thread — differing only in the footer (Cancel / Copy Correction ⏎) and in what is
+/// absent: no target row, no provenance line, no Edit Original & Recheck. Hands that hit
+/// ⇧⌘G all day never re-learn a layout.
 struct QuickCheckView: View {
   @ObservedObject var viewModel: QuickCheckViewModel
+  /// Questions about the correction on screen. Owned outside the view so a question in
+  /// flight survives re-renders, matching Fix & Send.
+  @ObservedObject var askThread: AskThreadViewModel
   let openSettings: () -> Void
   let openWritingStyles: () -> Void
   let openHistory: () -> Void
 
   @FocusState private var isEditorFocused: Bool
+  @FocusState private var keyboardFocus: PromptGateKeyboardFocus?
+  @AccessibilityFocusState private var accessibilityFocus: PromptGateAccessibilityFocus?
+  @State private var isDetailsExpanded = false
 
   var body: some View {
     GeometryReader { geometry in
-      ScrollView {
-        VStack(alignment: .leading, spacing: 14) {
-          contextRow
-          inputSection(height: QuickCheckLayout.editorHeight(for: geometry.size.height))
-          retentionSection
-          setupSection
-          actionRow
-          outboundConfirmationSection
-          disclosureSection
-          errorSection
-          lookupSection
-          resultSection
-          managementRow
-        }
-        .padding(16)
-        .frame(minHeight: geometry.size.height, alignment: .top)
+      if let review = viewModel.review {
+        reviewLayout(review, availableHeight: geometry.size.height)
+      } else {
+        draftLayout(geometry: geometry)
       }
     }
     .frame(minWidth: 460, minHeight: 360)
@@ -42,6 +43,9 @@ struct QuickCheckView: View {
     }
     .onChange(of: viewModel.editorFocusRequest) { _ in
       isEditorFocused = true
+    }
+    .onChange(of: viewModel.review?.original) { _ in
+      isDetailsExpanded = false
     }
     .onChange(of: viewModel.accessibilityAnnouncement) { announcement in
       guard let announcement else { return }
@@ -56,6 +60,87 @@ struct QuickCheckView: View {
     }
     .onExitCommand {
       viewModel.dismiss(.explicitCancel)
+    }
+  }
+
+  // MARK: - Post-check: the shared card
+
+  private func reviewLayout(_ review: PromptGateReview, availableHeight: CGFloat) -> some View {
+    VStack(spacing: 0) {
+      ScrollView {
+        VStack(alignment: .leading, spacing: 14) {
+          contextRow
+          ReviewCardView(
+            idPrefix: "quick-check",
+            review: review,
+            corrected: Binding(
+              get: { viewModel.review?.corrected ?? review.corrected },
+              set: { viewModel.updateCorrected($0) }
+            ),
+            editorHeight: PromptGateLayout.finalEditorHeight(for: availableHeight),
+            canEditCorrection: true,
+            correctedFieldLabel: "Corrected text, editable",
+            errorMessage: viewModel.userVisibleError,
+            alternatives: viewModel.alternatives,
+            alternativesPhrase: viewModel.alternativesPhrase,
+            pickedAlternativeID: viewModel.pickedAlternativeID,
+            onChooseAlternative: { viewModel.choose($0) },
+            changeCategorySummary: viewModel.changeCategorySummary,
+            accessibleDiffSummary: viewModel.accessibleDiffSummary,
+            detailsSummary: "Details — original message · grammar notes · checked by "
+              + "\(viewModel.providerLabel) \(viewModel.modelLabel)",
+            isDetailsExpanded: $isDetailsExpanded,
+            askThread: askThread,
+            keyboardFocus: $keyboardFocus,
+            accessibilityFocus: $accessibilityFocus,
+            detailsExtra: { EmptyView() }
+          )
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      Divider()
+      reviewFooter
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.bar)
+    }
+  }
+
+  private var reviewFooter: some View {
+    HStack(spacing: 10) {
+      Button("Cancel", role: .cancel) {
+        viewModel.dismiss(.explicitCancel)
+      }
+      .accessibilityIdentifier("quick-check-cancel")
+      Spacer()
+      Button("Copy Correction ⏎") {
+        viewModel.copy(closeAfter: true)
+      }
+      .keyboardShortcut(.defaultAction)
+      .disabled(!viewModel.canCopyCorrection)
+      .accessibilityIdentifier("quick-check-copy-correction")
+    }
+  }
+
+  // MARK: - Draft state
+
+  private func draftLayout(geometry: GeometryProxy) -> some View {
+    ScrollView {
+      VStack(alignment: .leading, spacing: 14) {
+        contextRow
+        inputSection(height: QuickCheckLayout.editorHeight(for: geometry.size.height))
+        retentionSection
+        setupSection
+        actionRow
+        outboundConfirmationSection
+        disclosureSection
+        errorSection
+        lookupSection
+        managementRow
+      }
+      .padding(16)
+      .frame(minHeight: geometry.size.height, alignment: .top)
     }
   }
 
@@ -232,39 +317,36 @@ struct QuickCheckView: View {
     }
   }
 
-  @ViewBuilder
   private var actionRow: some View {
-    if viewModel.result == nil {
-      HStack {
-        Button {
-          viewModel.check()
-        } label: {
-          Label("Check", systemImage: "checkmark.circle")
-        }
-        .keyboardShortcut(.return, modifiers: .command)
-        .disabled(!viewModel.canCheck)
-        .accessibilityIdentifier("quick-check-check")
-
-        Button {
-          viewModel.lookUp()
-        } label: {
-          Label("Look Up", systemImage: "character.book.closed")
-        }
-        .keyboardShortcut("d", modifiers: .command)
-        .disabled(!viewModel.canLookUp)
-        .accessibilityIdentifier("quick-check-look-up")
-
-        if let busyLabel = viewModel.busyLabel {
-          ProgressView()
-            .controlSize(.small)
-            .accessibilityHidden(true)
-          Text(busyLabel)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .accessibilityIdentifier("quick-check-busy-label")
-        }
-        Spacer()
+    HStack {
+      Button {
+        viewModel.check()
+      } label: {
+        Label("Check", systemImage: "checkmark.circle")
       }
+      .keyboardShortcut(.return, modifiers: .command)
+      .disabled(!viewModel.canCheck)
+      .accessibilityIdentifier("quick-check-check")
+
+      Button {
+        viewModel.lookUp()
+      } label: {
+        Label("Look Up", systemImage: "character.book.closed")
+      }
+      .keyboardShortcut("d", modifiers: .command)
+      .disabled(!viewModel.canLookUp)
+      .accessibilityIdentifier("quick-check-look-up")
+
+      if let busyLabel = viewModel.busyLabel {
+        ProgressView()
+          .controlSize(.small)
+          .accessibilityHidden(true)
+        Text(busyLabel)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+          .accessibilityIdentifier("quick-check-busy-label")
+      }
+      Spacer()
     }
   }
 
@@ -372,25 +454,25 @@ struct QuickCheckView: View {
           .font(.title3.bold())
           .accessibilityAddTraits(.isHeader)
 
-        resultTextSection(
+        lookupTextSection(
           title: "English",
           text: lookup.english,
           identifier: "quick-check-lookup-english",
           secondary: false
         )
-        resultTextSection(
+        lookupTextSection(
           title: "Korean",
           text: lookup.korean,
           identifier: "quick-check-lookup-korean",
           secondary: false
         )
-        resultTextSection(
+        lookupTextSection(
           title: "In simple English",
           text: lookup.simple,
           identifier: "quick-check-lookup-simple",
           secondary: true
         )
-        resultTextSection(
+        lookupTextSection(
           title: "Example",
           text: lookup.example,
           identifier: "quick-check-lookup-example",
@@ -412,98 +494,7 @@ struct QuickCheckView: View {
     }
   }
 
-  @ViewBuilder
-  private var resultSection: some View {
-    if let result = viewModel.result {
-      Divider()
-      VStack(alignment: .leading, spacing: 14) {
-        Text("Result")
-          .font(.title3.bold())
-          .accessibilityAddTraits(.isHeader)
-
-        if let provenance = viewModel.resultProvenance {
-          VStack(alignment: .leading, spacing: 3) {
-            Label(
-              "\(provenance.provider.displayName) · \(provenance.model)",
-              systemImage: "checkmark.shield"
-            )
-            Text(
-              "Writing Style: \(provenance.writingStyleName) · "
-                + provenance.completedAt.formatted(date: .abbreviated, time: .shortened)
-            )
-          }
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .accessibilityElement(children: .combine)
-          .accessibilityLabel("Result provenance")
-          .accessibilityValue(
-            "\(provenance.provider.displayName), \(provenance.model), "
-              + "\(provenance.writingStyleName), "
-              + provenance.completedAt.formatted(date: .abbreviated, time: .shortened)
-          )
-          .accessibilityIdentifier("quick-check-result-provenance")
-        }
-
-        if result.corrected == viewModel.input {
-          VStack(alignment: .leading, spacing: 5) {
-            Label("Your text looks good!", systemImage: "checkmark.seal.fill")
-              .font(.headline)
-              .foregroundStyle(.green)
-            Text("No grammar or expression changes needed.")
-              .foregroundStyle(.secondary)
-          }
-          .accessibilityIdentifier("quick-check-unchanged")
-        } else {
-          diffSection
-        }
-
-        resultTextSection(
-          title: "Corrected",
-          text: result.corrected,
-          identifier: "quick-check-corrected",
-          secondary: false
-        )
-        betterExpressionSection(for: result.explanation)
-        let grammarNotes = LearningAggregator.explanationWithoutConsider(from: result.explanation)
-        if !grammarNotes.isEmpty {
-          resultTextSection(
-            title: "Grammar notes",
-            text: grammarNotes,
-            identifier: "quick-check-grammar-notes",
-            secondary: true
-          )
-        }
-        rewriteRow
-        resultActionRow
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .accessibilityElement(children: .contain)
-      .accessibilityLabel("Quick Check result section")
-    }
-  }
-
-  @ViewBuilder
-  private func betterExpressionSection(for explanation: String) -> some View {
-    let suggestions = LearningAggregator.parseConsiderSuggestions(from: explanation)
-    if !suggestions.isEmpty {
-      VStack(alignment: .leading, spacing: 5) {
-        Label("Better expression", systemImage: "lightbulb")
-          .font(.headline)
-          .accessibilityAddTraits(.isHeader)
-          .accessibilityIdentifier("quick-check-better-expression")
-        ForEach(Array(suggestions.enumerated()), id: \.offset) { index, suggestion in
-          Text("• \(suggestion)")
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
-            .accessibilityIdentifier("quick-check-suggestion-\(index)")
-        }
-      }
-    }
-  }
-
-  private func resultTextSection(
+  private func lookupTextSection(
     title: String,
     text: String,
     identifier: String,
@@ -521,82 +512,6 @@ struct QuickCheckView: View {
         .accessibilityLabel(title)
         .accessibilityValue(text)
         .accessibilityIdentifier(identifier)
-    }
-  }
-
-  private var diffSection: some View {
-    VStack(alignment: .leading, spacing: 6) {
-      HStack {
-        Text("Changes")
-          .font(.headline)
-          .accessibilityAddTraits(.isHeader)
-        Spacer()
-        Button(viewModel.changesOnly ? "Show full text" : "Show only changes") {
-          viewModel.changesOnly.toggle()
-        }
-        .buttonStyle(.link)
-      }
-      DiffText(segments: viewModel.diff, changesOnly: viewModel.changesOnly)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .textSelection(.enabled)
-        .accessibilityHidden(true)
-      Color.clear
-        .frame(width: 1, height: 1)
-        .accessibilityElement()
-        .accessibilityLabel("Changes")
-        .accessibilityValue(viewModel.diffAccessibilitySummary)
-        .accessibilityIdentifier("quick-check-diff")
-    }
-  }
-
-  private var rewriteRow: some View {
-    HStack {
-      ForEach(RewriteIntent.allCases, id: \.self) { intent in
-        Button(intent.label) {
-          viewModel.rewrite(intent)
-        }
-        .keyboardShortcut(rewriteShortcut(for: intent), modifiers: .command)
-        .disabled(viewModel.isBusy || viewModel.outboundSummary != nil)
-        .accessibilityIdentifier("quick-check-rewrite-\(intent.rawValue)")
-      }
-      if let busyLabel = viewModel.busyLabel {
-        Text(busyLabel)
-          .font(.caption)
-          .foregroundStyle(.secondary)
-          .accessibilityIdentifier("quick-check-busy-label")
-      }
-      Spacer()
-    }
-  }
-
-  private var resultActionRow: some View {
-    HStack {
-      Button("Use as Input") {
-        viewModel.useResultAsInput()
-      }
-      Button("Recheck") {
-        viewModel.recheck()
-      }
-      .keyboardShortcut("r", modifiers: .command)
-      Spacer()
-      if viewModel.copied {
-        Text("Copied")
-          .font(.caption)
-          .foregroundStyle(.green)
-          .accessibilityIdentifier("quick-check-copied")
-      }
-      Button("Copy") {
-        viewModel.copy(closeAfter: false)
-      }
-      .keyboardShortcut("c", modifiers: [.command, .shift])
-      .accessibilityIdentifier("quick-check-copy")
-      Button("Copy and Close") {
-        viewModel.copy(closeAfter: true)
-      }
-      .keyboardShortcut(.return, modifiers: .command)
-      .disabled(viewModel.isBusy || viewModel.outboundSummary != nil)
-      .accessibilityIdentifier("quick-check-copy-close")
     }
   }
 
@@ -623,14 +538,6 @@ struct QuickCheckView: View {
   private func navigate(_ action: () -> Void) {
     viewModel.dismiss(.auxiliaryNavigation)
     action()
-  }
-
-  private func rewriteShortcut(for intent: RewriteIntent) -> KeyEquivalent {
-    switch intent {
-    case .formal: "1"
-    case .friendly: "2"
-    case .shorter: "3"
-    }
   }
 
   private func writingStyleMenuLabel(_ title: String, selected: Bool) -> some View {

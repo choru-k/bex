@@ -67,7 +67,8 @@ struct ReviewCardView<DetailsExtra: View>: View {
             .overlay {
               DiffSummaryAccessibilityElement(
                 changeCount: changes.count,
-                summary: accessibleDiffSummary
+                summary: accessibleDiffSummary,
+                identifier: "\(idPrefix)-diff-summary"
               )
             }
         }
