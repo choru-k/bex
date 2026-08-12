@@ -258,6 +258,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           StudyMicroDrillView(
             viewModel: study,
             targetName: targetName,
+            makeKey: { [weak self] in
+              self?.microDrillPanelController?.activateForAnswering()
+            },
             dismiss: { [weak self] in self?.microDrillPanelController?.close() }
           )
         )

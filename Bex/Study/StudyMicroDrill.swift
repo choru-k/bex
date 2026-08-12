@@ -3,21 +3,32 @@ import SwiftUI
 
 /// One card, offered right after a prompt ships.
 ///
-/// Design 1f. The timing is the whole idea: the owner has just written the English that
+/// Design 4c. The timing is the whole idea: the owner has just written the English that
 /// produced this card and is now waiting on an agent, so it is the one moment in the day
 /// when a drill costs them nothing. It shows at most one card, only when something is
-/// already due, and it goes away on Esc or the close box.
+/// already due.
 ///
-/// Non-negotiable 2 shapes what this is allowed to do. It appears *after* delivery, never
-/// before, and its panel does not activate Bex — see `StudyMicroDrillPanelController`. That
-/// is a deliberate departure from the mock, which showed "Return to check" as if the field
-/// already had focus: giving it focus would mean yanking the caret out of the terminal the
-/// owner just sent to, which is precisely the shipping flow this rule protects.
+/// Non-negotiable 2 shapes what this is allowed to do, and the two states are the answer
+/// to a panel that cannot take the keyboard uninvited:
+/// - **Unarmed**: the panel never activates Bex; the answer slot is drawn dashed and
+///   inert, and the copy promises only what a click can deliver. The whole panel is one
+///   click target. Ignored for 30 seconds, it fades out — the card stays due, so it is
+///   already in today's pile (`StudyScheduler` only moves a card on an answer).
+/// - **Armed** (after a click): a real focused answer control. The app that had the
+///   keyboard is captured before arming, and Esc hands the caret straight back to it.
 struct StudyMicroDrillView: View {
   @ObservedObject var viewModel: StudyViewModel
   /// The app the prompt went to, e.g. "Codex".
   let targetName: String
+  /// Activates Bex and makes the drill panel key — only ever called from the arm click,
+  /// never on show. Owned by `WindowCoordinator` because the view cannot reach its panel.
+  let makeKey: () -> Void
   let dismiss: () -> Void
+
+  @State private var isArmed = false
+  /// Whoever had the keyboard when the owner clicked to arm. Esc reactivates it.
+  @State private var previousApp: NSRunningApplication?
+  @State private var isFadingOut = false
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -28,19 +39,38 @@ struct StudyMicroDrillView: View {
           .textCase(.uppercase)
           .kerning(0.9)
           .foregroundStyle(.tint)
-        StudyCardView(viewModel: viewModel, card: card, scale: .compact)
-        Text("Answer it whenever — this never takes focus from your send.")
-          .font(.caption2)
-          .foregroundStyle(.tertiary)
-          .fixedSize(horizontal: false, vertical: true)
+        if isArmed {
+          StudyCardView(viewModel: viewModel, card: card, scale: .compact)
+          Text("⏎ checks · Esc returns the keyboard exactly where it was")
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("micro-drill-armed-hint")
+        } else {
+          unarmedCard(card)
+        }
       }
     }
     .padding(18)
     .frame(width: 400)
+    .opacity(isFadingOut ? 0 : 1)
     .accessibilityIdentifier("micro-drill")
     // The session may have been the last card; closing beats showing an empty panel.
     .onChange(of: viewModel.currentCard?.id) { id in
-      if id == nil { dismiss() }
+      if id == nil { dismissRestoringFocus() }
+    }
+    .onExitCommand { dismissRestoringFocus() }
+    // Ignored for 30s while unarmed → fade out. The card is not written anywhere on the
+    // way out because it does not need to be: only an answer moves a card
+    // (`StudyScheduler.advance`), so an ignored card is still due and already sits in
+    // today's pile for the hub and the deck. Nothing is lost.
+    .task(id: isArmed) {
+      guard !isArmed else { return }
+      try? await Task.sleep(nanoseconds: 30_000_000_000)
+      guard !isArmed, !Task.isCancelled else { return }
+      withAnimation(.easeOut(duration: 0.4)) { isFadingOut = true }
+      try? await Task.sleep(nanoseconds: 450_000_000)
+      dismiss()
     }
   }
 
@@ -51,7 +81,7 @@ struct StudyMicroDrillView: View {
         .foregroundStyle(Color.green)
         .accessibilityIdentifier("micro-drill-sent")
       Spacer()
-      Button(action: dismiss) {
+      Button(action: dismissRestoringFocus) {
         Image(systemName: "xmark")
           .font(.system(size: 10, weight: .semibold))
           .foregroundStyle(.tertiary)
@@ -61,14 +91,74 @@ struct StudyMicroDrillView: View {
       .accessibilityIdentifier("micro-drill-dismiss")
     }
   }
+
+  /// The card face-up but inert: same category line and sentence as the real template,
+  /// with a dashed slot where the answer control will be. One big click target.
+  private func unarmedCard(_ card: StudyCard) -> some View {
+    Button(action: arm) {
+      VStack(spacing: StudyCardScale.compact.spacing) {
+        Text(card.displayCategory)
+          .font(.system(size: StudyCardScale.compact.categorySize, weight: .semibold))
+          .textCase(.uppercase)
+          .kerning(0.9)
+          .foregroundStyle(.tint)
+        Text(card.promptWithBlank)
+          .font(.system(size: StudyCardScale.compact.promptSize, weight: .medium))
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
+
+        Text("Click to answer — your keyboard stays in the terminal")
+          .font(.system(size: StudyCardScale.compact.answerSize))
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+          .padding(.horizontal, 12)
+          .padding(.vertical, 9)
+          .frame(maxWidth: .infinity)
+          .overlay {
+            RoundedRectangle(cornerRadius: 8)
+              .strokeBorder(
+                Color(nsColor: .separatorColor),
+                style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])
+              )
+          }
+
+        Text("Ignored? It slides into today's pile after 30s. Nothing is lost.")
+          .font(.caption2)
+          .foregroundStyle(.tertiary)
+          .multilineTextAlignment(.center)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      .frame(maxWidth: .infinity)
+      .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel("Click to answer — your keyboard stays in the terminal")
+    .accessibilityIdentifier("micro-drill-arm")
+  }
+
+  /// The one moment this panel is allowed to take the keyboard: the owner asked for it.
+  /// The frontmost app is captured first, while it is still frontmost, so Esc has a
+  /// truthful place to send the caret back to.
+  private func arm() {
+    previousApp = NSWorkspace.shared.frontmostApplication
+    isArmed = true
+    makeKey()
+  }
+
+  /// Close, handing the keyboard back to whoever had it before arming. A dismissal that
+  /// never armed has nothing to restore and restores nothing.
+  private func dismissRestoringFocus() {
+    previousApp?.activate()
+    dismiss()
+  }
 }
 
 /// A HUD for the micro-drill that never steals focus.
 ///
 /// `.nonactivatingPanel` plus `becomesKeyOnlyIfNeeded` is the whole point: the panel shows
 /// up in the corner while the owner keeps typing in whatever they were typing in, and only
-/// takes the keyboard if they click into it. Anything that activated Bex here would make
-/// the drill a interruption of the send rather than something waiting beside it.
+/// takes the keyboard when they click to arm it. Anything that activated Bex here would
+/// make the drill an interruption of the send rather than something waiting beside it.
 @MainActor
 final class StudyMicroDrillPanelController: NSWindowController {
   private final class Panel: NSPanel {
@@ -113,6 +203,14 @@ final class StudyMicroDrillPanelController: NSWindowController {
       )
     }
     panel.orderFrontRegardless()
+  }
+
+  /// The arm click's other half: Bex activates and the panel becomes key so the answer
+  /// field can actually hold the caret. Never called on show.
+  func activateForAnswering() {
+    guard let panel = window else { return }
+    NSApp.activate(ignoringOtherApps: true)
+    panel.makeKeyAndOrderFront(nil)
   }
 
   func close(_: Any? = nil) {
