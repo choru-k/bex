@@ -563,7 +563,24 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     rootView: Content,
     delegate: (any NSWindowDelegate)? = nil
   ) -> NSWindowController {
-    let hostingController = NSHostingController(rootView: rootView)
+    // The root view carries the window's size, as an *ideal* rather than a maximum.
+    //
+    // A root view that wants to fill (`maxHeight: .infinity`, `Spacer()`s inside) has no
+    // opinion about how big it should be, so whatever hosts it picks an extreme: the window
+    // opened at the full height of the display. The two obvious levers both misfire —
+    // `sizingOptions = []` stops the host resizing the view *with* the window, so the view
+    // keeps a taller layout and gets clipped (this is what silently pushed the drill's top bar
+    // off the top edge and its progress dots off the bottom, while the centred card still
+    // looked right), and an `NSHostingView` resolves the same fill to the largest size on
+    // offer. Stating min and ideal here gives the layout the one thing it was missing — a
+    // preferred size — while leaving it free to grow when the owner resizes.
+    let sizedRootView = rootView.frame(
+      minWidth: configuration.minimumContentSize.width,
+      idealWidth: configuration.defaultContentSize.width,
+      minHeight: configuration.minimumContentSize.height,
+      idealHeight: configuration.defaultContentSize.height
+    )
+    let hostingController = NSHostingController(rootView: sizedRootView)
     let window = NSWindow(contentViewController: hostingController)
     window.title = configuration.title
     window.setContentSize(configuration.defaultContentSize)

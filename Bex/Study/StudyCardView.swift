@@ -259,25 +259,30 @@ struct StudyCardStack<Content: View>: View {
   @ViewBuilder var content: () -> Content
 
   var body: some View {
-    ZStack {
-      if remaining > 2 {
-        layer.offset(x: 14, y: 14).opacity(0.5)
-      }
-      if remaining > 1 {
-        layer.offset(x: 7, y: 7).opacity(0.75)
-      }
-      content()
-        .padding(28)
-        .background(
+    // The layers live in a `.background`, not beside the content in a `ZStack`.
+    // A `RoundedRectangle` is infinitely flexible, so as a ZStack sibling it grew to fill
+    // whatever space was offered and the "pile" ballooned to the size of the pane instead of
+    // sitting behind the card. In a background it is handed the content's own size, which is
+    // the only size that makes it read as the same card repeated.
+    content()
+      .padding(28)
+      .background(alignment: .center) {
+        ZStack {
+          if remaining > 2 {
+            layer.offset(x: 14, y: 14).opacity(0.5)
+          }
+          if remaining > 1 {
+            layer.offset(x: 7, y: 7).opacity(0.75)
+          }
           RoundedRectangle(cornerRadius: cornerRadius)
             .fill(Color(nsColor: .controlBackgroundColor))
             .shadow(color: .black.opacity(0.18), radius: 12, y: 5)
-        )
-        .overlay(
-          RoundedRectangle(cornerRadius: cornerRadius)
-            .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-        )
-    }
+            .overlay(
+              RoundedRectangle(cornerRadius: cornerRadius)
+                .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+        }
+      }
   }
 
   private var layer: some View {

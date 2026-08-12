@@ -112,9 +112,20 @@ struct StudyTakeoverView: View {
   private var topBar: some View {
     HStack(spacing: 14) {
       Spacer()
-      Text("？ Ask ⌘/")
-        .font(.caption)
-        .foregroundStyle(.tertiary)
+      // The hint *is* the button. It used to be inert text beside a zero-sized,
+      // fully-transparent button that carried the ⌘/ shortcut — which is both a thing
+      // SwiftUI need not register a shortcut for and a thing the owner cannot click. One
+      // visible control that says its own key is shorter and actually works.
+      Button {
+        isAsking = true
+      } label: {
+        Text("？ Ask ⌘/")
+          .font(.caption)
+          .foregroundStyle(.tertiary)
+      }
+      .buttonStyle(.plain)
+      .keyboardShortcut("/", modifiers: .command)
+      .accessibilityIdentifier("study-ask-shortcut")
       Button(action: end) {
         Text("Esc ends the session")
           .font(.caption)
@@ -135,14 +146,6 @@ struct StudyTakeoverView: View {
   /// advance anything.
   @ViewBuilder
   private var askSection: some View {
-    // Always present but zero-sized when closed, so ⌘/ has something to bind to.
-    Button("") { isAsking = true }
-      .keyboardShortcut("/", modifiers: .command)
-      .buttonStyle(.plain)
-      .frame(width: 0, height: 0)
-      .opacity(0)
-      .accessibilityHidden(true)
-
     if isAsking {
       AskThreadView(viewModel: askThread, prompt: "Ask about this card…")
         .padding(16)

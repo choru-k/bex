@@ -605,6 +605,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         name: Notification.Name("com.bex.desktop.ui-testing.open-prompt-gate"),
         object: nil
       )
+      // The hub is an `NSPopover` anchored to the status item, and a status item cannot be
+      // clicked without Accessibility permission — which a test runner may not have. This is
+      // the same escape hatch the other surfaces already use.
+      center.addObserver(
+        self,
+        selector: #selector(openHubForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.open-hub"),
+        object: nil
+      )
       center.addObserver(
         self,
         selector: #selector(releaseGrammarForUITesting(_:)),
@@ -625,6 +634,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openPromptGateForUITesting(_ notification: Notification) {
       openPromptGate()
+    }
+
+    @objc private func openHubForUITesting(_ notification: Notification) {
+      guard let button = statusItem?.button else { return }
+      hubController?.show(relativeTo: button)
     }
     @objc private func releaseGrammarForUITesting(_ notification: Notification) {
       guard let grammar = services?.grammar as? UITestingGrammarService else { return }

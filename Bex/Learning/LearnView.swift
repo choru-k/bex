@@ -41,13 +41,7 @@ struct LearnView: View {
   @State private var tab: Tab = .deck
 
   var body: some View {
-    Group {
-      if model.isDrillTakeover, let card = study.currentCard {
-        StudyTakeoverView(viewModel: study, askThread: askThread, card: card, end: endDrill)
-      } else {
-        chrome
-      }
-    }
+    chrome
     .task {
       await learning.load()
     }
@@ -78,15 +72,7 @@ struct LearnView: View {
   }
 
   private func startDrill() {
-    guard study.currentCard != nil else { return }
-    model.isDrillTakeover = true
-    model.columnVisibility = .detailOnly
-  }
-
-  private func endDrill() {
-    model.hasLeftDrill = true
-    model.isDrillTakeover = false
-    model.columnVisibility = .all
+    model.startDrill()
   }
 
   // MARK: - Header
@@ -122,7 +108,7 @@ struct LearnView: View {
   /// never can, and a badge that only grows becomes wallpaper.
   private func label(for tab: Tab) -> String {
     guard tab == .suggestions else { return tab.title }
-    let waiting = learning.suggestions.filter { !$0.isTapped }.count
+    let waiting = learning.pickDecisionsWaiting
     return waiting > 0 ? "\(tab.title) · \(waiting)" : tab.title
   }
 

@@ -62,11 +62,6 @@ final class MainWindowModel: ObservableObject {
   /// Bex ignoring "not now" is not.
   @Published var hasLeftDrill = false
 
-  /// The real sidebar state, so collapsing it during a drill and the owner collapsing it
-  /// themselves are the same thing — a one-way binding forced open between drills would
-  /// take away a window control they are entitled to.
-  @Published var columnVisibility: NavigationSplitViewVisibility = .all
-
   let study: StudyViewModel
   let learning: LearningViewModel
   let askThread: AskThreadViewModel
@@ -91,6 +86,16 @@ final class MainWindowModel: ObservableObject {
     self.profiles = profiles
     self.settings = settings
   }
+
+  func startDrill() {
+    guard study.currentCard != nil else { return }
+    isDrillTakeover = true
+  }
+
+  func endDrill() {
+    hasLeftDrill = true
+    isDrillTakeover = false
+  }
 }
 
 /// The one Bex window: a sidebar of destinations on the left, the selected page on the
@@ -102,19 +107,33 @@ struct BexMainWindow: View {
   let openQuickCheck: () -> Void
 
   var body: some View {
-    NavigationSplitView(columnVisibility: $model.columnVisibility) {
-      sidebar
-        .navigationSplitViewColumnWidth(min: 180, ideal: 196, max: 260)
-    } detail: {
-      detail
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    // A drill replaces the window's content outright rather than collapsing the split view's
+    // sidebar around it.
+    //
+    // Design 3a asks for the card to *be* the screen, and going through the split view to get
+    // there was both indirect and wrong: at `.detailOnly` the split view laid itself out
+    // 1345pt tall inside a 560pt window and centred the overflow, which silently pushed the
+    // drill's top bar off the top edge and its progress dots off the bottom. Swapping the root
+    // is what "takes over the window" already meant, and it deletes the column-visibility and
+    // toolbar-hiding juggling that was standing in for it.
+    if model.isDrillTakeover, let card = model.study.currentCard {
+      StudyTakeoverView(
+        viewModel: model.study,
+        askThread: model.askThread,
+        card: card,
+        end: model.endDrill
+      )
+    } else {
+      NavigationSplitView {
+        sidebar
+          .navigationSplitViewColumnWidth(min: 180, ideal: 196, max: 260)
+      } detail: {
+        detail
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+      }
+      // No `.navigationTitle` on purpose: `WindowCoordinator` owns the window title so that
+      // routing to a page and clicking that page in the sidebar cannot disagree about it.
     }
-    // Hides the whole toolbar, including the sidebar-toggle button, while a drill has the
-    // window: leaving a control on screen that undoes the takeover would make it a
-    // suggestion rather than a mode.
-    .toolbar(model.isDrillTakeover ? .hidden : .automatic)
-    // No `.navigationTitle` on purpose: `WindowCoordinator` owns the window title so that
-    // routing to a page and clicking that page in the sidebar cannot disagree about it.
   }
 
   // MARK: - Sidebar

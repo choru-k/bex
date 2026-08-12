@@ -65,6 +65,21 @@ final class LearningViewModel: ObservableObject {
     self.writerLevel = writerLevel
   }
 
+  /// Phrases still waiting for a pick.
+  ///
+  /// One phrase is one decision, however many alternatives it was offered — which is the unit
+  /// the Suggestions list is grouped into and the unit its header reports. The tab badge used
+  /// to count individual alternatives instead, so it read "5" above a list that said "3 of 3".
+  var pickDecisionsWaiting: Int {
+    var phrases: Set<String> = []
+    var answered: Set<String> = []
+    for suggestion in suggestions {
+      phrases.insert(suggestion.phrase)
+      if suggestion.isTapped { answered.insert(suggestion.phrase) }
+    }
+    return phrases.subtracting(answered).count
+  }
+
   /// What Bex reliably sees the owner getting right, as short labels.
   var solid: [String] {
     profile?.solid ?? []
