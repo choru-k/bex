@@ -1,5 +1,17 @@
 import SwiftUI
 
+extension StudyCardSource {
+  /// The one tint token per source (design 3b): where a card came from, said with colour
+  /// on the category label alone — never the whole card.
+  var tint: Color {
+    switch self {
+    case .correction: return .blue
+    case .pick: return .purple
+    case .ask: return .yellow
+    }
+  }
+}
+
 /// How large a card is drawn. Only type scale and padding change between these — the
 /// geometry never does, which is the whole point of one template (design 3b).
 enum StudyCardScale {
@@ -107,7 +119,7 @@ struct StudyCardView: View {
       .font(.system(size: scale.categorySize, weight: .semibold))
       .textCase(.uppercase)
       .kerning(0.9)
-      .foregroundStyle(.tint)
+      .foregroundStyle(card.source.tint)
       .accessibilityIdentifier("study-category")
   }
 

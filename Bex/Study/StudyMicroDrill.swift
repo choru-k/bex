@@ -101,7 +101,7 @@ struct StudyMicroDrillView: View {
           .font(.system(size: StudyCardScale.compact.categorySize, weight: .semibold))
           .textCase(.uppercase)
           .kerning(0.9)
-          .foregroundStyle(.tint)
+          .foregroundStyle(card.source.tint)
         Text(card.promptWithBlank)
           .font(.system(size: StudyCardScale.compact.promptSize, weight: .medium))
           .multilineTextAlignment(.center)

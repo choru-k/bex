@@ -10,6 +10,19 @@ enum StudyAnswerMode: String, Codable, Equatable, Sendable {
   case choices
 }
 
+/// Where a drill card came from. Three ways material enters the deck, and the card
+/// template tints its category label per source (design 3b) so a glance says which:
+/// a correction Bex made, a choice the owner made, or an answer they asked for.
+enum StudyCardSource: String, Codable, Equatable, Sendable {
+  /// A cloze from a logged "Fixed:" correction (including saved dictionary lookups,
+  /// which ride the same pipeline).
+  case correction
+  /// A "Consider" alternative the owner picked.
+  case pick
+  /// A card saved out of an ask thread.
+  case ask
+}
+
 /// One spaced-repetition drill built from a single past "Fixed:" correction in the
 /// learning log. Pure data — no scheduling, no persistence, no UI; `StudyCardBuilder`
 /// below is the only thing that constructs these, and it never touches the clock, RNG,
@@ -64,6 +77,9 @@ struct StudyCard: Equatable, Sendable {
   /// `.junk` — those are rejected in `StudyCardBuilder.isUsableCandidate` and never
   /// become cards. `StudyDailyPlan` uses this to order new-card intake.
   let priority: StudyCardPriority
+  /// Where this card came from — see `StudyCardSource`. Deliberately excluded from `id`:
+  /// provenance colours the label, it does not make the same correction a different card.
+  var source: StudyCardSource = .correction
 
   /// Friendly label for the drill UI, reusing `GrammarCategory`'s mapping so this
   /// stays in sync with the Learning window's category names for free.
@@ -87,6 +103,7 @@ enum StudyCardBuilder {
     let reason: String
     let sentence: String
     let promptWithBlank: String
+    let source: StudyCardSource
   }
 
   /// Builds one card per usable "Fixed:" correction across `samples`, in order,
@@ -114,7 +131,8 @@ enum StudyCardBuilder {
         promptWithBlank: base.promptWithBlank,
         choices: choices(for: base),
         answerMode: answerMode(for: base.correct),
-        priority: StudyCardQuality.priority(wrong: base.wrong, correct: base.correct)
+        priority: StudyCardQuality.priority(wrong: base.wrong, correct: base.correct),
+        source: base.source
       )
     }
   }
@@ -152,7 +170,8 @@ enum StudyCardBuilder {
         correct: parsed.correct,
         reason: parsed.reason,
         sentence: built.sentence,
-        promptWithBlank: built.promptWithBlank
+        promptWithBlank: built.promptWithBlank,
+        source: sample.source
       )
     }
   }

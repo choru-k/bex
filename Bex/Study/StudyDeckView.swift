@@ -92,7 +92,7 @@ struct StudyDeckView: View {
             .font(.system(size: 10, weight: .semibold))
             .textCase(.uppercase)
             .kerning(0.9)
-            .foregroundStyle(.tint)
+            .foregroundStyle(card.source.tint)
           Text(card.promptWithBlank)
             .font(.system(size: 21, weight: .medium))
             .multilineTextAlignment(.center)

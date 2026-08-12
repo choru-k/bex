@@ -10,7 +10,14 @@ enum LearningLogSamples {
     let formatter = ISO8601DateFormatter()
     return entries.compactMap { entry in
       guard let date = formatter.date(from: entry.timestamp) else { return nil }
-      return LearningSample(date: date, original: entry.original, explanation: entry.explanation)
+      return LearningSample(
+        date: date,
+        original: entry.original,
+        explanation: entry.explanation,
+        // The ask thread is the one log client whose entries are answers the owner asked
+        // for rather than corrections of what they wrote; the card tint says so.
+        source: entry.client == "bex-ask" ? .ask : .correction
+      )
     }
   }
 
@@ -31,7 +38,8 @@ enum LearningLogSamples {
     let tapSamples = taps.compactMap { tap -> LearningSample? in
       guard let date = formatter.date(from: tap.timestamp) else { return nil }
       return LearningSample(
-        date: date, original: tap.sourceOriginal, explanation: tap.learningLogExplanation)
+        date: date, original: tap.sourceOriginal, explanation: tap.learningLogExplanation,
+        source: .pick)
     }
     return (parse(entries) + tapSamples).sorted { $0.date < $1.date }
   }

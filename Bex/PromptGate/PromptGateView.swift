@@ -37,6 +37,8 @@ struct PromptGateView: View {
       minWidth: PromptGatePanelLayout.minimumContentSize.width,
       minHeight: PromptGatePanelLayout.minimumContentSize.height
     )
+    // `--dry-run` must survive typing: smart dashes would un-mask a hand-typed flag.
+    .background(PlainTextSubstitutionsDisabler().frame(width: 0, height: 0))
     .onChange(of: viewModel.session?.id) { _ in
       isDetailsExpanded = false
       isMaskingExpanded = false

@@ -8,6 +8,10 @@ struct LearningSample: Equatable, Sendable {
   let date: Date
   let original: String
   let explanation: String
+  /// Which route this sample took into the corpus, so cards built from it can tint
+  /// their category label per source (design 3b). Metrics ignore it. Defaulted so the
+  /// dozens of metric-only call sites never mention it.
+  var source: StudyCardSource = .correction
 }
 
 /// One canonical category's recurrence normalized by how much was written, plus the
