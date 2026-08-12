@@ -119,7 +119,7 @@ final class StudyDueCountTests: XCTestCase {
   /// The hub header states a price, not a queue length — and the price has to be able to
   /// reach zero, which is non-negotiable 6 applied to the one line the owner sees most.
   func testCostLabelReportsMinutesAndSaysNothingDueAtZero() {
-    XCTAssertEqual(StudyDueCount.costLabel(remaining: 0), "Nothing due")
+    XCTAssertEqual(StudyDueCount.costLabel(remaining: 0), "0 due")
     XCTAssertEqual(StudyDueCount.costLabel(remaining: 5), "2 min today")
     XCTAssertEqual(StudyDueCount.costLabel(remaining: 20), "8 min today")
   }

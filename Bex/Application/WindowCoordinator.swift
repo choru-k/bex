@@ -332,7 +332,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         configuration: Self.mainWindowConfiguration,
         rootView: BexMainWindow(
           model: model,
-          openQuickCheck: { [weak self] in self?.showQuickCheck() }
+          openQuickCheck: { [weak self] in self?.showQuickCheck() },
+          openFixAndSend: { [weak self] in self?.showPromptGate() }
         ),
         delegate: self
       )

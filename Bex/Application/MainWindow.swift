@@ -105,6 +105,8 @@ struct BexMainWindow: View {
   /// Opens the Quick Check panel. A closure rather than a page because Quick Check is not
   /// a page — see `MainWindowPage`.
   let openQuickCheck: () -> Void
+  /// Invokes Fix & Send, for the empty deck's first-run actions (design 4e).
+  let openFixAndSend: () -> Void
 
   var body: some View {
     // A drill replaces the window's content outright rather than collapsing the split view's
@@ -205,7 +207,9 @@ struct BexMainWindow: View {
         model: model,
         study: model.study,
         learning: model.learning,
-        askThread: model.askThread
+        askThread: model.askThread,
+        openQuickCheck: openQuickCheck,
+        openFixAndSend: openFixAndSend
       )
     case .history:
       HistoryView(viewModel: model.history)

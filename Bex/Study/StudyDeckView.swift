@@ -8,6 +8,11 @@ struct StudyDeckView: View {
   @ObservedObject var viewModel: StudyViewModel
   /// Enters the drill. Owned by `LearnView`, which also has to collapse the window chrome.
   let start: () -> Void
+  /// The two actions that actually create cards, offered by the first-run empty state
+  /// (design 4e) — an empty deck that only said "come back later" would be a dead end
+  /// on the one screen a fresh install always opens to.
+  let openQuickCheck: () -> Void
+  let openFixAndSend: () -> Void
 
   var body: some View {
     if viewModel.isLoading {
@@ -23,6 +28,8 @@ struct StudyDeckView: View {
         detail: "The stack is clear. Anything you missed comes back tomorrow.",
         identifier: "study-done"
       )
+    } else if viewModel.deckSize == 0 {
+      firstRun
     } else {
       LearnEmptyState(
         symbol: "checkmark.seal",
@@ -31,6 +38,48 @@ struct StudyDeckView: View {
         identifier: "study-empty"
       )
     }
+  }
+
+  /// A fresh install's deck: a dashed card that says why empty is the correct state,
+  /// and the only two actions that change it. No sample cards, no fake numbers
+  /// (non-negotiable 8) — the shortcut labels are the design's own copy.
+  private var firstRun: some View {
+    VStack(spacing: 18) {
+      VStack(spacing: 12) {
+        Text("No cards yet — and that's correct")
+          .font(.headline)
+        Text(
+          "Cards come from your own prompts. Run a check on the next thing you type at "
+            + "Claude or Codex — gaps and picks land here on their own."
+        )
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
+      }
+      .padding(28)
+      .frame(width: 440)
+      .overlay {
+        RoundedRectangle(cornerRadius: 14)
+          .strokeBorder(
+            Color(nsColor: .separatorColor),
+            style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])
+          )
+      }
+
+      HStack(spacing: 10) {
+        Button("Quick Check ⇧⌘G", action: openQuickCheck)
+          .accessibilityIdentifier("study-empty-quick-check")
+        Button("Fix & Send ⇧⌘P", action: openFixAndSend)
+          .accessibilityIdentifier("study-empty-fix-and-send")
+      }
+
+      Text("Progress stays empty until there is something real to measure.")
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+    }
+    .padding(32)
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .accessibilityIdentifier("study-first-run")
   }
 
   /// The next card face-up but not answerable, so starting is a deliberate keypress rather

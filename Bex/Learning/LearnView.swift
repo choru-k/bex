@@ -38,6 +38,9 @@ struct LearnView: View {
   /// Questions asked about the card on screen. Owned by the window so a question in flight
   /// survives the drill re-rendering around it.
   @ObservedObject var askThread: AskThreadViewModel
+  /// Handed through to the empty deck's first-run actions (design 4e).
+  let openQuickCheck: () -> Void
+  let openFixAndSend: () -> Void
   @State private var tab: Tab = .deck
 
   var body: some View {
@@ -116,7 +119,12 @@ struct LearnView: View {
   private var page: some View {
     switch tab {
     case .deck:
-      StudyDeckView(viewModel: study, start: startDrill)
+      StudyDeckView(
+        viewModel: study,
+        start: startDrill,
+        openQuickCheck: openQuickCheck,
+        openFixAndSend: openFixAndSend
+      )
     case .suggestions:
       LearnSuggestionsView(viewModel: learning)
     case .progress:
@@ -162,8 +170,8 @@ struct LearnSuggestionsView: View {
     if groups.isEmpty {
       LearnEmptyState(
         symbol: "quote.bubble",
-        headline: "No alternatives waiting",
-        detail: "Bex offers these when a phrase has more than one natural form.",
+        headline: "No choices waiting — and that's correct",
+        detail: "When a check finds a phrase with more than one natural form, the pick lands here.",
         identifier: "learn-suggestions-empty"
       )
     } else {
@@ -266,8 +274,8 @@ struct LearnProgressView: View {
     } else if viewModel.categoryRates.isEmpty && viewModel.weeklyRates.isEmpty {
       LearnEmptyState(
         symbol: "graduationcap",
-        headline: "No corrections yet",
-        detail: "Use Bex in Claude Code or Codex and check back after a week.",
+        headline: "Nothing measured yet — and that's correct",
+        detail: "Numbers appear here once real corrections exist; nothing on this page is ever sample data.",
         identifier: "learning-empty"
       )
     } else {

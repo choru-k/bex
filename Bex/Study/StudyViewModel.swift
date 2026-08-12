@@ -47,6 +47,10 @@ final class StudyViewModel: ObservableObject {
   /// Size of this session's queue after applying `sessionCap` — the denominator for a
   /// "3 of 12" progress readout.
   @Published private(set) var sessionTotal = 0
+  /// How many cards exist at all, due or not. Tells "a fresh install with no cards yet"
+  /// apart from "a real deck with nothing due today" — two empty states with very
+  /// different things to say (design 4e).
+  @Published private(set) var deckSize = 0
 
   private let learningLog: LearningLogStore
   private let considerTaps: ConsiderTapStore
@@ -121,6 +125,7 @@ final class StudyViewModel: ObservableObject {
     let entries = await learningLog.readAll()
     let samples = LearningLogSamples.merged(entries, taps: await considerTaps.taps())
     let cards = StudyCardBuilder.cards(from: samples)
+    deckSize = cards.count
     // `uniquingKeysWith` rather than `uniqueKeysWithValues`: the latter traps on a
     // duplicate id, which would turn a card-builder regression in another file into a
     // crash here. `StudyCardBuilder` already dedups by id, so keeping the first is a

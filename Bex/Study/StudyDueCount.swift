@@ -57,10 +57,11 @@ enum StudyDueCount {
   ///
   /// A count is the wrong unit for the thing non-negotiable 6 asks for. "5 cards" reads
   /// as a queue with a number attached; "2 min today" reads as a price the owner can
-  /// decide to pay right now, and it shrinks visibly with every card cleared. Zero says
-  /// so plainly rather than reporting "0 min".
+  /// decide to pay right now, and it shrinks visibly with every card cleared. Zero is
+  /// stated as the count it is — "0 due" (design 4e) — because reaching it is the whole
+  /// point of a clearable number, and "0 min" would be a price for nothing.
   static func costLabel(remaining: Int) -> String {
-    guard remaining > 0 else { return "Nothing due" }
+    guard remaining > 0 else { return "0 due" }
     let minutes = max(1, Int((Double(remaining) * secondsPerCard / 60).rounded()))
     return "\(minutes) min today"
   }

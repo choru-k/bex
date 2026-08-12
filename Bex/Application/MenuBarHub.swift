@@ -132,19 +132,18 @@ struct MenuBarHubView: View {
         )
         .padding(14)
         .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
-      } else {
-        Text(
-          study.isFinished
-            ? "Done — \(study.completedCount) reviewed"
-            : "Nothing due right now — come back tomorrow."
-        )
-        .font(.callout)
-        .foregroundStyle(.secondary)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 16)
-        .accessibilityIdentifier(study.isFinished ? "hub-done" : "hub-empty")
+      } else if study.isFinished {
+        Text("Done — \(study.completedCount) reviewed")
+          .font(.callout)
+          .foregroundStyle(.secondary)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 16)
+          .accessibilityIdentifier("hub-done")
       }
+      // Zero due needs no card section at all: the header already says "0 due", which is
+      // both correct and the goal (design 4e / non-negotiable 6), and the command rows
+      // below stay — the hub is never hidden.
     }
     .padding(.horizontal, 12)
     .padding(.bottom, 10)
