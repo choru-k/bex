@@ -53,6 +53,11 @@ final class StudyViewModel: ObservableObject {
   private let studyState: StudyStateStore
   private let now: () -> Date
   private var sessionQueue: [StudyCard] = []
+  /// Cards that had no review state when this session loaded — i.e. cards being shown
+  /// for the first time ever. Only these get a visible "Toss — not a gap" control
+  /// (design 4c follow-up): the quality question is real exactly once, at first
+  /// exposure; afterwards it retreats to the per-card overflow.
+  private var firstExposureCardIDs: Set<String> = []
 
   init(
     learningLog: LearningLogStore,
@@ -86,6 +91,14 @@ final class StudyViewModel: ObservableObject {
     max(0, sessionTotal - completedCount)
   }
 
+  /// Whether the card on screen has never been seen before this session. Stable for the
+  /// whole session (snapshotted at load), so answering a card does not flip the control
+  /// out from under the owner mid-card.
+  var currentCardIsFirstExposure: Bool {
+    guard let currentCard else { return false }
+    return firstExposureCardIDs.contains(currentCard.id)
+  }
+
   /// Loads only when there is nothing in flight.
   ///
   /// One `StudyViewModel` instance is shared by the menu-bar hub and the Learn deck (see
@@ -117,6 +130,7 @@ final class StudyViewModel: ObservableObject {
     let states = await studyState.states()
     let planIDs = StudyDailyPlan.plan(cards: cards, states: states, now: now()).cardIDs
     dueCount = planIDs.count
+    firstExposureCardIDs = Set(planIDs.filter { states[$0] == nil })
 
     sessionQueue = planIDs.prefix(Self.sessionCap).compactMap { cardsByID[$0] }
     sessionTotal = sessionQueue.count

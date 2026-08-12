@@ -417,6 +417,33 @@ final class StudyViewModelTests: XCTestCase {
     XCTAssertNil(states[cardID(wrong: "on", correct: "in")]?.firstSeenAt)
   }
 
+  /// "Toss — not a gap" is a visible control only where the quality question is real: a
+  /// card's first-ever exposure. Once a card has review state it retreats to the overflow.
+  func testFirstExposureIsTrueOnceAndFalseAfterTheCardHasBeenAnswered() async {
+    let (learningLog, considerTaps, studyState, _, cleanUp) = makeStores()
+    defer { cleanUp() }
+    await appendEntry(to: learningLog, wrong: "on", correct: "in")
+
+    let viewModel = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState)
+    await viewModel.load()
+    XCTAssertTrue(viewModel.currentCardIsFirstExposure)
+
+    // Answering must not flip the control mid-card — the snapshot holds for the session.
+    await viewModel.select("wrong answer")
+    XCTAssertTrue(viewModel.currentCardIsFirstExposure)
+
+    // A wrong answer makes the card due again tomorrow; a fresh session a day later
+    // presents it with state attached, so it is no longer a first exposure.
+    let tomorrow = Date().addingTimeInterval(86_400 + 3_600)
+    let reopened = StudyViewModel(
+      learningLog: learningLog, considerTaps: considerTaps, studyState: studyState,
+      now: { tomorrow })
+    await reopened.load()
+    XCTAssertEqual(reopened.currentCard?.id, cardID(wrong: "on", correct: "in"))
+    XCTAssertFalse(reopened.currentCardIsFirstExposure)
+  }
+
   /// The other half of the guard: once the session is spent, reopening either surface
   /// should pick up anything that has come due since rather than showing "done" forever.
   func testLoadIfNeededRebuildsAFinishedSession() async {

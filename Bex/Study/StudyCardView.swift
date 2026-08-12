@@ -175,29 +175,50 @@ struct StudyCardView: View {
           .accessibilityIdentifier("study-reason")
       }
 
-      keepOrToss
+      answeredControls
     }
   }
 
-  /// Keep and move on, or say this card should never have existed.
+  /// Move on — and, only where the question is real, say this card should never have
+  /// existed.
   ///
-  /// Design 2b's rule, and the reason Keep is bound to Return: answering *is* the review, so
-  /// the happy path costs zero extra keys and Toss is the deliberate one. The deck is built
-  /// automatically from logged corrections, and `docs/purpose.md` names a deck of junk cards
-  /// as worse than a thin one — this is where the owner draws that line.
-  private var keepOrToss: some View {
+  /// The paired Keep/Toss came off every card (v2, design turn 4): without agent-proposed
+  /// cards there is no provenance to judge on every answer, and a permanent quality
+  /// verdict next to the happy-path key overweights it. "Toss — not a gap" stays a
+  /// visible control exactly once — a card's first-ever exposure, where junk is caught —
+  /// and lives in the per-card overflow (⌘⌫) forever after. The deck is built
+  /// automatically from logged corrections, and `docs/purpose.md` names a deck of junk
+  /// cards as worse than a thin one; this is still where the owner draws that line.
+  private var answeredControls: some View {
     HStack(spacing: 10) {
-      Button("Keep ⏎") {
+      Button("Next ⏎") {
         viewModel.advance()
       }
       .keyboardShortcut(.defaultAction)
       .accessibilityIdentifier("study-next")
 
-      Button("Toss — not a gap") {
-        Task { await viewModel.toss() }
+      if viewModel.currentCardIsFirstExposure {
+        Button("Toss — not a gap") {
+          Task { await viewModel.toss() }
+        }
+        .buttonStyle(.link)
+        .accessibilityIdentifier("study-toss")
       }
-      .buttonStyle(.link)
-      .accessibilityIdentifier("study-toss")
+
+      Menu {
+        Button("Toss — not a gap") {
+          Task { await viewModel.toss() }
+        }
+        .keyboardShortcut(.delete, modifiers: .command)
+        .accessibilityIdentifier("study-toss-overflow")
+      } label: {
+        Image(systemName: "ellipsis.circle")
+      }
+      .menuStyle(.borderlessButton)
+      .menuIndicator(.hidden)
+      .fixedSize()
+      .accessibilityLabel("Card actions")
+      .accessibilityIdentifier("study-card-overflow")
     }
     .controlSize(scale.isCompact ? .small : .regular)
     .font(scale.isCompact ? .caption : .body)
