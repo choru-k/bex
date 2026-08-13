@@ -117,10 +117,17 @@ coverable later by attaching the same one view.
 - The unit suite passed after every step and is the CI gate.
 - The UI tests were updated to the new Quick Check contract (`testCheckShowsReviewCard…`
   replaces the rewrite/copy-close flow; auxiliary navigation now round-trips through the
-  card's context row and returns to the draft with ⌘[), but they could not be *executed*
-  in the environment this pass ran in — the XCUITest runner timed out enabling automation
-  mode, which is a machine permission, not a test result. Run `BexUITests` locally before
-  the next release.
+  card's context row and returns to the draft with ⌘[).
+- **The UI suite was already broken on `main` before v2, and v2 introduced no new UI-test
+  failures.** Measured, not inferred: the full suite on v2 code is 9 passed / 14 failed;
+  every one of the 14 also fails at the pre-v2 commit (`496ff0e`). Three reference
+  `prompt-gate-original-disclosure` / `prompt-gate-ai-note-disclosure`, ids the *v1*
+  redesign deleted — so the suite was not run during the v1 pass either. The other eleven
+  fail identically at baseline, mostly `app.buttons["<id>"]` lookups returning no match
+  for buttons whose identifiers exist in the app (e.g. `welcome-set-up-provider`), which
+  points at an XCUITest/SwiftUI identifier-exposure change on this OS/Xcode, not at any
+  one screen. Repairing the suite is real, separate work: re-baseline the prompt-gate
+  tests to the v1 card, and rework element queries suite-wide.
 - New unit coverage: alternatives parsing/picking and edited-correction copying on the
   Quick Check view model, first-exposure semantics on the study view model, and
   provenance-to-tint threading in `LearningLogSamplesTests`.
