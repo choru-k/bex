@@ -323,14 +323,24 @@ final class BexUITests: XCTestCase {
     corrected.typeText(" Final edit.")
     XCTAssertEqual(corrected.value as? String, expected + " Final edit.")
 
-    // The disclosure may already be on screen if the panel is tall enough; scroll only
-    // when needed rather than asserting that scrolling moved anything.
+    // Scroll until the disclosure row sits inside the scroll view's visible bounds.
+    // Two traps here: `isHittable` reports true even when the row is clipped under the
+    // footer bar (the click then lands on the footer), and with the auto-sizing editor
+    // a long message fills 60% of the panel, so a scroll at the scroll view's centre
+    // would be swallowed by the editor's own scroll view — hence the coordinate below
+    // the editor.
     let detailsDisclosure =
       app.descendants(matching: .any)["prompt-gate-details-disclosure"].firstMatch
-    if !detailsDisclosure.isHittable {
-      app.scrollViews.firstMatch.scroll(byDeltaX: 0, deltaY: -1_000)
+    let outerScroll = app.scrollViews.firstMatch
+    let belowEditor = outerScroll.coordinate(
+      withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)
+    )
+    var scrollAttempts = 0
+    while detailsDisclosure.frame.maxY > outerScroll.frame.maxY - 10, scrollAttempts < 8 {
+      belowEditor.scroll(byDeltaX: 0, deltaY: -300)
+      scrollAttempts += 1
     }
-    XCTAssertTrue(detailsDisclosure.isHittable)
+    XCTAssertLessThanOrEqual(detailsDisclosure.frame.maxY, outerScroll.frame.maxY)
     detailsDisclosure.click()
     XCTAssertTrue(
       app.descendants(matching: .any)["prompt-gate-original"].waitForExistence(timeout: 3)
