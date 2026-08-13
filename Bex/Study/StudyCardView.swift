@@ -82,6 +82,10 @@ struct StudyCardView: View {
   var scale: StudyCardScale = .regular
   /// Trailing half of the category line, e.g. "card 3 of 5". Empty hides it.
   var subtitle: String = ""
+  /// Whether the answered state carries the template's own Next/overflow row. The
+  /// post-send micro-drill turns this off and supplies its own exits — one card per
+  /// send, with a quiet opt-in for more (v3 decision 1).
+  var showsAnsweredControls: Bool = true
 
   /// Autofocuses the typed-answer field the moment a `.typed` card appears so the owner
   /// can start typing with no click. That is the whole reason typed mode exists for
@@ -187,7 +191,9 @@ struct StudyCardView: View {
           .accessibilityIdentifier("study-reason")
       }
 
-      answeredControls
+      if showsAnsweredControls {
+        answeredControls
+      }
     }
   }
 

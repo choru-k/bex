@@ -1,6 +1,19 @@
 import AppKit
 import SwiftUI
 
+/// What the micro-drill's result footer offers once the armed card is answered.
+///
+/// The send moment earned one card (v3 decision 1): the result is a receipt, not the
+/// start of a session — sessions are what the popover and the takeover are for. The
+/// opt-in exists so answering-while-fresh is still one keystroke away, and it is `nil`
+/// when nothing is due, so there is never a button to nothing.
+enum StudyMicroDrillResultFooter {
+  static func continueOffer(remaining: Int) -> String? {
+    guard remaining > 0 else { return nil }
+    return "\(remaining) more due · ⌥⏎"
+  }
+}
+
 /// One card, offered right after a prompt ships.
 ///
 /// Design 4c. The timing is the whole idea: the owner has just written the English that
@@ -40,12 +53,21 @@ struct StudyMicroDrillView: View {
           .kerning(0.9)
           .foregroundStyle(.tint)
         if isArmed {
-          StudyCardView(viewModel: viewModel, card: card, scale: .compact)
-          Text("⏎ checks · Esc returns the keyboard exactly where it was")
-            .font(.caption2)
-            .foregroundStyle(.tertiary)
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityIdentifier("micro-drill-armed-hint")
+          StudyCardView(
+            viewModel: viewModel,
+            card: card,
+            scale: .compact,
+            showsAnsweredControls: false
+          )
+          if viewModel.answerRevealed {
+            resultFooter
+          } else {
+            Text("⏎ checks · Esc returns the keyboard exactly where it was")
+              .font(.caption2)
+              .foregroundStyle(.tertiary)
+              .fixedSize(horizontal: false, vertical: true)
+              .accessibilityIdentifier("micro-drill-armed-hint")
+          }
         } else {
           unarmedCard(card)
         }
@@ -72,6 +94,35 @@ struct StudyMicroDrillView: View {
       try? await Task.sleep(nanoseconds: 450_000_000)
       dismiss()
     }
+  }
+
+  /// The answered card's exits: ⏎ (or Esc, or the close box) closes and hands the
+  /// keyboard back; when more cards are due, a muted ⌥⏎ continues into the next one,
+  /// still armed. One card per send — continuing is the owner's choice, never the
+  /// default (v3 decision 1).
+  private var resultFooter: some View {
+    HStack(spacing: 10) {
+      Button("Done ⏎") {
+        dismissRestoringFocus()
+      }
+      .keyboardShortcut(.defaultAction)
+      .accessibilityIdentifier("micro-drill-done")
+
+      if let offer = StudyMicroDrillResultFooter.continueOffer(
+        remaining: viewModel.remainingCount
+      ) {
+        Button(offer) {
+          viewModel.advance()
+        }
+        .buttonStyle(.plain)
+        .font(.caption)
+        .foregroundStyle(.tertiary)
+        .keyboardShortcut(.return, modifiers: .option)
+        .accessibilityIdentifier("micro-drill-continue")
+      }
+      Spacer(minLength: 0)
+    }
+    .controlSize(.small)
   }
 
   private var header: some View {
