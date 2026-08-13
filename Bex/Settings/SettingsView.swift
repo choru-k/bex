@@ -249,6 +249,7 @@ struct SettingsView: View {
               Button("Review Latest Changes") {
                 viewModel.reviewLatestIntegrationChanges()
               }
+              .accessibilityIdentifier("settings-integration-review-latest")
             }
             .font(.caption)
             .textSelection(.enabled)

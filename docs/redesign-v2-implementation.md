@@ -119,15 +119,23 @@ coverable later by attaching the same one view.
   replaces the rewrite/copy-close flow; auxiliary navigation now round-trips through the
   card's context row and returns to the draft with ⌘[).
 - **The UI suite was already broken on `main` before v2, and v2 introduced no new UI-test
-  failures.** Measured, not inferred: the full suite on v2 code is 9 passed / 14 failed;
-  every one of the 14 also fails at the pre-v2 commit (`496ff0e`). Three reference
-  `prompt-gate-original-disclosure` / `prompt-gate-ai-note-disclosure`, ids the *v1*
-  redesign deleted — so the suite was not run during the v1 pass either. The other eleven
-  fail identically at baseline, mostly `app.buttons["<id>"]` lookups returning no match
-  for buttons whose identifiers exist in the app (e.g. `welcome-set-up-provider`), which
-  points at an XCUITest/SwiftUI identifier-exposure change on this OS/Xcode, not at any
-  one screen. Repairing the suite is real, separate work: re-baseline the prompt-gate
-  tests to the v1 card, and rework element queries suite-wide.
+  failures.** Measured, not inferred: the full suite on v2 code was 9 passed / 14 failed,
+  and every one of the 14 also failed at the pre-v2 commit (`496ff0e`). Three referenced
+  ids the *v1* redesign deleted — the suite was not run during the v1 pass either.
+- **The suite was then repaired to green** (21 passed, 0 failed, 2 environment-gated
+  skips: the real-target AX smoke needs Accessibility permission, the hub test needs a
+  menu bar that is not auto-hidden). What current macOS changed underneath the tests, for
+  whoever hits this next: `NSPanel`s expose as **Dialogs**, not Windows (a `titledSurface`
+  helper matches both); `buttonStyle(.link)` buttons expose as **Links** and
+  `DisclosureGroup` labels as **DisclosureTriangles**; a container-level
+  `accessibilityIdentifier` is stamped onto every descendant, erasing child ids (the
+  Welcome view's container id was removed for this; History's row id keeps the behaviour
+  and its details are matched by label+value instead); SwiftUI `Text` exposes its string
+  as `value`, not `label`; the status item exposes its label but not its identifier; and
+  Settings is categorized, so tests click the category tab first. Two real app fixes fell
+  out: ⌘[ in Quick Check now restores focus to the draft editor via the panel's focus
+  walker (FocusState alone cannot focus a just-remounted `TextEditor`), and the
+  integrations partial-failure "Review Latest Changes" button gained its missing id.
 - New unit coverage: alternatives parsing/picking and edited-correction copying on the
   Quick Check view model, first-exposure semantics on the study view model, and
   provenance-to-tint threading in `LearningLogSamplesTests`.

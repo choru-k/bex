@@ -54,7 +54,10 @@ struct WelcomeView: View {
     }
     .padding(28)
     .frame(minWidth: 500, minHeight: 360)
-    .accessibilityIdentifier("welcome-window-content")
+    // No container-level identifier here: on current macOS a container's
+    // accessibilityIdentifier is stamped onto every descendant, clobbering the buttons'
+    // own ids ("welcome-set-up-provider" et al.) in the exposed tree. Nothing referenced
+    // the container id.
   }
 
   private func feature(title: String, detail: String) -> some View {

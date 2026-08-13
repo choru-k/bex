@@ -145,6 +145,21 @@ final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
       primaryAction()
     case .back:
       backAction()
+      // Back re-mounts the draft editor; SwiftUI's FocusState alone does not reliably
+      // make a freshly inserted TextEditor first responder, so reuse the walker show()
+      // uses — pinned to the draft editor's identifier, because in the first frames
+      // after Back the old corrected editor is still in the view tree and a
+      // first-editable walk would grab it just before SwiftUI tears it down.
+      if let panel = window as? QuickCheckPanel {
+        DispatchQueue.main.async { [weak self, weak panel] in
+          guard let self, let panel else { return }
+          self.focusInput(
+            in: panel,
+            remainingAttempts: 20,
+            matchingIdentifier: "quick-check-input"
+          )
+        }
+      }
     case .copy:
       copyAction()
     }
@@ -174,10 +189,14 @@ final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
     return nil
   }
 
-  private func focusInput(in panel: NSPanel, remainingAttempts: Int) {
+  private func focusInput(
+    in panel: NSPanel,
+    remainingAttempts: Int,
+    matchingIdentifier identifier: String? = nil
+  ) {
     guard panel.isVisible else { return }
     if let contentView = panel.contentView,
-      let textView = firstTextView(in: contentView),
+      let textView = firstTextView(in: contentView, matchingIdentifier: identifier),
       panel.makeFirstResponder(textView)
     {
       focusAction()
@@ -186,7 +205,11 @@ final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
     guard remainingAttempts > 0 else { return }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) { [weak self, weak panel] in
       guard let self, let panel else { return }
-      self.focusInput(in: panel, remainingAttempts: remainingAttempts - 1)
+      self.focusInput(
+        in: panel,
+        remainingAttempts: remainingAttempts - 1,
+        matchingIdentifier: identifier
+      )
     }
   }
 
@@ -208,12 +231,17 @@ final class QuickCheckPanelController: NSWindowController, NSWindowDelegate {
     panel.setFrameOrigin(origin)
   }
 
-  private func firstTextView(in view: NSView) -> NSTextView? {
-    if let textView = view as? NSTextView, textView.isEditable {
+  private func firstTextView(
+    in view: NSView,
+    matchingIdentifier identifier: String? = nil
+  ) -> NSTextView? {
+    if let textView = view as? NSTextView, textView.isEditable,
+      identifier == nil || textView.accessibilityIdentifier() == identifier
+    {
       return textView
     }
     for child in view.subviews {
-      if let textView = firstTextView(in: child) {
+      if let textView = firstTextView(in: child, matchingIdentifier: identifier) {
         return textView
       }
     }
