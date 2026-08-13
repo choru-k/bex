@@ -1,5 +1,28 @@
 import SwiftUI
 
+/// Geometry for the card's final-message editor: sized to its content, never less than a
+/// few lines, never more than its share of the panel (v3 decision 4). Pure, so the clamp
+/// is unit-testable without a view.
+enum ReviewCardLayout {
+  /// Roughly three lines of body text plus the editor's insets — enough to read a short
+  /// message and see that it is editable, without a one-liner floating in empty space.
+  static let minimumEditorHeight: CGFloat = 64
+  /// The editor's ceiling as a share of the panel's content height; past it, it scrolls.
+  static let maximumEditorFraction: CGFloat = 0.6
+
+  static func editorHeight(measuredText: CGFloat, availableHeight: CGFloat) -> CGFloat {
+    let maximum = max(minimumEditorHeight, availableHeight * maximumEditorFraction)
+    return min(max(measuredText, minimumEditorHeight), maximum)
+  }
+}
+
+private struct ReviewCardEditorTextHeight: PreferenceKey {
+  static let defaultValue: CGFloat = 0
+  static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+    value = max(value, nextValue())
+  }
+}
+
 /// The one review card: editable final message, one-line redline, unranked alternatives,
 /// ask thread, and a single collapsed Details disclosure.
 ///
@@ -17,7 +40,9 @@ struct ReviewCardView<DetailsExtra: View>: View {
   /// Two-way binding into the host's canonical corrected text (the host owns edits so
   /// its checkpoint/discard logic keeps working unchanged).
   let corrected: Binding<String>
-  let editorHeight: CGFloat
+  /// The panel's content height — the editor sizes itself to its text within
+  /// `ReviewCardLayout`'s bounds of it.
+  let availableHeight: CGFloat
   let canEditCorrection: Bool
   /// Full accessibility label for the final-message editor, e.g.
   /// "Final message for Codex, editable".
@@ -40,6 +65,10 @@ struct ReviewCardView<DetailsExtra: View>: View {
   /// Extra reference sections inside Details, after the original message and grammar
   /// notes — Fix & Send puts its delivery guidance here; Quick Check has nothing.
   @ViewBuilder let detailsExtra: () -> DetailsExtra
+
+  /// What the corrected text measures at the editor's width, reported by the invisible
+  /// mirror under the editor. Drives the auto-sizing height.
+  @State private var measuredTextHeight: CGFloat = 0
 
   var body: some View {
     let changes = DiffChange.make(from: review.diff)
@@ -95,18 +124,51 @@ struct ReviewCardView<DetailsExtra: View>: View {
 
   private var correctedEditor: some View {
     TextEditor(text: corrected)
+      .font(.body)
       .padding(5)
-      .frame(height: editorHeight)
+      .frame(
+        height: ReviewCardLayout.editorHeight(
+          measuredText: measuredTextHeight,
+          availableHeight: availableHeight
+        )
+      )
       .background(Color(nsColor: .textBackgroundColor))
       .clipShape(RoundedRectangle(cornerRadius: 7))
       .overlay {
         RoundedRectangle(cornerRadius: 7)
           .stroke(Color(nsColor: .separatorColor))
       }
+      .overlay(alignment: .topLeading) { editorSizingMirror }
+      .onPreferenceChange(ReviewCardEditorTextHeight.self) { measuredTextHeight = $0 }
       .disabled(!canEditCorrection)
       .focused(keyboardFocus, equals: .correctedEditor)
       .accessibilityLabel(correctedFieldLabel)
       .accessibilityIdentifier("\(idPrefix)-corrected")
+  }
+
+  /// An invisible copy of the corrected text at the editor's own width, so the editor's
+  /// height can follow its content — SwiftUI's `TextEditor` will not report one itself.
+  /// The zero-width space makes a trailing newline count as a line.
+  // ponytail: the insets approximate the editor's; a few points off only moves the
+  // moment scrolling starts, never the text itself.
+  private var editorSizingMirror: some View {
+    Text(corrected.wrappedValue + "\u{200B}")
+      .font(.body)
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+      .fixedSize(horizontal: false, vertical: true)
+      .frame(maxWidth: .infinity, alignment: .topLeading)
+      .background(
+        GeometryReader { proxy in
+          Color.clear.preference(
+            key: ReviewCardEditorTextHeight.self,
+            value: proxy.size.height
+          )
+        }
+      )
+      .opacity(0)
+      .allowsHitTesting(false)
+      .accessibilityHidden(true)
   }
 
   @ViewBuilder

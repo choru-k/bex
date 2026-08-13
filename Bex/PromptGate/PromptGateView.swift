@@ -2,12 +2,6 @@ import AppKit
 import Combine
 import SwiftUI
 
-enum PromptGateLayout {
-  static func finalEditorHeight(for availableHeight: CGFloat) -> CGFloat {
-    min(320, max(180, availableHeight * 0.4))
-  }
-}
-
 struct PromptGateView: View {
   @ObservedObject var viewModel: PromptGateViewModel
   /// The ask thread for this correction. Owned outside the view so a question in flight
@@ -246,7 +240,7 @@ struct PromptGateView: View {
             get: { viewModel.review?.corrected ?? review.corrected },
             set: { viewModel.updateCorrected($0) }
           ),
-          editorHeight: PromptGateLayout.finalEditorHeight(for: availableHeight),
+          availableHeight: availableHeight,
           canEditCorrection: viewModel.canEditCorrection,
           correctedFieldLabel: "Final message for \(viewModel.destinationLabel), editable",
           errorMessage: viewModel.errorMessage,

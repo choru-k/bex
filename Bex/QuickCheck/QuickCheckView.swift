@@ -77,7 +77,7 @@ struct QuickCheckView: View {
               get: { viewModel.review?.corrected ?? review.corrected },
               set: { viewModel.updateCorrected($0) }
             ),
-            editorHeight: PromptGateLayout.finalEditorHeight(for: availableHeight),
+            availableHeight: availableHeight,
             canEditCorrection: true,
             correctedFieldLabel: "Corrected text, editable",
             errorMessage: viewModel.userVisibleError,

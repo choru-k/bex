@@ -127,11 +127,29 @@ final class PromptGateFrameMemoryTests: XCTestCase {
       NSSize(width: 460, height: 680)
     )
 
-    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 0), 180)
-    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 450), 180)
-    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 500), 200)
-    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 800), 320)
-    XCTAssertEqual(PromptGateLayout.finalEditorHeight(for: 1_000), 320)
+    // The shared card's editor sizes to content (v3 decision 4): short text sits at the
+    // three-line floor, long text is capped at its share of the panel and scrolls.
+    XCTAssertEqual(
+      ReviewCardLayout.editorHeight(measuredText: 0, availableHeight: 600),
+      ReviewCardLayout.minimumEditorHeight
+    )
+    XCTAssertEqual(
+      ReviewCardLayout.editorHeight(measuredText: 40, availableHeight: 600),
+      ReviewCardLayout.minimumEditorHeight
+    )
+    XCTAssertEqual(
+      ReviewCardLayout.editorHeight(measuredText: 200, availableHeight: 600),
+      200
+    )
+    XCTAssertEqual(
+      ReviewCardLayout.editorHeight(measuredText: 2_000, availableHeight: 600),
+      360
+    )
+    // A degenerate panel never squeezes the editor below its floor.
+    XCTAssertEqual(
+      ReviewCardLayout.editorHeight(measuredText: 2_000, availableHeight: 50),
+      ReviewCardLayout.minimumEditorHeight
+    )
   }
 
   func testRememberedMinimumWidthGrowsOnlyVerticallyForReview() {
