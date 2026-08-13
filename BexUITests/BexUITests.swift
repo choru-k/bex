@@ -954,15 +954,22 @@ final class BexUITests: XCTestCase {
         .write(to: directory.appendingPathComponent(name))
     }
 
-    // Quick Check after a check: the shared review card, Copy Correction footer (4a).
+    // Quick Check after a check: the shared review card, Copy Correction footer (4a),
+    // with the alternatives panel present — the fixture sentence carries a Consider
+    // section precisely so the baseline proves the panel renders here (v3 decision 5).
     let (quickCheckApp, copySink) = launch(openQuickCheck: true, scenario: "configured-provider")
     defer { try? FileManager.default.removeItem(at: copySink) }
     let input = quickCheckApp.textViews["quick-check-input"]
     XCTAssertTrue(input.waitForExistence(timeout: 5))
     input.click()
-    typeTextReliably("this are a test", into: input)
+    typeTextReliably("can you check this are a test", into: input)
     quickCheckApp.buttons["quick-check-check"].click()
     XCTAssertTrue(quickCheckApp.textViews["quick-check-corrected"].waitForExistence(timeout: 5))
+    XCTAssertTrue(
+      quickCheckApp.descendants(matching: .any)["quick-check-better-expression"]
+        .waitForExistence(timeout: 3),
+      "the alternatives panel must render on the Quick Check card"
+    )
     try save(titledSurface(quickCheckApp, "Quick Check"), as: "01-quickcheck-review-card.png")
     quickCheckApp.terminate()
 

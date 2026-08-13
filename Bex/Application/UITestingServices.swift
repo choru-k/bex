@@ -499,6 +499,22 @@
           explanation: "Changed subject-verb agreement."
         )
       }
+      // The screenshot fixture's sentence: a response in the full two-section
+      // GrammarPrompts format, so the captured card shows the alternatives panel
+      // (redesign v3, decision 5). No other UI test types this sentence.
+      if text == "can you check this are a test" {
+        return GrammarResult(
+          corrected: "can you check this is a test",
+          explanation: """
+            Fixed:
+            [subject-verb-agreement] "are" → "is" — the subject is singular.
+            Consider:
+            "can you check" → "could you check" — a touch softer.
+            "can you check" → "mind checking" — casual, common in chat.
+            Which fits?
+            """
+        )
+      }
       return GrammarResult(corrected: text, explanation: "No changes needed.")
     }
 
