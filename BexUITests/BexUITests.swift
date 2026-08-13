@@ -936,6 +936,61 @@ final class BexUITests: XCTestCase {
     try JSONDecoder().decode([String].self, from: Data(contentsOf: url))
   }
 
+  /// Captures the redesign's documentation screenshots from the seeded fixtures, into
+  /// the directory named by `BEX_SCREENSHOT_DIR` (pass it as
+  /// `TEST_RUNNER_BEX_SCREENSHOT_DIR=… xcodebuild … test`). Skipped in normal runs so
+  /// the suite stays deterministic; run it deliberately when a design pass needs fresh
+  /// baselines. Never real data — every state below is a fixture.
+  func testCaptureRedesignScreenshots() throws {
+    guard let dir = ProcessInfo.processInfo.environment["BEX_SCREENSHOT_DIR"] else {
+      throw XCTSkip("Set TEST_RUNNER_BEX_SCREENSHOT_DIR to capture redesign screenshots.")
+    }
+    continueAfterFailure = false
+    let directory = URL(fileURLWithPath: dir, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+    func save(_ element: XCUIElement, as name: String) throws {
+      try element.screenshot().pngRepresentation
+        .write(to: directory.appendingPathComponent(name))
+    }
+
+    // Quick Check after a check: the shared review card, Copy Correction footer (4a).
+    let (quickCheckApp, copySink) = launch(openQuickCheck: true, scenario: "configured-provider")
+    defer { try? FileManager.default.removeItem(at: copySink) }
+    let input = quickCheckApp.textViews["quick-check-input"]
+    XCTAssertTrue(input.waitForExistence(timeout: 5))
+    input.click()
+    typeTextReliably("this are a test", into: input)
+    quickCheckApp.buttons["quick-check-check"].click()
+    XCTAssertTrue(quickCheckApp.textViews["quick-check-corrected"].waitForExistence(timeout: 5))
+    try save(titledSurface(quickCheckApp, "Quick Check"), as: "01-quickcheck-review-card.png")
+    quickCheckApp.terminate()
+
+    // Fix & Send on the same correction: the same card, delivery footer.
+    let (promptGateApp, targetSink, deliveryEventsSink) = launchPromptGate()
+    defer {
+      try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: deliveryEventsSink)
+    }
+    XCTAssertTrue(
+      promptGateApp.buttons["prompt-gate-confirm-outbound"].waitForExistence(timeout: 5)
+    )
+    promptGateApp.buttons["prompt-gate-confirm-outbound"].click()
+    _ = awaitPromptCorrection(in: promptGateApp)
+    try save(titledSurface(promptGateApp, "Fix & Send"), as: "02-fixsend-review-card.png")
+    promptGateApp.terminate()
+
+    // Learn on a fresh install: the first-run empty deck (4e).
+    let learnApp = launchScenario("configured-provider")
+    defer { learnApp.terminate() }
+    XCTAssertTrue(learnApp.windows["Settings"].waitForExistence(timeout: 5))
+    learnApp.descendants(matching: .any)["main-sidebar-learn"].firstMatch.click()
+    XCTAssertTrue(
+      learnApp.descendants(matching: .any)["study-first-run"].waitForExistence(timeout: 5)
+    )
+    try save(titledSurface(learnApp, "Learn"), as: "03-learn-first-run.png")
+  }
+
   /// A titled top-level surface, whatever it exposes as. On current macOS an `NSPanel`
   /// (Quick Check, Fix & Send) is a Dialog in the accessibility tree while plain windows
   /// stay Windows — `app.windows[title]` silently never matches a panel, which also makes

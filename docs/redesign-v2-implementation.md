@@ -7,8 +7,15 @@ built. Read `docs/purpose.md` first; the non-negotiables outrank both the mock a
 
 Each step landed as its own commit on `main`, building and passing the unit suite
 (`-only-testing:BexTests`). The fixture screenshots in `docs/redesign-v1-screenshots/`
-remain the visual baseline for surfaces this pass did not touch; no new screenshots were
-captured in this pass.
+remain the visual baseline for surfaces this pass did not touch;
+`docs/redesign-v2-screenshots/` holds the new baselines for what it did touch — the
+Quick Check review card, the Fix & Send review card beside it (the "one card, two
+footers" acceptance check, visible), and the first-run empty deck. They are captured
+from the seeded UI-test fixtures by `testCaptureRedesignScreenshots`, which skips unless
+`TEST_RUNNER_BEX_SCREENSHOT_DIR` names an output directory — rerun it whenever a design
+pass needs fresh baselines. The post-send HUD, the hub at "0 due", and the per-source
+tints have no fixture that reaches them (they need a delivery, a clickable status item,
+and seeded pick/ask log entries respectively) and were verified by unit tests instead.
 
 ---
 
