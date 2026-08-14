@@ -310,7 +310,7 @@ final class ProfilesViewModel: ObservableObject {
           context: context,
           destination: destination
         )
-        if OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
+        if OutboundConfirmationContext.standaloneFixAndSend.requiresConfirmation(
           hasAcceptedDisclosure: accepted
         ) {
           pendingGeneration = request

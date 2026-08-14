@@ -27,7 +27,7 @@ struct ConsiderSuggestion: Identifiable, Equatable, Sendable {
   }
 }
 
-/// Aggregation of the learning log for the Learning window (docs/learning-mode-plan.md).
+/// Aggregation of the learning log for the Learning window.
 /// Read-only except for one action — tapping a "Consider" alternative — which is the
 /// deferred review session's entire point: expression is reviewed here, off the shipping
 /// flow, and a tap is what turns exposure into a drill.
@@ -153,13 +153,14 @@ final class LearningViewModel: ObservableObject {
 
     // Goal-2 uptake, now measured rather than inferred: how many distinct alternatives were
     // offered across the whole log, and how many the owner actually picked.
-    uptakeSuggested = Set(
-      entries.flatMap { entry in
-        LearningAggregator.parseConsiderSuggestions(from: entry.explanation)
-          .compactMap { LearningAggregator.parseSuggestionLine($0) }
-          .map { "\($0.phrase)|\($0.alternative)" }
-      }
-    ).count
+    uptakeSuggested =
+      Set(
+        entries.flatMap { entry in
+          LearningAggregator.parseConsiderSuggestions(from: entry.explanation)
+            .compactMap { LearningAggregator.parseSuggestionLine($0) }
+            .map { "\($0.phrase)|\($0.alternative)" }
+        }
+      ).count
     uptakeAdopted = tappedIDs.count
 
     isLoading = false

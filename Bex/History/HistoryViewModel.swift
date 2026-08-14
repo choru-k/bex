@@ -33,7 +33,7 @@ final class HistoryViewModel: ObservableObject {
   private let deleteHistoryAction: @Sendable (UUID) async throws -> Void
   private let restoreHistoryAction: @Sendable (HistoryEntry, UUID?, UUID?) async throws -> Void
   private let useAsNewInputAction: @MainActor (String) -> Void
-  private let openQuickCheckAction: @MainActor () -> Void
+  private let openFixAndSendAction: @MainActor () -> Void
   private var operationTask: Task<Void, Never>?
   private var notificationTask: Task<Void, Never>?
   private var undoGeneration = 0
@@ -43,7 +43,7 @@ final class HistoryViewModel: ObservableObject {
   init(
     data: BexDataStore,
     useAsNewInput: @escaping @MainActor (String) -> Void,
-    openQuickCheck: @escaping @MainActor () -> Void = {},
+    openFixAndSend: @escaping @MainActor () -> Void = {},
     deleteHistory: (@Sendable (UUID) async throws -> Void)? = nil,
     restoreHistory: (@Sendable (HistoryEntry, UUID?, UUID?) async throws -> Void)? = nil
   ) {
@@ -61,7 +61,7 @@ final class HistoryViewModel: ObservableObject {
         )
       }
     useAsNewInputAction = useAsNewInput
-    openQuickCheckAction = openQuickCheck
+    openFixAndSendAction = openFixAndSend
   }
 
   var filteredEntries: [HistoryEntry] {
@@ -98,8 +98,8 @@ final class HistoryViewModel: ObservableObject {
     case .empty:
       HistoryEmptyStateContent(
         title: "No History Yet",
-        message: "Corrections you save from Quick Check will appear here.",
-        actionTitle: "Open Quick Check"
+        message: "Successful Fix & Send corrections you save will appear here.",
+        actionTitle: "Open Fix & Send"
       )
     case .filteredEmpty:
       HistoryEmptyStateContent(
@@ -196,8 +196,8 @@ final class HistoryViewModel: ObservableObject {
     providerFilter = nil
   }
 
-  func openQuickCheck() {
-    openQuickCheckAction()
+  func openFixAndSend() {
+    openFixAndSendAction()
   }
 
   func useOriginalAsInput(_ entry: HistoryEntry) {

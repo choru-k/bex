@@ -11,7 +11,6 @@ extension PromptClient {
   }
 }
 
-
 enum PromptDeliveryAction: String, CaseIterable, Equatable, Hashable, Sendable {
   case copyCorrection
   case pasteInDestination
@@ -181,7 +180,7 @@ struct PromptCapture: Equatable, Sendable {
 struct PromptGateSession: Identifiable, Equatable, Sendable {
   enum Source: Equatable, Sendable {
     case capturedField
-    case composer
+    case standalone
     case hook(requestID: UUID)
   }
 
@@ -190,19 +189,22 @@ struct PromptGateSession: Identifiable, Equatable, Sendable {
   let target: PromptTarget
   let knownClient: PromptClient?
   let source: Source
+  let usesDraftPersistence: Bool
 
   init(
     id: UUID = UUID(),
     initialDraft: String,
     target: PromptTarget,
     knownClient: PromptClient? = nil,
-    source: Source
+    source: Source,
+    usesDraftPersistence: Bool? = nil
   ) {
     self.id = id
     self.initialDraft = initialDraft
     self.target = target
     self.knownClient = knownClient
     self.source = source
+    self.usesDraftPersistence = usesDraftPersistence ?? source.supportsDraftPersistence
   }
 
   var hookRequestID: UUID? {
@@ -216,10 +218,19 @@ extension PromptGateSession.Source {
     switch self {
     case .capturedField:
       .manualCapturedField
-    case .composer:
-      .ambiguousManual
+    case .standalone:
+      .standaloneFixAndSend
     case .hook:
       .hook
+    }
+  }
+
+  var supportsDraftPersistence: Bool {
+    switch self {
+    case .standalone:
+      true
+    case .capturedField, .hook:
+      false
     }
   }
 }

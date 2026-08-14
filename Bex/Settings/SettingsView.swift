@@ -87,7 +87,8 @@ struct SettingsView: View {
     .onChange(of: viewModel.setupOrigin) { origin in
       selectedCategory = origin == nil ? .general : .provider
     }
-    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) {
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification))
+    {
       _ in
       viewModel.refreshAccessibilityState()
     }
@@ -110,8 +111,8 @@ struct SettingsView: View {
         .keyboardShortcut(.defaultAction)
     } message: {
       Text(
-        "This deletes the draft saved for restoration. "
-          + "Your current in-memory Quick Check draft remains unchanged."
+        "This deletes the standalone Fix & Send draft saved for restoration. "
+          + "Your current in-memory draft remains unchanged."
       )
     }
     .alert("Clear History?", isPresented: $confirmClearHistory) {
@@ -165,7 +166,8 @@ struct SettingsView: View {
           VStack(alignment: .leading, spacing: 8) {
             Text(integrationActionSummary(review.actions))
               .font(.caption)
-              .accessibilityLabel("Filesystem action summary: \(integrationActionSummary(review.actions))")
+              .accessibilityLabel(
+                "Filesystem action summary: \(integrationActionSummary(review.actions))")
             ScrollView {
               VStack(alignment: .leading, spacing: 8) {
                 ForEach(review.actions) { action in
@@ -187,7 +189,8 @@ struct SettingsView: View {
                     Button("Copy artifact path") {
                       copyIntegrationArtifact(action.path)
                     }
-                    .accessibilityLabel("Copy path for \(action.kind.rawValue) artifact \(action.path)")
+                    .accessibilityLabel(
+                      "Copy path for \(action.kind.rawValue) artifact \(action.path)")
                   }
                   .font(.caption2.monospaced())
                   .textSelection(.enabled)
@@ -240,7 +243,7 @@ struct SettingsView: View {
             viewModel.reviewLatestIntegrationChanges()
           }
           .accessibilityIdentifier("settings-integration-review-latest")
-        case let .partialFailure(completed, restored, failed):
+        case .partialFailure(let completed, let restored, let failed):
           GroupBox("Partial failure recovery") {
             VStack(alignment: .leading, spacing: 4) {
               Text("Completed: \(completed.joined(separator: ", "))")
@@ -325,9 +328,9 @@ struct SettingsView: View {
     var insertions: [Int: String] = [:]
     for change in difference {
       switch change {
-      case let .remove(offset, element, _):
+      case .remove(let offset, let element, _):
         removals[offset] = element
-      case let .insert(offset, element, _):
+      case .insert(let offset, let element, _):
         insertions[offset] = element
       }
     }
@@ -369,7 +372,8 @@ struct SettingsView: View {
 
   private func integrationActionSummary(_ actions: [HookInstallationAction]) -> String {
     let counts = Dictionary(grouping: actions, by: \.change).mapValues(\.count)
-    return "\(counts[.create, default: 0]) create, \(counts[.replace, default: 0]) replace, \(counts[.delete, default: 0]) delete, \(counts[.keep, default: 0]) unchanged."
+    return
+      "\(counts[.create, default: 0]) create, \(counts[.replace, default: 0]) replace, \(counts[.delete, default: 0]) delete, \(counts[.keep, default: 0]) unchanged."
   }
 
   private func copyIntegrationArtifact(_ value: String) {
@@ -379,56 +383,44 @@ struct SettingsView: View {
 
   private var generalCategory: some View {
     Form {
-        Section("Appearance") {
-          Picker("Appearance", selection: appearanceBinding) {
-            ForEach(AppearancePreference.allCases, id: \.self) { appearance in
-              Text(appearance.displayName).tag(appearance)
-            }
+      Section("Appearance") {
+        Picker("Appearance", selection: appearanceBinding) {
+          ForEach(AppearancePreference.allCases, id: \.self) { appearance in
+            Text(appearance.displayName).tag(appearance)
           }
-          .pickerStyle(.segmented)
-          .accessibilityIdentifier("settings-appearance")
         }
+        .pickerStyle(.segmented)
+        .accessibilityIdentifier("settings-appearance")
+      }
 
-        Section("Shortcuts") {
-          LabeledContent("Quick Check") {
-            ShortcutRecorder(
-              chord: viewModel.quickCheckKeyChord,
-              accessibilityLabel: "Quick Check shortcut"
-            ) {
-              viewModel.updateKeyChord($0, for: .quickCheck)
-            }
-          }
-          if let error = viewModel.shortcutError(for: .quickCheck) {
-            Text(error)
-              .font(.caption)
-              .foregroundStyle(.red)
-              .accessibilityIdentifier("settings-quick-check-shortcut-error")
-          }
+      Section("Shortcuts") {
 
-          LabeledContent("Fix & Send") {
-            ShortcutRecorder(
-              chord: viewModel.fixAndSendKeyChord,
-              accessibilityLabel: "Fix & Send shortcut"
-            ) {
-              viewModel.updateKeyChord($0, for: .fixAndSend)
-            }
+        LabeledContent("Fix & Send") {
+          ShortcutRecorder(
+            chord: viewModel.fixAndSendKeyChord,
+            accessibilityLabel: "Fix & Send shortcut"
+          ) {
+            viewModel.updateKeyChord($0, for: .fixAndSend)
           }
-          if let error = viewModel.shortcutError(for: .fixAndSend) {
-            Text(error)
-              .font(.caption)
-              .foregroundStyle(.red)
-              .accessibilityIdentifier("settings-fix-and-send-shortcut-error")
-          }
-          Text("Changes take effect immediately. If macOS or another app rejects a shortcut, Bex keeps the previous working shortcut.")
+        }
+        if let error = viewModel.shortcutError(for: .fixAndSend) {
+          Text(error)
             .font(.caption)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(.red)
+            .accessibilityIdentifier("settings-fix-and-send-shortcut-error")
         }
+        Text(
+          "Changes take effect immediately. If macOS or another app rejects a shortcut, Bex keeps the previous working shortcut."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
 
-        Section("About") {
-          LabeledContent("Version", value: Self.appVersionString)
-            .textSelection(.enabled)
-            .accessibilityIdentifier("settings-app-version")
-        }
+      Section("About") {
+        LabeledContent("Version", value: Self.appVersionString)
+          .textSelection(.enabled)
+          .accessibilityIdentifier("settings-app-version")
+      }
     }
     .formStyle(.grouped)
     .padding()
@@ -437,175 +429,175 @@ struct SettingsView: View {
 
   private var providerCategory: some View {
     Form {
-        Section("Provider Connection") {
-          Picker("Provider", selection: providerBinding) {
-            ForEach(LLMProvider.allCases, id: \.self) { provider in
-              Text(provider.displayName).tag(provider)
-            }
-          }
-          .accessibilityIdentifier("settings-provider")
-
-          Label(
-            viewModel.providerConnectionLabel,
-            systemImage: {
-              switch viewModel.providerConnectionState {
-              case .notConfigured: "person.badge.key"
-              case .validating: "arrow.trianglehead.2.clockwise.rotate.90"
-              case .ready: "checkmark.circle.fill"
-              case .failed: "exclamationmark.triangle.fill"
-              }
-            }()
-          )
-          .foregroundStyle(
-            viewModel.providerConnectionState == .ready
-              ? Color.green
-              : viewModel.providerConnectionState == .failed ? Color.red : Color.secondary
-          )
-          .accessibilityIdentifier("settings-provider-connection")
-
-          if viewModel.showsCredential {
-            if viewModel.credentialStored {
-              Label("Credential stored in Keychain", systemImage: "key.fill")
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier("settings-credential-stored")
-            }
-            SecureField(
-              viewModel.credentialStored
-                ? "Enter a replacement credential"
-                : viewModel.credentialLabel,
-              text: $viewModel.credentialInput
-            )
-            .accessibilityIdentifier("settings-credential-input")
-            HStack {
-              Button(viewModel.credentialStored ? "Replace Credential" : "Connect") {
-                viewModel.saveCredential()
-              }
-              .accessibilityIdentifier("settings-save-credential")
-              if viewModel.credentialStored {
-                Button("Remove Credential", role: .destructive) {
-                  viewModel.removeCredential()
-                }
-              }
-            }
-            Text("Credentials are stored only in the macOS Keychain.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          } else if viewModel.provider == .openAICodex {
-            HStack {
-              Label(
-                viewModel.codexStatus,
-                systemImage: viewModel.codexConnected
-                  ? "checkmark.circle.fill"
-                  : "person.badge.key"
-              )
-              if viewModel.oauthInProgress {
-                ProgressView().controlSize(.small)
-              }
-              Spacer()
-            }
-            .accessibilityIdentifier("settings-codex-status")
-            if let expiry = viewModel.codexExpiry {
-              Text("Session expires \(expiry, style: .relative).")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-            HStack {
-              Button(viewModel.codexConnected ? "Reconnect" : "Connect") {
-                viewModel.connectCodex()
-              }
-              .disabled(viewModel.oauthInProgress)
-              .accessibilityIdentifier("settings-codex-connect")
-              if viewModel.codexConnected {
-                Button("Disconnect", role: .destructive) {
-                  viewModel.disconnectCodex()
-                }
-                .accessibilityIdentifier("settings-codex-disconnect")
-              }
-            }
-            if viewModel.manualCallbackRequired {
-              TextField("Complete callback URL", text: $viewModel.callbackURL)
-                .accessibilityIdentifier("settings-codex-callback")
-              Button("Complete Login") {
-                viewModel.completeManualCallback()
-              }
-              .disabled(viewModel.oauthInProgress)
-              .accessibilityIdentifier("settings-codex-complete")
-            }
-            Text("Uses your ChatGPT Codex account. Tokens remain in Keychain.")
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          } else if viewModel.provider == .ollama {
-            TextField("Ollama URL", text: ollamaBinding)
-              .accessibilityIdentifier("settings-ollama-url")
-            if let ollamaError = viewModel.ollamaError {
-              Text(ollamaError)
-                .font(.caption)
-                .foregroundStyle(.red)
-                .accessibilityIdentifier("settings-ollama-error")
-            }
-          }
-
-          if let routeTitle = viewModel.setupRouteTitle {
-            Button(routeTitle) {
-              Task {
-                await viewModel.requestSetupRoute()
-              }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(viewModel.isRequestingSetupRoute)
-            .accessibilityIdentifier("settings-setup-route")
+      Section("Provider Connection") {
+        Picker("Provider", selection: providerBinding) {
+          ForEach(LLMProvider.allCases, id: \.self) { provider in
+            Text(provider.displayName).tag(provider)
           }
         }
+        .accessibilityIdentifier("settings-provider")
 
-        Section("Model & Effort") {
+        Label(
+          viewModel.providerConnectionLabel,
+          systemImage: {
+            switch viewModel.providerConnectionState {
+            case .notConfigured: "person.badge.key"
+            case .validating: "arrow.trianglehead.2.clockwise.rotate.90"
+            case .ready: "checkmark.circle.fill"
+            case .failed: "exclamationmark.triangle.fill"
+            }
+          }()
+        )
+        .foregroundStyle(
+          viewModel.providerConnectionState == .ready
+            ? Color.green
+            : viewModel.providerConnectionState == .failed ? Color.red : Color.secondary
+        )
+        .accessibilityIdentifier("settings-provider-connection")
+
+        if viewModel.showsCredential {
+          if viewModel.credentialStored {
+            Label("Credential stored in Keychain", systemImage: "key.fill")
+              .foregroundStyle(.secondary)
+              .accessibilityIdentifier("settings-credential-stored")
+          }
+          SecureField(
+            viewModel.credentialStored
+              ? "Enter a replacement credential"
+              : viewModel.credentialLabel,
+            text: $viewModel.credentialInput
+          )
+          .accessibilityIdentifier("settings-credential-input")
           HStack {
-            Picker("Model", selection: modelBinding) {
-              ForEach(viewModel.models) { model in
-                Text(model.name).tag(model.id)
+            Button(viewModel.credentialStored ? "Replace Credential" : "Connect") {
+              viewModel.saveCredential()
+            }
+            .accessibilityIdentifier("settings-save-credential")
+            if viewModel.credentialStored {
+              Button("Remove Credential", role: .destructive) {
+                viewModel.removeCredential()
               }
             }
-            .accessibilityIdentifier("settings-model")
-            if viewModel.isFetchingModels {
+          }
+          Text("Credentials are stored only in the macOS Keychain.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else if viewModel.provider == .openAICodex {
+          HStack {
+            Label(
+              viewModel.codexStatus,
+              systemImage: viewModel.codexConnected
+                ? "checkmark.circle.fill"
+                : "person.badge.key"
+            )
+            if viewModel.oauthInProgress {
               ProgressView().controlSize(.small)
             }
+            Spacer()
           }
-          Picker("Effort", selection: effortBinding) {
-            ForEach(ReasoningEffort.allCases) { effort in
-              Text(effort.displayName).tag(effort)
-            }
-          }
-          .accessibilityIdentifier("settings-effort")
-          if viewModel.provider == .openAICodex {
-            Toggle("Fast responses", isOn: codexPriorityTierBinding)
-              .accessibilityIdentifier("settings-codex-priority-tier")
-            Text(
-              "Asks OpenAI for its priority service tier. Measured on real corrections it answered about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. On by default because Bex is meant to answer while you are still typing — turn it off if you would rather not spend the extra ChatGPT usage it is billed as."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          }
-          Text("Model and effort tune provider behavior; they are not required to connect Bex.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          if let warning = viewModel.correctionLatencyWarning {
-            Label(warning, systemImage: "hare")
+          .accessibilityIdentifier("settings-codex-status")
+          if let expiry = viewModel.codexExpiry {
+            Text("Session expires \(expiry, style: .relative).")
               .font(.caption)
-              .foregroundStyle(.orange)
-              .fixedSize(horizontal: false, vertical: true)
-              .accessibilityIdentifier("settings-correction-latency-warning")
+              .foregroundStyle(.secondary)
           }
-          if let modelFetchError = viewModel.modelFetchError {
-            HStack {
-              Text(modelFetchError)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-              Spacer()
-              Button("Retry") { viewModel.retryModels() }
+          HStack {
+            Button(viewModel.codexConnected ? "Reconnect" : "Connect") {
+              viewModel.connectCodex()
             }
+            .disabled(viewModel.oauthInProgress)
+            .accessibilityIdentifier("settings-codex-connect")
+            if viewModel.codexConnected {
+              Button("Disconnect", role: .destructive) {
+                viewModel.disconnectCodex()
+              }
+              .accessibilityIdentifier("settings-codex-disconnect")
+            }
+          }
+          if viewModel.manualCallbackRequired {
+            TextField("Complete callback URL", text: $viewModel.callbackURL)
+              .accessibilityIdentifier("settings-codex-callback")
+            Button("Complete Login") {
+              viewModel.completeManualCallback()
+            }
+            .disabled(viewModel.oauthInProgress)
+            .accessibilityIdentifier("settings-codex-complete")
+          }
+          Text("Uses your ChatGPT Codex account. Tokens remain in Keychain.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        } else if viewModel.provider == .ollama {
+          TextField("Ollama URL", text: ollamaBinding)
+            .accessibilityIdentifier("settings-ollama-url")
+          if let ollamaError = viewModel.ollamaError {
+            Text(ollamaError)
+              .font(.caption)
+              .foregroundStyle(.red)
+              .accessibilityIdentifier("settings-ollama-error")
           }
         }
 
-        modelsByJobSection
+        if let routeTitle = viewModel.setupRouteTitle {
+          Button(routeTitle) {
+            Task {
+              await viewModel.requestSetupRoute()
+            }
+          }
+          .buttonStyle(.borderedProminent)
+          .disabled(viewModel.isRequestingSetupRoute)
+          .accessibilityIdentifier("settings-setup-route")
+        }
+      }
+
+      Section("Model & Effort") {
+        HStack {
+          Picker("Model", selection: modelBinding) {
+            ForEach(viewModel.models) { model in
+              Text(model.name).tag(model.id)
+            }
+          }
+          .accessibilityIdentifier("settings-model")
+          if viewModel.isFetchingModels {
+            ProgressView().controlSize(.small)
+          }
+        }
+        Picker("Effort", selection: effortBinding) {
+          ForEach(ReasoningEffort.allCases) { effort in
+            Text(effort.displayName).tag(effort)
+          }
+        }
+        .accessibilityIdentifier("settings-effort")
+        if viewModel.provider == .openAICodex {
+          Toggle("Fast responses", isOn: codexPriorityTierBinding)
+            .accessibilityIdentifier("settings-codex-priority-tier")
+          Text(
+            "Asks OpenAI for its priority service tier. Measured on real corrections it answered about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. On by default because Bex is meant to answer while you are still typing — turn it off if you would rather not spend the extra ChatGPT usage it is billed as."
+          )
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        }
+        Text("Model and effort tune provider behavior; they are not required to connect Bex.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        if let warning = viewModel.correctionLatencyWarning {
+          Label(warning, systemImage: "hare")
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityIdentifier("settings-correction-latency-warning")
+        }
+        if let modelFetchError = viewModel.modelFetchError {
+          HStack {
+            Text(modelFetchError)
+              .font(.caption)
+              .foregroundStyle(.secondary)
+            Spacer()
+            Button("Retry") { viewModel.retryModels() }
+          }
+        }
+      }
+
+      modelsByJobSection
     }
     .formStyle(.grouped)
     .padding()
@@ -614,15 +606,17 @@ struct SettingsView: View {
 
   /// One model per job, because one model cannot serve all of them.
   ///
-  /// Non-negotiable 1 gives a Quick Check about two seconds and lets background work cost
-  /// anything, so a single "selected model" forces a choice that is wrong for one job or the
-  /// other. Correction is the one above — everything here either overrides it or follows it.
+  /// Non-negotiable 1 gives an interactive correction about two seconds and lets background
+  /// work cost anything, so a single "selected model" forces a choice that is wrong for one
+  /// job or the other. Correction is the one above — everything here either overrides it or follows it.
   private var modelsByJobSection: some View {
     Section("Models by job") {
-      Text("Each job has its own latency budget. Anything left as “\(ModelJob.rewrites.inheritedLabel)” follows the model above.")
-        .font(.caption)
-        .foregroundStyle(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
+      Text(
+        "Each job has its own latency budget. Anything left as “\(ModelJob.rewrites.inheritedLabel)” follows the model above."
+      )
+      .font(.caption)
+      .foregroundStyle(.secondary)
+      .fixedSize(horizontal: false, vertical: true)
 
       ForEach(ModelJob.allCases.filter { $0 != .correction }) { job in
         VStack(alignment: .leading, spacing: 2) {
@@ -660,51 +654,58 @@ struct SettingsView: View {
 
   private var fixAndSendCategory: some View {
     Form {
-        Section("Delivery") {
+      Section("Delivery") {
 
+        Text(viewModel.providerDisclosure)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text(
+          "Bex asks once before sending to each provider destination. Standalone and validated target-bound Fix & Send actions proceed directly afterward; hook requests follow the Integrations confirmation setting."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      }
 
-          Text(viewModel.providerDisclosure)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text("Bex asks once before sending to each provider destination, and always for ambiguous captures or app-hook requests. Manual Quick Check and Fix & Send actions proceed directly afterward.")
+      Section("Accessibility") {
+        Label(
+          viewModel.accessibilityTrusted
+            ? "Accessibility access is enabled"
+            : "Accessibility access is not enabled",
+          systemImage: viewModel.accessibilityTrusted
+            ? "checkmark.circle.fill"
+            : "exclamationmark.triangle"
+        )
+        .accessibilityIdentifier("settings-accessibility-status")
+
+        if viewModel.showsAccessibilityRequest {
+          Button("Request Access") {
+            viewModel.requestAccessibility()
+          }
+          .accessibilityIdentifier("settings-prompt-accessibility")
+        }
+
+        Text(
+          "macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to capture the focused editable field and deliver a correction you approve."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        Text(
+          "Without Accessibility access, manual Fix & Send uses copy-only fallback: Bex copies the approved correction so you can paste it yourself. You can revoke the grant at any time in System Settings."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        Text(
+          "Enabled app hooks can still supply prompts to Bex when Accessibility access is off; the macOS grant is not required for hook intake."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
+
+        if let status = viewModel.accessibilityStatusMessage {
+          Text(status)
             .font(.caption)
             .foregroundStyle(.secondary)
         }
-
-        Section("Accessibility") {
-          Label(
-            viewModel.accessibilityTrusted
-              ? "Accessibility access is enabled"
-              : "Accessibility access is not enabled",
-            systemImage: viewModel.accessibilityTrusted
-              ? "checkmark.circle.fill"
-              : "exclamationmark.triangle"
-          )
-          .accessibilityIdentifier("settings-accessibility-status")
-
-          if viewModel.showsAccessibilityRequest {
-            Button("Request Access") {
-              viewModel.requestAccessibility()
-            }
-            .accessibilityIdentifier("settings-prompt-accessibility")
-          }
-
-          Text("macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to capture the focused editable field and deliver a correction you approve.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text("Without Accessibility access, manual Fix & Send uses copy-only fallback: Bex copies the approved correction so you can paste it yourself. You can revoke the grant at any time in System Settings.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-          Text("Enabled app hooks can still supply prompts to Bex when Accessibility access is off; the macOS grant is not required for hook intake.")
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-          if let status = viewModel.accessibilityStatusMessage {
-            Text(status)
-              .font(.caption)
-              .foregroundStyle(.secondary)
-          }
-        }
+      }
 
     }
     .formStyle(.grouped)
@@ -721,7 +722,7 @@ struct SettingsView: View {
         )
         .accessibilityIdentifier("settings-hook-outbound-confirmation")
         Text(
-          "Off by default. Installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Turn this on to review every masked hook payload before it leaves the Mac. Ambiguous manual Fix & Send captures still require confirmation."
+          "Off by default. Installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Turn this on to review every masked hook payload before it leaves the Mac."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -933,48 +934,48 @@ struct SettingsView: View {
 
   private var privacyCategory: some View {
     Form {
-        Section("Privacy & Local Data") {
-          Picker("Quick Check drafts", selection: draftRetentionBinding) {
-            ForEach(RetentionChoice.allCases, id: \.self) { choice in
-              Text(retentionTitle(choice)).tag(choice)
-            }
+      Section("Privacy & Local Data") {
+        Picker("Fix & Send drafts", selection: draftRetentionBinding) {
+          ForEach(RetentionChoice.allCases, id: \.self) { choice in
+            Text(retentionTitle(choice)).tag(choice)
           }
-          .accessibilityIdentifier("settings-draft-retention")
-          Text(SettingsViewModel.draftRetentionDisclosure)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-          Button("Delete Saved Draft", role: .destructive) {
-            confirmDeleteSavedDraft = true
-          }
-          .accessibilityIdentifier("settings-delete-saved-draft")
-          .disabled(viewModel.isDeletingSavedDraft)
-
-          if viewModel.isDeletingSavedDraft {
-            HStack {
-              ProgressView().controlSize(.small)
-              Text("Deleting saved draft…")
-            }
-          }
-
-          Divider()
-
-          Picker("Correction history", selection: historyRetentionBinding) {
-            ForEach(RetentionChoice.allCases, id: \.self) { choice in
-              Text(retentionTitle(choice)).tag(choice)
-            }
-          }
-          .accessibilityIdentifier("settings-history-retention")
-          Text(SettingsViewModel.historyRetentionDisclosure)
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-          Button("Clear History", role: .destructive) {
-            confirmClearHistory = true
-          }
-          .accessibilityIdentifier("settings-clear-history")
-          .disabled(viewModel.isClearingHistory)
         }
+        .accessibilityIdentifier("settings-draft-retention")
+        Text(SettingsViewModel.draftRetentionDisclosure)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Button("Delete Saved Draft", role: .destructive) {
+          confirmDeleteSavedDraft = true
+        }
+        .accessibilityIdentifier("settings-delete-saved-draft")
+        .disabled(viewModel.isDeletingSavedDraft)
+
+        if viewModel.isDeletingSavedDraft {
+          HStack {
+            ProgressView().controlSize(.small)
+            Text("Deleting saved draft…")
+          }
+        }
+
+        Divider()
+
+        Picker("Correction history", selection: historyRetentionBinding) {
+          ForEach(RetentionChoice.allCases, id: \.self) { choice in
+            Text(retentionTitle(choice)).tag(choice)
+          }
+        }
+        .accessibilityIdentifier("settings-history-retention")
+        Text(SettingsViewModel.historyRetentionDisclosure)
+          .font(.caption)
+          .foregroundStyle(.secondary)
+
+        Button("Clear History", role: .destructive) {
+          confirmClearHistory = true
+        }
+        .accessibilityIdentifier("settings-clear-history")
+        .disabled(viewModel.isClearingHistory)
+      }
     }
     .formStyle(.grouped)
     .padding()
@@ -1042,7 +1043,6 @@ struct SettingsView: View {
     )
   }
 
-
   private var codexPriorityTierBinding: Binding<Bool> {
     Binding(
       get: { viewModel.codexPriorityTier },
@@ -1071,7 +1071,6 @@ struct SettingsView: View {
     )
   }
 
-
   private func retentionTitle(_ choice: RetentionChoice) -> String {
     switch choice {
     case .undecided: "Not Decided"
@@ -1079,7 +1078,6 @@ struct SettingsView: View {
     case .disabled: "Don’t Save"
     }
   }
-
 
   /// Marketing version and build from the app bundle, e.g. "0.5.9 (42)".
   private static var appVersionString: String {

@@ -10,7 +10,7 @@ extension Notification.Name {
 }
 
 /// One "Consider" alternative the owner chose, recorded by tapping it in the Learning
-/// window (docs/learning-mode-plan.md, v7.1 decision 1).
+/// window so that deliberate choice can become a Study card.
 ///
 /// A tap is the answer to a problem v7 created. The `Consider` section now offers 2-3
 /// alternatives and is explicitly forbidden from ranking them, so there is no "correct"

@@ -8,10 +8,8 @@ struct StudyDeckView: View {
   @ObservedObject var viewModel: StudyViewModel
   /// Enters the drill. Owned by `LearnView`, which also has to collapse the window chrome.
   let start: () -> Void
-  /// The two actions that actually create cards, offered by the first-run empty state
-  /// (design 4e) — an empty deck that only said "come back later" would be a dead end
-  /// on the one screen a fresh install always opens to.
-  let openQuickCheck: () -> Void
+  /// The action that creates cards, offered by the first-run empty state so an empty deck
+  /// that only said "come back later" would not be a dead end.
   let openFixAndSend: () -> Void
 
   var body: some View {
@@ -41,8 +39,7 @@ struct StudyDeckView: View {
   }
 
   /// A fresh install's deck: a dashed card that says why empty is the correct state,
-  /// and the only two actions that change it. No sample cards, no fake numbers
-  /// (non-negotiable 8) — the shortcut labels are the design's own copy.
+  /// and the real action that changes it. No sample cards or fake numbers.
   private var firstRun: some View {
     VStack(spacing: 18) {
       VStack(spacing: 12) {
@@ -66,12 +63,8 @@ struct StudyDeckView: View {
           )
       }
 
-      HStack(spacing: 10) {
-        Button("Quick Check ⇧⌘G", action: openQuickCheck)
-          .accessibilityIdentifier("study-empty-quick-check")
-        Button("Fix & Send ⇧⌘P", action: openFixAndSend)
-          .accessibilityIdentifier("study-empty-fix-and-send")
-      }
+      Button("Fix & Send ⇧⌘P", action: openFixAndSend)
+        .accessibilityIdentifier("study-empty-fix-and-send")
 
       Text("Progress stays empty until there is something real to measure.")
         .font(.caption)
@@ -112,7 +105,9 @@ struct StudyDeckView: View {
           .keyboardShortcut(.defaultAction)
           .accessibilityIdentifier("study-deck-start")
 
-        StudyPileDots(total: viewModel.sessionTotal, completed: viewModel.completedCount, dotWidth: 26, dotHeight: 5)
+        StudyPileDots(
+          total: viewModel.sessionTotal, completed: viewModel.completedCount, dotWidth: 26,
+          dotHeight: 5)
       }
     }
     .padding(32)

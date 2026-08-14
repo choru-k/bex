@@ -70,7 +70,7 @@ final class AskThreadViewModel: ObservableObject {
       defer { Task { @MainActor [weak self] in self?.isAnswering = false } }
       do {
         // `.ask` on purpose: this is not the correction path, so it may take a few seconds
-        // and use a stronger model than a Quick Check can afford.
+        // and use a stronger model than an interactive correction can afford.
         let destination = try await preferences.outboundDestination(for: .ask)
         guard await preferences.hasAcceptedCurrentOutboundDisclosure(for: destination) else {
           await MainActor.run { [weak self] in
@@ -92,7 +92,8 @@ final class AskThreadViewModel: ObservableObject {
       } catch {
         guard !Task.isCancelled else { return }
         await MainActor.run { [weak self] in
-          self?.errorMessage = (error as? LocalizedError)?.errorDescription
+          self?.errorMessage =
+            (error as? LocalizedError)?.errorDescription
             ?? "That question could not be answered. Try again, or carry on — nothing is blocked."
         }
       }

@@ -7,8 +7,7 @@ import SwiftUI
 /// The Fix & Send composer is a place where technical text is normal, and system text
 /// substitution is actively wrong there: typing `--dry-run` produced `—dry—run`, which no
 /// longer matched the flag mask pattern — so a manually edited draft could carry an
-/// unmasked flag past the consent sheet (the known defect recorded in
-/// `docs/redesign-v1-implementation.md`). The final-message editor has the same problem
+/// unmasked flag past the consent sheet. The final-message editor has the same problem
 /// one step later: an em-dashed flag would be delivered to the terminal.
 ///
 /// A whole-window sweep rather than a per-editor wrapper because `TextEditor` gives no

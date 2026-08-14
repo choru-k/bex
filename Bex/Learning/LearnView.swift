@@ -38,24 +38,23 @@ struct LearnView: View {
   /// Questions asked about the card on screen. Owned by the window so a question in flight
   /// survives the drill re-rendering around it.
   @ObservedObject var askThread: AskThreadViewModel
-  /// Handed through to the empty deck's first-run actions (design 4e).
-  let openQuickCheck: () -> Void
+  /// Handed through to the empty deck's first-run action.
   let openFixAndSend: () -> Void
   @State private var tab: Tab = .deck
 
   var body: some View {
     chrome
-    .task {
-      await learning.load()
-    }
-    .task {
-      await study.loadIfNeeded()
-      // Opening Learn with cards due drops straight into the drill. `docs/purpose.md`
-      // records why: the first version was a read-only surface the owner did not open, and
-      // a surface nobody opens teaches nothing. Once they have pressed Esc,
-      // `hasLeftDrill` keeps Bex from putting them back.
-      startDrillIfDue()
-    }
+      .task {
+        await learning.load()
+      }
+      .task {
+        await study.loadIfNeeded()
+        // Opening Learn with cards due drops straight into the drill. `docs/purpose.md`
+        // records why: the first version was a read-only surface the owner did not open, and
+        // a surface nobody opens teaches nothing. Once they have pressed Esc,
+        // `hasLeftDrill` keeps Bex from putting them back.
+        startDrillIfDue()
+      }
   }
 
   private var chrome: some View {
@@ -122,7 +121,6 @@ struct LearnView: View {
       StudyDeckView(
         viewModel: study,
         start: startDrill,
-        openQuickCheck: openQuickCheck,
         openFixAndSend: openFixAndSend
       )
     case .suggestions:
@@ -248,7 +246,8 @@ struct LearnSuggestionsView: View {
       .contentShape(RoundedRectangle(cornerRadius: 8))
       .background(
         RoundedRectangle(cornerRadius: 8)
-          .fill(suggestion.isTapped ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(.quaternary))
+          .fill(
+            suggestion.isTapped ? AnyShapeStyle(.tint.opacity(0.15)) : AnyShapeStyle(.quaternary))
       )
     }
     .buttonStyle(.plain)
@@ -275,7 +274,8 @@ struct LearnProgressView: View {
       LearnEmptyState(
         symbol: "graduationcap",
         headline: "Nothing measured yet — and that's correct",
-        detail: "Numbers appear here once real corrections exist; nothing on this page is ever sample data.",
+        detail:
+          "Numbers appear here once real corrections exist; nothing on this page is ever sample data.",
         identifier: "learning-empty"
       )
     } else {
@@ -457,7 +457,8 @@ struct WriterProfilePanel: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .background(
-          Capsule().fill(tinted ? AnyShapeStyle(Color.yellow.opacity(0.14)) : AnyShapeStyle(.quaternary))
+          Capsule().fill(
+            tinted ? AnyShapeStyle(Color.yellow.opacity(0.14)) : AnyShapeStyle(.quaternary))
         )
       }
     }

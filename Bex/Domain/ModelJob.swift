@@ -3,7 +3,7 @@ import Foundation
 /// The jobs Bex asks a model to do, split by how long each one is allowed to take.
 ///
 /// This exists because one "selected model" cannot serve all of them honestly.
-/// Non-negotiable 1 gives a Quick Check about two seconds and says background work may cost
+/// Non-negotiable 1 gives an interactive Fix & Send correction about two seconds and says background work may cost
 /// anything — so a single setting forces the owner to pick a model that is either too slow
 /// for the correction path or too weak for the analysis. Splitting the choice per job lets
 /// each one be right.
@@ -12,7 +12,7 @@ import Foundation
 /// own, which is why the design mocks "Rewrites & Look Up" as "same as Correction" rather
 /// than as a second copy of the same value.
 enum ModelJob: String, CaseIterable, Identifiable, Sendable {
-  /// Quick Check, Fix & Send, hook reviews — the latency-sacred path.
+  /// Fix & Send and hook reviews — the latency-sacred path.
   case correction
   /// Questions asked about a card or a correction. A few seconds is fine here.
   case ask
@@ -34,7 +34,7 @@ enum ModelJob: String, CaseIterable, Identifiable, Sendable {
 
   var detail: String {
     switch self {
-    case .correction: return "Quick Check · Fix & Send · hooks — the sacred path"
+    case .correction: return "Fix & Send · hooks — the sacred path"
     case .ask: return "Questions on cards and corrections — a few seconds is fine"
     case .background:
       return "Pattern grouping and your writer profile — never on the interactive path"
@@ -71,7 +71,7 @@ enum ModelLatencyWarning {
   static func warning(forCorrectionModel model: String) -> String? {
     let name = model.lowercased()
     guard heavyMarkers.contains(where: name.contains) else { return nil }
-    return "\(model) is a heavyweight tier. A Quick Check has about two seconds to answer, "
+    return "\(model) is a heavyweight tier. Fix & Send has about two seconds to answer, "
       + "and a slow model here makes every correction wait."
   }
 }

@@ -75,7 +75,8 @@ final class SystemPromptApplicationService: PromptApplicationServicing {
   }
 
   func application(processID: Int32) -> PromptApplicationSnapshot? {
-    guard let application = NSRunningApplication(processIdentifier: processID), !application.isTerminated
+    guard let application = NSRunningApplication(processIdentifier: processID),
+      !application.isTerminated
     else {
       return nil
     }
@@ -127,11 +128,12 @@ final class SystemPromptAccessibilityService: PromptAccessibilityServicing {
   func focusedElement(processID: Int32) throws -> AXUIElement {
     let application = AXUIElementCreateApplication(processID)
     var value: CFTypeRef?
-    guard AXUIElementCopyAttributeValue(
-      application,
-      kAXFocusedUIElementAttribute as CFString,
-      &value
-    ) == .success,
+    guard
+      AXUIElementCopyAttributeValue(
+        application,
+        kAXFocusedUIElementAttribute as CFString,
+        &value
+      ) == .success,
       let element = value as! AXUIElement?
     else {
       throw BexError.unsupportedPromptTarget
@@ -169,11 +171,13 @@ final class SystemPromptAccessibilityService: PromptAccessibilityServicing {
 
   func isValueSettable(_ element: AXUIElement) throws -> Bool {
     var settable = DarwinBoolean(false)
-    guard AXUIElementIsAttributeSettable(
-      element,
-      kAXValueAttribute as CFString,
-      &settable
-    ) == .success else {
+    guard
+      AXUIElementIsAttributeSettable(
+        element,
+        kAXValueAttribute as CFString,
+        &settable
+      ) == .success
+    else {
       throw BexError.unsupportedPromptTarget
     }
     return settable.boolValue
@@ -188,11 +192,13 @@ final class SystemPromptAccessibilityService: PromptAccessibilityServicing {
   }
 
   func focus(_ element: AXUIElement) throws {
-    guard AXUIElementSetAttributeValue(
-      element,
-      kAXFocusedAttribute as CFString,
-      kCFBooleanTrue
-    ) == .success else {
+    guard
+      AXUIElementSetAttributeValue(
+        element,
+        kAXFocusedAttribute as CFString,
+        kCFBooleanTrue
+      ) == .success
+    else {
       throw BexError.promptDeliveryFailed("Bex could not focus the original prompt field.")
     }
   }
@@ -326,9 +332,10 @@ final class PromptTargetService: PromptTargetServicing {
         processID: nil,
         bundleID: application.bundleID,
         applicationName: application.name,
-        guidance: "Accessibility is required for manual capture and replacement. Grant access, then invoke Fix & Send again. Client hooks can still supply prompts without Accessibility."
+        guidance:
+          "Without Accessibility, Fix & Send cannot capture or replace another app. Enter text here; Bex will copy the approved correction."
       )
-      return PromptCapture(draft: "", target: target, source: .composer)
+      return PromptCapture(draft: "", target: target, source: .standalone)
     }
 
     let element = try accessibility.focusedElement(processID: application.processID)
@@ -340,16 +347,16 @@ final class PromptTargetService: PromptTargetServicing {
 
     let isSupportedRole = role == kAXTextFieldRole as String || role == kAXTextAreaRole as String
     guard isSupportedRole else {
-      return composerCapture(for: application)
+      return standaloneCapture(for: application)
     }
     let enabled = try accessibility.isEnabled(element)
     let settable = try accessibility.isValueSettable(element)
     guard enabled, settable else {
-      return composerCapture(for: application)
+      return standaloneCapture(for: application)
     }
     let value = try accessibility.stringValue(of: element)
     guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return composerCapture(for: application)
+      return standaloneCapture(for: application)
     }
 
     let target = PromptTarget(
@@ -357,7 +364,8 @@ final class PromptTargetService: PromptTargetServicing {
       processID: application.processID,
       bundleID: application.bundleID,
       applicationName: application.name,
-      guidance: "Bex captured this exact field and can paste the correction back into \(application.name)."
+      guidance:
+        "Bex captured this exact field and can paste the correction back into \(application.name)."
     )
     capturedFields[target.id] = CapturedField(
       element: element,
@@ -382,7 +390,8 @@ final class PromptTargetService: PromptTargetServicing {
       return PromptTarget(
         kind: .managedDraft,
         applicationName: "Oh My Pi",
-        guidance: "Oh My Pi is holding the original prompt. Approval stages this exact correction in its editor for explicit replay.",
+        guidance:
+          "Oh My Pi is holding the original prompt. Approval stages this exact correction in its editor for explicit replay.",
         hookContext: context
       )
     }
@@ -395,7 +404,8 @@ final class PromptTargetService: PromptTargetServicing {
       return PromptTarget(
         kind: .copyOnly,
         applicationName: "Prompt client",
-        guidance: "This hook supplied the prompt without Accessibility. Bex will copy the approved correction; replace the client draft manually.",
+        guidance:
+          "This hook supplied the prompt without Accessibility. Bex will copy the approved correction; replace the client draft manually.",
         hookContext: context
       )
     }
@@ -450,15 +460,16 @@ final class PromptTargetService: PromptTargetServicing {
     capturedFields.removeValue(forKey: target.id)
   }
 
-  private func composerCapture(for application: PromptApplicationSnapshot) -> PromptCapture {
+  private func standaloneCapture(for application: PromptApplicationSnapshot) -> PromptCapture {
     let target = PromptTarget(
-      kind: .composerPaste,
-      processID: application.processID,
+      kind: .copyOnly,
+      processID: nil,
       bundleID: application.bundleID,
       applicationName: application.name,
-      guidance: "Bex can paste the correction into \(application.name) without pressing Return."
+      guidance:
+        "Bex did not find an editable field in \(application.name). Enter text here; Bex will copy the approved correction."
     )
-    return PromptCapture(draft: "", target: target, source: .composer)
+    return PromptCapture(draft: "", target: target, source: .standalone)
   }
 
   private func deliverToComposer(

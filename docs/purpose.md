@@ -1,8 +1,7 @@
 # Bex — why this app exists
 
-Audience: the owner, and any LLM working on this repo. Not a user guide (that is `README.md`) and
-not an implementation plan (that is `docs/learning-mode-plan.md`). This document says what Bex is
-*for*, so that decisions can be checked against it.
+Audience: the owner, and any LLM working on this repo. Not a user guide (that is `README.md`).
+This document says what Bex is *for*, so that decisions can be checked against it.
 
 ## The purpose, in one sentence
 
@@ -59,8 +58,8 @@ The owner's rawest, highest-volume self-produced English is **the natural langua
 Claude Code and Codex terminals** — explaining, correcting, and instructing an AI all day. Not
 Slack, not documents. That is why:
 
-- the correction moment was placed *there* (Prompt Gate / Fix & Send, `⌘⇧P` and the hook
-  integrations), rather than in a separate writing app;
+- the correction moment was placed *there* (Fix & Send, `⇧⌘P`, and the hook integrations), rather
+  than in a separate writing app;
 - that same stream is the learning corpus — approved corrections are appended to a local learning
   log, which everything downstream reads.
 
@@ -69,6 +68,18 @@ over 10 days): the corpus was rich rather than terse (median ~11 words, only 5 b
 errors recurred strongly (7 categories at ≥3×). Consequence: capturing Slack and desktop AI apps was
 **downgraded** — its entire rationale had been the thin-corpus risk, and that risk did not
 materialize.
+
+## One correction surface
+
+**Fix & Send is the only correction workflow.** It accepts a focused-app or integration target and
+also opens as a manual standalone composer. The correction and review are the same in either case;
+the validated target determines whether approval sends, pastes, or copies the result. Writing Style
+adds the active tone, audience, and house-style context without creating another workflow, and Look
+Up remains available from the standalone composer.
+
+Standalone draft retention and correction history are separate, optional choices. History may retain
+successful standalone and target-bound corrections, but reopening an original always starts a new
+standalone Fix & Send review. Neither retention choice changes the append-only learning corpus.
 
 ## The loop
 
@@ -89,9 +100,9 @@ Two arrows carry hard-won lessons:
 
 If a change violates one of these, it is wrong even if it is otherwise better. Stop and ask.
 
-1. **Interactive latency is sacred.** A Quick Check must answer in roughly two seconds. Anything
-   expensive — pattern classification, level profiling — runs in the background, off that path, and
-   never adds tokens to the correction request. Background work may cost anything.
+1. **Interactive latency is sacred.** A Fix & Send correction must answer in roughly two seconds.
+   Anything expensive — pattern classification, level profiling — runs in the background, off that
+   path, and never adds tokens to the correction request. Background work may cost anything.
 2. **Never gate the owner's shipping flow.** The inline moment adds no confirmation beyond the gate
    he already accepts. Blocking his real work is the fastest way to get the tool turned off.
 3. **Nothing leaves the Mac without explicit approval.** The original text is never sent — only the
@@ -138,9 +149,6 @@ Thresholds calibrated on the pre-v7 corpus need re-baselining before they are re
 
 ## Where the deeper reasoning lives
 
-- `docs/learning-mode-plan.md` — the learning/expression decision log (v6 → v7.1): the two goals in
-  full, corpus reality, phased plan, the costs knowingly accepted, the YAGNI list, and ranked open
-  risks. Read this before changing anything about corrections, Learning, or Study.
 - `README.md` — what Bex does, and the privacy posture as stated to a user: what is sent, what is
   stored where, what masking does not cover.
 - **The commit log is a decision log.** Subjects are written in the owner's voice about intent

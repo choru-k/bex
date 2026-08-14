@@ -2,12 +2,10 @@ import AppKit
 import Foundation
 
 enum SettingsSetupOrigin: Equatable, Sendable {
-  case quickCheck
   case fixAndSend
 }
 
 enum SettingsRouteIntent: Equatable, Sendable {
-  case returnToQuickCheck
   case returnToFixAndSendTarget
 }
 
@@ -71,7 +69,6 @@ final class SettingsViewModel: ObservableObject {
   @Published var ompWorkingDirectory = FileManager.default.homeDirectoryForCurrentUser.path
   @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
-  @Published private(set) var quickCheckKeyChord: KeyChord = .defaultQuickCheck
   @Published private(set) var fixAndSendKeyChord: KeyChord = .defaultFixAndSend
   @Published private(set) var shortcutErrors: [BexShortcut: String] = [:]
   @Published private(set) var accessibilityStatusMessage: String?
@@ -90,9 +87,9 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var backgroundConsentAccepted = false
 
   static let draftRetentionDisclosure =
-    "When enabled, Bex saves the current Quick Check draft in this Mac’s app preferences so it can be restored after Bex relaunches or when Quick Check is temporarily hidden for navigation. Closing or canceling Quick Check deletes the saved draft. Don’t Save and Not Decided never block correction and do not save new drafts."
+    "When enabled, Bex saves the current standalone Fix & Send draft in this Mac’s app preferences so it can be restored after Bex relaunches. Don’t Save and Not Decided never block correction and do not save new drafts."
   static let historyRetentionDisclosure =
-    "When enabled, Bex saves the original, correction, explanation, provider, model, Writing Style name, and timestamp in Bex’s local database on this Mac, keeping at most 500 entries. Fix & Send is not stored. Don’t Save and Not Decided never block correction and do not save new history."
+    "When enabled, Bex saves successful checks from standalone and target-bound Fix & Send flows in Bex’s local database on this Mac: original, correction, explanation, provider, model, Writing Style name, and timestamp, keeping at most 500 entries. Don’t Save and Not Decided never block correction and do not save new history."
 
   private let preferences: PreferencesStore
   private let keychain: KeychainStore
@@ -192,8 +189,6 @@ final class SettingsViewModel: ObservableObject {
   var setupRouteTitle: String? {
     guard isSelectedProviderConnected else { return nil }
     switch setupOrigin {
-    case .quickCheck:
-      return "Return to Quick Check"
     case .fixAndSend:
       return "Return to Target and Invoke Fix & Send"
     case nil:
@@ -216,9 +211,9 @@ final class SettingsViewModel: ObservableObject {
       destination = "Bex sends these payloads to \(provider.displayName)."
     }
     return destination
-      + " Quick Check sends the full draft plus any custom Writing Style guidance."
+      + " Standalone Fix & Send sends the full draft plus any custom Writing Style guidance."
       + " Rewrite sends the corrected draft."
-      + " Fix & Send sends the masked prompt; the payload is shown for approval whenever confirmation is required."
+      + " Target-bound Fix & Send sends the masked prompt; the payload is shown for approval whenever confirmation is required."
       + " Writing Style generation sends the labeled context fields you fill in: Role, Audience,"
       + " Tone, Formality, Domain, and Additional notes."
   }
@@ -234,7 +229,6 @@ final class SettingsViewModel: ObservableObject {
     async let savedCodexPriorityTier = preferences.codexPriorityTier()
     async let savedDraftRetention = preferences.draftRetentionChoice()
     async let savedHistoryRetention = preferences.historyRetentionChoice()
-    async let savedQuickCheckChord = preferences.quickCheckKeyChord()
     async let savedFixAndSendChord = preferences.fixAndSendKeyChord()
 
     provider = await selectedProvider
@@ -247,7 +241,6 @@ final class SettingsViewModel: ObservableObject {
     codexPriorityTier = await savedCodexPriorityTier
     draftRetentionChoice = await savedDraftRetention
     historyRetentionChoice = await savedHistoryRetention
-    quickCheckKeyChord = await savedQuickCheckChord
     fixAndSendKeyChord = await savedFixAndSendChord
     await refreshBackgroundAgentState()
     isLoaded = true
@@ -551,7 +544,6 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
-
   func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
     confirmsHookOutboundPayloads = confirms
     enqueuePreferenceUpdate { [preferences] in
@@ -626,16 +618,6 @@ final class SettingsViewModel: ObservableObject {
     _ chord: KeyChord,
     for shortcut: BexShortcut
   ) -> ShortcutUpdateOutcome {
-    let otherChord =
-      shortcut == .quickCheck
-      ? fixAndSendKeyChord
-      : quickCheckKeyChord
-    guard chord != otherChord else {
-      return rejectShortcut(
-        shortcut,
-        message: "That shortcut is already assigned to another Bex command."
-      )
-    }
     guard chord.isValidGlobalShortcut else {
       return rejectShortcut(
         shortcut,
@@ -646,19 +628,9 @@ final class SettingsViewModel: ObservableObject {
     do {
       try updateShortcut(shortcut, chord)
       shortcutErrors[shortcut] = nil
-      switch shortcut {
-      case .quickCheck:
-        quickCheckKeyChord = chord
-      case .fixAndSend:
-        fixAndSendKeyChord = chord
-      }
+      fixAndSendKeyChord = chord
       enqueuePreferenceUpdate { [preferences] in
-        switch shortcut {
-        case .quickCheck:
-          await preferences.setQuickCheckKeyChord(chord)
-        case .fixAndSend:
-          await preferences.setFixAndSendKeyChord(chord)
-        }
+        await preferences.setFixAndSendKeyChord(chord)
       }
       return .accepted
     } catch {
@@ -696,8 +668,6 @@ final class SettingsViewModel: ObservableObject {
     }
 
     switch setupOrigin {
-    case .quickCheck:
-      onSetupRoute(.returnToQuickCheck)
     case .fixAndSend:
       onSetupRoute(.returnToFixAndSendTarget)
     case nil:
@@ -1005,7 +975,8 @@ final class SettingsViewModel: ObservableObject {
       return fileManager.isExecutableFile(atPath: path)
     }
 
-    let pathCandidates = (environment["PATH"] ?? "")
+    let pathCandidates =
+      (environment["PATH"] ?? "")
       .split(separator: ":")
       .map { URL(fileURLWithPath: String($0)).appendingPathComponent("omp").path }
       + ["/opt/homebrew/bin/omp", "/usr/local/bin/omp"]
@@ -1013,22 +984,24 @@ final class SettingsViewModel: ObservableObject {
       return executable
     }
 
-    let miseDataDirectory = environment["MISE_DATA_DIR"].map {
-      URL(
-        fileURLWithPath: ($0 as NSString).expandingTildeInPath,
-        isDirectory: true
-      )
-    } ?? homeDirectory.appendingPathComponent(".local/share/mise", isDirectory: true)
-    let installsDirectory = miseDataDirectory
+    let miseDataDirectory =
+      environment["MISE_DATA_DIR"].map {
+        URL(
+          fileURLWithPath: ($0 as NSString).expandingTildeInPath,
+          isDirectory: true
+        )
+      } ?? homeDirectory.appendingPathComponent(".local/share/mise", isDirectory: true)
+    let installsDirectory =
+      miseDataDirectory
       .appendingPathComponent("installs/npm-oh-my-pi-pi-coding-agent", isDirectory: true)
-    let versionDirectories = (
-      try? fileManager.contentsOfDirectory(
+    let versionDirectories =
+      (try? fileManager.contentsOfDirectory(
         at: installsDirectory,
         includingPropertiesForKeys: [.isDirectoryKey],
         options: [.skipsHiddenFiles]
-      )
-    ) ?? []
-    let miseCandidates = versionDirectories
+      )) ?? []
+    let miseCandidates =
+      versionDirectories
       .sorted {
         $0.lastPathComponent.compare(
           $1.lastPathComponent,

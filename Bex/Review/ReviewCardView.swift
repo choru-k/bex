@@ -26,14 +26,11 @@ private struct ReviewCardEditorTextHeight: PreferenceKey {
 /// The one review card: editable final message, one-line redline, unranked alternatives,
 /// ask thread, and a single collapsed Details disclosure.
 ///
-/// Extracted from Prompt Gate so Quick Check and Fix & Send are literally the same card
-/// (design 4a) — hands that hit ⇧⌘G all day never re-learn a layout. Everything that
-/// differs between the two surfaces stays with the host: the target/provenance header
-/// rows, the footer, and anything delivery-shaped arrives through `detailsExtra`.
+/// Shared by every Fix & Send source: focused fields, integrations, and the standalone
+/// composer. Target and provenance rows remain with the host, while delivery-specific
+/// reference content arrives through `detailsExtra`.
 ///
-/// `idPrefix` keeps each surface's existing accessibility identifiers intact
-/// ("prompt-gate-corrected" vs "quick-check-corrected") — the ids are contract with the
-/// UI tests and with anyone driving the app through accessibility.
+/// `idPrefix` preserves the accessibility namespace used by UI automation and assistive tools.
 struct ReviewCardView<DetailsExtra: View>: View {
   let idPrefix: String
   let review: PromptGateReview
@@ -66,7 +63,7 @@ struct ReviewCardView<DetailsExtra: View>: View {
   var keyboardFocus: FocusState<PromptGateKeyboardFocus?>.Binding
   var accessibilityFocus: AccessibilityFocusState<PromptGateAccessibilityFocus?>.Binding
   /// Extra reference sections inside Details, after the original message and grammar
-  /// notes — Fix & Send puts its delivery guidance here; Quick Check has nothing.
+  /// notes — the host puts its delivery guidance here.
   @ViewBuilder let detailsExtra: () -> DetailsExtra
 
   /// What the corrected text measures at the editor's width, reported by the invisible

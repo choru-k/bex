@@ -7,9 +7,8 @@ enum RetentionChoice: String, Codable, CaseIterable, Sendable {
 }
 
 enum OutboundConfirmationContext: Equatable, Sendable {
-  case quickCheckExternal
+  case standaloneFixAndSend
   case manualCapturedField
-  case ambiguousManual
   case hook
 }
 
@@ -20,10 +19,8 @@ extension OutboundConfirmationContext {
   ) -> Bool {
     guard hasAcceptedDisclosure else { return true }
     switch self {
-    case .quickCheckExternal, .manualCapturedField:
+    case .standaloneFixAndSend, .manualCapturedField:
       return false
-    case .ambiguousManual:
-      return true
     case .hook:
       return confirmsHookOutboundPayloads
     }
@@ -37,10 +34,9 @@ actor PreferencesStore {
     static let appearance = "appearance"
     static let activeProfileID = "activeProfileID"
     static let defaultProfileID = "defaultProfileID"
-    static let quickDraft = "quickDraft"
-    static let draftRetentionChoice = "storage.quickDraft.choice"
-    static let historyRetentionChoice = "storage.history.choice"
-    static let quickCheckKeyChord = "shortcut.quickCheck"
+    static let savedDraft = "fixAndSend.savedDraft"
+    static let draftRetentionChoice = "storage.fixAndSendDraft.choice"
+    static let historyRetentionChoice = "storage.correctionHistory.choice"
     static let fixAndSendKeyChord = "shortcut.fixAndSend"
     static let welcomeCompletedVersion = "welcome.completedVersion"
     static let confirmsHookOutboundPayloads = "promptGate.confirmsHookOutboundPayloads"
@@ -76,6 +72,12 @@ actor PreferencesStore {
     }
   }
 
+  private enum LegacyKey {
+    static let savedDraft = "quickDraft"
+    static let draftRetentionChoice = "storage.quickDraft.choice"
+    static let historyRetentionChoice = "storage.history.choice"
+  }
+
   private static let retiredModels: [LLMProvider: Set<String>] = [
     .openAICodex: [
       "gpt-5.6",
@@ -96,6 +98,7 @@ actor PreferencesStore {
 
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
+    Self.migrateLegacyRetentionPreferences(in: defaults)
   }
 
   @MainActor
@@ -242,18 +245,18 @@ actor PreferencesStore {
     }
   }
 
-  func quickDraft() -> String {
+  func savedDraft() -> String {
     guard draftRetentionChoice() == .enabled else { return "" }
-    return defaults.string(forKey: Key.quickDraft) ?? ""
+    return defaults.string(forKey: Key.savedDraft) ?? ""
   }
 
-  func setQuickDraft(_ draft: String) {
+  func setSavedDraft(_ draft: String) {
     guard draftRetentionChoice() == .enabled else { return }
-    defaults.set(draft, forKey: Key.quickDraft)
+    defaults.set(draft, forKey: Key.savedDraft)
   }
 
-  func deleteSavedQuickDraft() {
-    defaults.removeObject(forKey: Key.quickDraft)
+  func deleteSavedDraft() {
+    defaults.removeObject(forKey: Key.savedDraft)
   }
 
   func draftRetentionChoice() -> RetentionChoice {
@@ -271,8 +274,6 @@ actor PreferencesStore {
   func setHistoryRetentionChoice(_ choice: RetentionChoice) {
     defaults.set(choice.rawValue, forKey: Key.historyRetentionChoice)
   }
-
-
 
   func confirmsHookOutboundPayloads() -> Bool {
     guard defaults.object(forKey: Key.confirmsHookOutboundPayloads) != nil else {
@@ -360,20 +361,34 @@ actor PreferencesStore {
     defaults.set(summary.cardsGrouped, forKey: Key.lastBackgroundRunGrouped)
   }
 
-  func quickCheckKeyChord() -> KeyChord {
-    keyChord(forKey: Key.quickCheckKeyChord, fallback: .defaultQuickCheck)
-  }
-
-  func setQuickCheckKeyChord(_ chord: KeyChord) {
-    setKeyChord(chord, forKey: Key.quickCheckKeyChord)
-  }
-
   func fixAndSendKeyChord() -> KeyChord {
     keyChord(forKey: Key.fixAndSendKeyChord, fallback: .defaultFixAndSend)
   }
 
   func setFixAndSendKeyChord(_ chord: KeyChord) {
     setKeyChord(chord, forKey: Key.fixAndSendKeyChord)
+  }
+
+  private static func migrateLegacyRetentionPreferences(in defaults: UserDefaults) {
+    let directMigrations = [
+      (legacy: LegacyKey.savedDraft, destination: Key.savedDraft),
+      (legacy: LegacyKey.draftRetentionChoice, destination: Key.draftRetentionChoice),
+    ]
+    for migration in directMigrations {
+      if defaults.object(forKey: migration.destination) == nil,
+        let legacyValue = defaults.object(forKey: migration.legacy)
+      {
+        defaults.set(legacyValue, forKey: migration.destination)
+      }
+      defaults.removeObject(forKey: migration.legacy)
+    }
+
+    if defaults.object(forKey: Key.historyRetentionChoice) == nil,
+      defaults.string(forKey: LegacyKey.historyRetentionChoice) == RetentionChoice.disabled.rawValue
+    {
+      defaults.set(RetentionChoice.disabled.rawValue, forKey: Key.historyRetentionChoice)
+    }
+    defaults.removeObject(forKey: LegacyKey.historyRetentionChoice)
   }
 
   func welcomeCompletedVersion() -> Int {

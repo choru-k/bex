@@ -3,8 +3,8 @@ import XCTest
 
 @testable import Bex
 
-/// Covers v7.1 decision 1 (docs/learning-mode-plan.md): tapping a "Consider" alternative
-/// records the owner's pick and turns it into a Study card.
+/// Covers the contract that tapping a "Consider" alternative records the owner's pick and
+/// turns it into a Study card.
 @MainActor
 final class ConsiderTapTests: XCTestCase {
   private func makeStores() -> (

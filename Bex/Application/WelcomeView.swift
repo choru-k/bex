@@ -2,7 +2,7 @@ import SwiftUI
 
 struct WelcomeView: View {
   let dismiss: @MainActor () -> Void
-  let openQuickCheck: @MainActor () -> Void
+  let openFixAndSend: @MainActor () -> Void
   let setUpProvider: @MainActor () -> Void
 
   var body: some View {
@@ -25,16 +25,14 @@ struct WelcomeView: View {
 
       VStack(alignment: .leading, spacing: 14) {
         feature(
-          title: "Quick Check",
-          detail: "Open Bex from the menu bar or your shortcut, then review a correction before copying it."
-        )
-        feature(
           title: "Fix & Send",
-          detail: "Capture the focused text field, confirm exactly what leaves your Mac, and choose how the correction is delivered."
+          detail:
+            "Capture or write a draft, confirm exactly what leaves your Mac, and choose how the correction is delivered."
         )
         feature(
           title: "You stay in control",
-          detail: "Bex asks before outbound work and does not save drafts or History unless you choose to."
+          detail:
+            "Bex asks before outbound work and does not save drafts or History unless you choose to."
         )
       }
 
@@ -47,9 +45,9 @@ struct WelcomeView: View {
         Spacer()
         Button("Set Up Provider…", action: setUpProvider)
           .accessibilityIdentifier("welcome-set-up-provider")
-        Button("Open Quick Check", action: openQuickCheck)
+        Button("Open Fix & Send", action: openFixAndSend)
           .keyboardShortcut(.defaultAction)
-          .accessibilityIdentifier("welcome-open-quick-check")
+          .accessibilityIdentifier("welcome-open-fix-and-send")
       }
     }
     .padding(28)

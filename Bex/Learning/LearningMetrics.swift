@@ -47,7 +47,7 @@ struct WeeklyRate: Equatable, Sendable {
 /// `Consider` offered a single recommendation. v7 made it offer several deliberately
 /// unranked alternatives, so at most one can ever be "adopted" and the inferred rate
 /// collapses for reasons unrelated to whether the layer works. `ConsiderTapStore` replaces
-/// the proxy with the owner's actual pick; see docs/learning-mode-plan.md v7.1 decision 1.
+/// the proxy with the owner's actual pick.
 enum LearningMetrics {
   /// Non-empty whitespace/newline-split tokens. `Character.isWhitespace` already
   /// covers newlines, so a single split does the job.
@@ -62,7 +62,8 @@ enum LearningMetrics {
   static func categoryRates(samples: [LearningSample]) -> [CategoryRate] {
     let totalWords = samples.reduce(0) { $0 + wordCount($1.original) }
     let counts = LearningAggregator.recurringCounts(explanations: samples.map(\.explanation))
-    return counts
+    return
+      counts
       .map { count in
         let rate = totalWords > 0 ? Double(count.count) / Double(totalWords) * 100 : 0
         return CategoryRate(category: count.category, count: count.count, ratePer100Words: rate)

@@ -114,17 +114,21 @@ struct PromptGateView: View {
 
   private var outboundConfirmation: some View {
     VStack(alignment: .leading, spacing: 14) {
-      Label("Review outbound Prompt Gate payload", systemImage: "checkmark.shield")
-        .font(.title2.bold())
-        .accessibilityAddTraits(.isHeader)
-        .accessibilityFocused($accessibilityFocus, equals: .disclosureHeading)
-        .accessibilityIdentifier("prompt-gate-disclosure")
+      Label(
+        viewModel.isLookupConfirmation
+          ? "Review outbound lookup"
+          : "Review outbound correction",
+        systemImage: "checkmark.shield"
+      )
+      .font(.title2.bold())
+      .accessibilityAddTraits(.isHeader)
+      .accessibilityFocused($accessibilityFocus, equals: .disclosureHeading)
+      .accessibilityIdentifier("prompt-gate-disclosure")
 
       Text(viewModel.providerDisclosure)
 
-      // The payload with every withheld span drawn as a chip rather than as a
-      // `[[[BEX_PROTECTED_…]]]` placeholder. Same guarantee, but now readable in one look:
-      // this is the sentence that leaves, and those are the pieces that do not.
+      // Correction payloads draw withheld technical spans as labelled chips. Look Up sends
+      // its full term, so the same surface renders it as plain monospace text.
       Text(maskedPayloadText)
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -135,7 +139,9 @@ struct PromptGateView: View {
           RoundedRectangle(cornerRadius: 8)
             .stroke(Color(nsColor: .separatorColor))
         }
-        .accessibilityLabel("Masked Prompt Gate payload")
+        .accessibilityLabel(
+          viewModel.isLookupConfirmation ? "Lookup term" : "Masked correction payload"
+        )
         .accessibilityValue(viewModel.outboundPayload)
         .accessibilityIdentifier("prompt-gate-outbound-payload")
 
@@ -144,17 +150,34 @@ struct PromptGateView: View {
         .foregroundStyle(.secondary)
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityIdentifier("prompt-gate-masked-span-summary")
+      if let writingStyleName = viewModel.outboundWritingStyleName,
+        let writingStyleGuidance = viewModel.outboundWritingStyleGuidance
+      {
+        GroupBox("Writing Style guidance") {
+          VStack(alignment: .leading, spacing: 8) {
+            Text("“\(writingStyleName)” will also send this guidance:")
+            Text(writingStyleGuidance)
+              .font(.body.monospaced())
+              .textSelection(.enabled)
+              .frame(maxWidth: .infinity, alignment: .leading)
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityIdentifier("prompt-gate-outbound-writing-style")
+      }
 
-      DisclosureGroup(isExpanded: $isMaskingExpanded) {
-        Text(viewModel.protectedSpanDisclosure)
-          .foregroundStyle(.secondary)
-          .fixedSize(horizontal: false, vertical: true)
-          .padding(.top, 6)
-          .accessibilityIdentifier("prompt-gate-protected-span-disclosure")
-      } label: {
-        Button("What masking covers") { isMaskingExpanded.toggle() }
-          .buttonStyle(.plain)
-          .accessibilityIdentifier("prompt-gate-masking-disclosure")
+      if !viewModel.isLookupConfirmation {
+        DisclosureGroup(isExpanded: $isMaskingExpanded) {
+          Text(viewModel.protectedSpanDisclosure)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 6)
+            .accessibilityIdentifier("prompt-gate-protected-span-disclosure")
+        } label: {
+          Button("What masking covers") { isMaskingExpanded.toggle() }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("prompt-gate-masking-disclosure")
+        }
       }
 
       permissionSection
@@ -171,11 +194,11 @@ struct PromptGateView: View {
     var result = AttributedString()
     for segment in viewModel.outboundSegments {
       switch segment.content {
-      case let .text(text):
+      case .text(let text):
         var run = AttributedString(text)
         run.font = .body.monospaced()
         result += run
-      case let .masked(kind):
+      case .masked(let kind):
         var run = AttributedString(" 🔒 \(kind) ")
         run.font = .caption.weight(.semibold)
         run.foregroundColor = .green
@@ -209,6 +232,8 @@ struct PromptGateView: View {
           .accessibilityLabel("Prompt to correct, editable")
           .accessibilityIdentifier("prompt-gate-input")
       }
+      retentionSection
+      lookupSection
       targetGuidance
       error
     }
@@ -216,8 +241,8 @@ struct PromptGateView: View {
 
   private func review(availableHeight: CGFloat) -> some View {
     VStack(alignment: .leading, spacing: 12) {
-      // The target row and provenance line stay host-side: they are exactly what design
-      // 4a deletes for Quick Check, so they are not part of the shared card.
+      // Target and provenance remain host-side because delivery belongs to Fix & Send,
+      // not to the reusable review card.
       VStack(alignment: .leading, spacing: 4) {
         Text(viewModel.reviewTitle)
           .font(.title2.bold())
@@ -336,8 +361,154 @@ struct PromptGateView: View {
       Text(viewModel.selectedProvider.displayName)
       Text("·").foregroundStyle(.secondary)
       Text(viewModel.selectedModel).lineLimit(1)
+      Text("·").foregroundStyle(.secondary)
+      Menu {
+        Button {
+          Task { await viewModel.selectWritingStyle(id: nil) }
+        } label: {
+          writingStyleMenuLabel(
+            "Bex Standard",
+            selected: viewModel.selectedWritingStyleID == nil
+          )
+        }
+        if !viewModel.availableWritingStyles.isEmpty {
+          Divider()
+          ForEach(viewModel.availableWritingStyles) { style in
+            Button {
+              Task { await viewModel.selectWritingStyle(id: style.id) }
+            } label: {
+              writingStyleMenuLabel(
+                style.name,
+                selected: viewModel.selectedWritingStyleID == style.id
+              )
+            }
+          }
+        }
+        Divider()
+        Button("Manage Writing Styles…") {
+          viewModel.openWritingStyles()
+        }
+      } label: {
+        Label(viewModel.writingStyleLabel, systemImage: "text.badge.checkmark")
+          .lineLimit(1)
+      }
+      .menuStyle(.borderlessButton)
+      .accessibilityLabel("Writing Style: \(viewModel.writingStyleLabel)")
+      .accessibilityIdentifier("prompt-gate-writing-style")
+      .disabled(!viewModel.canSelectWritingStyle)
+      Spacer(minLength: 0)
     }
     .font(.caption)
+  }
+
+  private func writingStyleMenuLabel(_ title: String, selected: Bool) -> some View {
+    HStack {
+      Text(title)
+      if selected {
+        Image(systemName: "checkmark")
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var retentionSection: some View {
+    if viewModel.isStandaloneComposer,
+      (viewModel.usesDraftPersistence && viewModel.draftRetentionChoice == .undecided)
+        || viewModel.historyRetentionChoice == .undecided
+    {
+      GroupBox("Local storage choices") {
+        VStack(alignment: .leading, spacing: 12) {
+          if viewModel.usesDraftPersistence,
+            viewModel.draftRetentionChoice == .undecided
+          {
+            retentionChoiceRow(
+              title: "Save unfinished standalone drafts?",
+              disclosure:
+                "When enabled, this unfinished standalone Fix & Send draft is stored locally on this Mac.",
+              enableIdentifier: "prompt-gate-enable-draft-retention",
+              disableIdentifier: "prompt-gate-disable-draft-retention"
+            ) { choice in
+              Task { await viewModel.setDraftRetentionChoice(choice) }
+            }
+          }
+          if viewModel.historyRetentionChoice == .undecided {
+            retentionChoiceRow(
+              title: "Save correction history?",
+              disclosure:
+                "When enabled, successful corrections are stored locally on this Mac, up to 500 entries.",
+              enableIdentifier: "prompt-gate-enable-history-retention",
+              disableIdentifier: "prompt-gate-disable-history-retention"
+            ) { choice in
+              Task { await viewModel.setHistoryRetentionChoice(choice) }
+            }
+          }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+      }
+      .accessibilityIdentifier("prompt-gate-retention-choices")
+    }
+  }
+
+  private func retentionChoiceRow(
+    title: String,
+    disclosure: String,
+    enableIdentifier: String,
+    disableIdentifier: String,
+    setChoice: @escaping (RetentionChoice) -> Void
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Text(title).font(.headline)
+      Text(disclosure)
+        .font(.caption)
+        .foregroundStyle(.secondary)
+      HStack {
+        Button("Enable") { setChoice(.enabled) }
+          .accessibilityIdentifier(enableIdentifier)
+        Button("Don't Save") { setChoice(.disabled) }
+          .accessibilityIdentifier(disableIdentifier)
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var lookupSection: some View {
+    if let lookup = viewModel.lookup {
+      Divider()
+      VStack(alignment: .leading, spacing: 12) {
+        Text("Dictionary")
+          .font(.title3.bold())
+          .accessibilityAddTraits(.isHeader)
+        lookupTextSection(title: "English", text: lookup.english, secondary: false)
+        lookupTextSection(title: "Korean", text: lookup.korean, secondary: false)
+        lookupTextSection(title: "In simple English", text: lookup.simple, secondary: true)
+        lookupTextSection(title: "Example", text: lookup.example, secondary: true)
+        Button(viewModel.lookupSavedToStudy ? "Saved to Study" : "Save to Study") {
+          viewModel.saveLookupToStudy()
+        }
+        .disabled(viewModel.lookupSavedToStudy)
+        .accessibilityIdentifier("prompt-gate-lookup-save")
+      }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .accessibilityElement(children: .contain)
+      .accessibilityLabel("Dictionary lookup section")
+      .accessibilityIdentifier("prompt-gate-lookup")
+    }
+  }
+
+  private func lookupTextSection(
+    title: String,
+    text: String,
+    secondary: Bool
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 3) {
+      Text(title)
+        .font(.caption.bold())
+        .foregroundStyle(secondary ? .secondary : .primary)
+      Text(text)
+        .textSelection(.enabled)
+        .fixedSize(horizontal: false, vertical: true)
+        .foregroundStyle(secondary ? .secondary : .primary)
+    }
   }
 
   private var targetGuidance: some View {
@@ -389,6 +560,15 @@ struct PromptGateView: View {
           .accessibilityIdentifier("prompt-gate-confirm-outbound")
       case .composing:
         cancelButton
+        if !viewModel.needsProviderSetup {
+          Button("Look Up") { viewModel.lookUp() }
+            .disabled(!viewModel.canLookUp)
+            .accessibilityIdentifier("prompt-gate-look-up")
+          if viewModel.isLookingUp {
+            ProgressView().controlSize(.small)
+            Text("Looking up…").foregroundStyle(.secondary)
+          }
+        }
         Spacer()
         if viewModel.needsProviderSetup {
           Button("Open Settings") { viewModel.openSettings() }

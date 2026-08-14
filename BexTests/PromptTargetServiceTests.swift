@@ -27,7 +27,8 @@ final class PromptTargetServiceTests: XCTestCase {
     XCTAssertEqual(fixture.pasteboard.string(forType: .string), "existing clipboard")
     XCTAssertEqual(fixture.events.pasteCount, 1)
     XCTAssertEqual(fixture.events.returnCount, 1)
-    XCTAssertLessThan(try index("orderOut", in: fixture.log), try index("activate", in: fixture.log))
+    XCTAssertLessThan(
+      try index("orderOut", in: fixture.log), try index("activate", in: fixture.log))
     XCTAssertLessThan(try index("activate", in: fixture.log), try index("focus", in: fixture.log))
     XCTAssertLessThan(try index("selectAll", in: fixture.log), try index("paste", in: fixture.log))
     XCTAssertLessThan(try index("paste", in: fixture.log), try index("return", in: fixture.log))
@@ -163,11 +164,12 @@ final class PromptTargetServiceTests: XCTestCase {
     XCTAssertEqual(fixture.events.returnCount, 0)
   }
 
-  func testUntrustedAndUnsupportedTargetsUseCopyOrComposerFallback() async throws {
+  func testUntrustedAndUnsupportedTargetsUseStandaloneCopyFallback() async throws {
     let fixture = TargetFixture()
     fixture.accessibility.isTrusted = false
     let untrusted = try fixture.service.captureFrontmostTarget()
     XCTAssertEqual(untrusted.target.kind, .copyOnly)
+    XCTAssertEqual(untrusted.source, .standalone)
     XCTAssertEqual(untrusted.draft, "")
 
     let copied = try await fixture.service.deliver(
@@ -182,19 +184,19 @@ final class PromptTargetServiceTests: XCTestCase {
 
     fixture.accessibility.isTrusted = true
     fixture.accessibility.role = "AXButton"
-    let composer = try fixture.service.captureFrontmostTarget()
-    XCTAssertEqual(composer.target.kind, .composerPaste)
-    XCTAssertEqual(composer.draft, "")
+    let standalone = try fixture.service.captureFrontmostTarget()
+    XCTAssertEqual(standalone.target.kind, .copyOnly)
+    XCTAssertEqual(standalone.source, .standalone)
+    XCTAssertEqual(standalone.draft, "")
   }
 
-  func testComposerDeliveryReportsPastedWithoutSubmitting() async throws {
+  func testHookComposerDeliveryReportsPastedWithoutSubmitting() async throws {
     let fixture = TargetFixture()
-    fixture.accessibility.role = "AXButton"
-    let capture = try fixture.service.captureFrontmostTarget()
+    let target = try fixture.service.target(for: hookRequest())
 
     let outcome = try await fixture.service.deliver(
       "Composer correction",
-      to: capture.target,
+      to: target,
       pressReturn: true
     )
 
@@ -204,16 +206,15 @@ final class PromptTargetServiceTests: XCTestCase {
     XCTAssertEqual(fixture.events.returnCount, 0)
   }
 
-  func testComposerPasteFailureReportsCompletedCopyEffect() async throws {
+  func testHookComposerPasteFailureReportsCompletedCopyEffect() async throws {
     let fixture = TargetFixture()
-    fixture.accessibility.role = "AXButton"
     fixture.events.pasteSucceeds = false
-    let capture = try fixture.service.captureFrontmostTarget()
+    let target = try fixture.service.target(for: hookRequest())
 
     do {
       _ = try await fixture.service.deliver(
         "Composer correction",
-        to: capture.target,
+        to: target,
         pressReturn: false
       )
       XCTFail("Expected paste failure")
@@ -319,30 +320,28 @@ final class PromptTargetServiceTests: XCTestCase {
       XCTAssertTrue(failure.isFullRetrySafe)
     }
 
-    let composerFixture = TargetFixture()
-    composerFixture.accessibility.role = "AXButton"
-    let composer = try composerFixture.service.captureFrontmostTarget()
-    XCTAssertEqual(
-      composer.target.availableDeliveryActions,
-      [.copyCorrection, .pasteInDestination]
-    )
-    let copied = try await composerFixture.service.deliver(
+    let standaloneFixture = TargetFixture()
+    standaloneFixture.accessibility.role = "AXButton"
+    let standalone = try standaloneFixture.service.captureFrontmostTarget()
+    XCTAssertEqual(standalone.source, .standalone)
+    XCTAssertEqual(standalone.target.availableDeliveryActions, [.copyCorrection])
+    let copied = try await standaloneFixture.service.deliver(
       "Copy instead",
-      to: composer.target,
+      to: standalone.target,
       action: .copyCorrection
     )
     XCTAssertEqual(copied, .copied)
-    XCTAssertEqual(composerFixture.events.pasteCount, 0)
-    XCTAssertEqual(composerFixture.events.returnCount, 0)
+    XCTAssertEqual(standaloneFixture.events.pasteCount, 0)
+    XCTAssertEqual(standaloneFixture.events.returnCount, 0)
   }
 
   func testPermissionGuidanceDistinguishesManualFallbackFromHookSuppliedPrompt() throws {
     let fixture = TargetFixture()
     fixture.accessibility.isTrusted = false
     let manual = try fixture.service.captureFrontmostTarget()
-    XCTAssertTrue(manual.target.guidance.contains("manual capture"))
-    XCTAssertTrue(manual.target.guidance.contains("invoke Fix & Send again"))
-    XCTAssertTrue(manual.target.guidance.contains("Client hooks can still supply"))
+    XCTAssertEqual(manual.source, .standalone)
+    XCTAssertTrue(manual.target.guidance.contains("Without Accessibility"))
+    XCTAssertTrue(manual.target.guidance.contains("copy the approved correction"))
 
     let request = HookReviewRequest(
       requestID: UUID(),
@@ -358,6 +357,19 @@ final class PromptTargetServiceTests: XCTestCase {
     XCTAssertEqual(hook.kind, .copyOnly)
     XCTAssertTrue(hook.guidance.contains("hook supplied"))
     XCTAssertFalse(hook.availableDeliveryActions.contains(.pasteAndSubmit))
+  }
+
+  private func hookRequest() -> HookReviewRequest {
+    HookReviewRequest(
+      requestID: UUID(),
+      client: .claudeCode,
+      prompt: "Prompt",
+      sessionID: "session",
+      cwd: "/tmp",
+      helperPID: 123,
+      sourcePID: 321,
+      sourceBundleID: "com.example.editor"
+    )
   }
 
   private func index(_ value: String, in values: [String]) throws -> Int {

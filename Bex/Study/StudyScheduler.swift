@@ -28,7 +28,7 @@ struct StudyReviewState: Codable, Equatable, Sendable {
 }
 
 /// Pure Leitner-box scheduling for Study Mode drills built from the user's own logged
-/// English mistakes (docs/learning-mode-plan.md). Deliberately NOT SM-2/FSRS: those
+/// English mistakes. Deliberately NOT SM-2/FSRS: those
 /// exist to model per-item forgetting curves across large decks and many users. This
 /// app has one user and a deck that grows a few cards a day, so four fixed boxes with
 /// fixed intervals give "wrong answers come back tomorrow, right answers come back

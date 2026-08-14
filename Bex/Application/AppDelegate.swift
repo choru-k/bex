@@ -29,8 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var lastStudyResult: StudyStatusFile.LastResult?
   private var shortcutMenuItems: [BexShortcut: [NSMenuItem]] = [:]
   private var shortcutChords: [BexShortcut: KeyChord] = [
-    .quickCheck: .defaultQuickCheck,
-    .fixAndSend: .defaultFixAndSend,
+    .fixAndSend: .defaultFixAndSend
   ]
   private let signposter: OSSignposter
   private var launchInterval: OSSignpostIntervalState?
@@ -62,17 +61,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let missingCredential =
           arguments.contains("--missing-credential")
           || environment["BEX_UI_TEST_MISSING_CREDENTIAL"] == "1"
-        let explicitQuickCheck =
-          arguments.contains("--open-quick-check")
-          || environment["BEX_UI_TEST_OPEN_QUICK_CHECK"] == "1"
-        let explicitPromptGate =
-          arguments.contains("--open-prompt-gate")
-          || environment["BEX_UI_TEST_OPEN_PROMPT_GATE"] == "1"
+        let explicitFixAndSend =
+          arguments.contains("--open-fix-and-send")
+          || environment["BEX_UI_TEST_OPEN_FIX_AND_SEND"] == "1"
         let launchDestination: UITestLaunchDestination
-        if explicitPromptGate {
+        if explicitFixAndSend {
           launchDestination = .promptGate
-        } else if explicitQuickCheck {
-          launchDestination = .quickCheck
         } else {
           launchDestination = UITestScenario.current.configuration.launchDestination
         }
@@ -82,20 +76,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           )
           self?.finishLaunching(
             with: services,
-            openQuickCheck: launchDestination == .quickCheck,
-            openPromptGate: launchDestination == .promptGate,
+            openFixAndSend: launchDestination == .promptGate,
             showWelcomeIfNeeded: UITestScenario.current == .welcome
           )
           switch launchDestination {
           case .settings:
             self?.windowCoordinator?.showSettings()
-          case let .setup(origin):
+          case .setup(let origin):
             self?.windowCoordinator?.showSettings(origin: origin)
           case .history:
             self?.windowCoordinator?.showHistory()
           case .profiles:
             self?.windowCoordinator?.showProfiles()
-          case .none, .quickCheck, .promptGate, .hookPromptGate:
+          case .none, .promptGate, .hookPromptGate:
             break
           }
         }
@@ -112,8 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func finishLaunching(
     with services: AppServices,
-    openQuickCheck: Bool = false,
-    openPromptGate: Bool = false,
+    openFixAndSend: Bool = false,
     showWelcomeIfNeeded: Bool = true
   ) {
     // Set early, before anything else touches windows: this is the delegate that
@@ -157,11 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     #endif
     self.globalHotKey = globalHotKey
     Task { [weak self] in
-      async let quickCheckChord = services.preferences.quickCheckKeyChord()
-      async let fixAndSendChord = services.preferences.fixAndSendKeyChord()
+      let fixAndSendChord = await services.preferences.fixAndSendKeyChord()
       let chords: [BexShortcut: KeyChord] = [
-        .quickCheck: await quickCheckChord,
-        .fixAndSend: await fixAndSendChord,
+        .fixAndSend: fixAndSendChord
       ]
       await MainActor.run {
         guard let self else { return }
@@ -210,13 +200,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       let completedWelcomeVersion =
         await services.preferences.welcomeCompletedVersion()
       let shouldShowWelcome =
-        showWelcomeIfNeeded && !openQuickCheck && !openPromptGate
-          && completedWelcomeVersion < WindowCoordinator.currentWelcomeVersion
+        showWelcomeIfNeeded && !openFixAndSend
+        && completedWelcomeVersion < WindowCoordinator.currentWelcomeVersion
       await MainActor.run {
-        if openQuickCheck {
-          coordinator?.showQuickCheck()
-        }
-        if openPromptGate {
+        if openFixAndSend {
           coordinator?.showPromptGate()
         }
         if shouldShowWelcome {
@@ -274,11 +261,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     guard NSApp.mainMenu == nil else { return }
     let mainMenu = Self.makeMainMenu(
       target: self,
-      quickCheckChord: shortcutChords[.quickCheck] ?? .defaultQuickCheck,
       fixAndSendChord: shortcutChords[.fixAndSend] ?? .defaultFixAndSend
     )
     NSApp.mainMenu = mainMenu
-    NSApp.servicesMenu = mainMenu.item(withTitle: "Bex")?.submenu?
+    NSApp.servicesMenu =
+      mainMenu.item(withTitle: "Bex")?.submenu?
       .item(withTitle: "Services")?.submenu
     NSApp.windowsMenu = mainMenu.item(withTitle: "Window")?.submenu
     NSApp.helpMenu = mainMenu.item(withTitle: "Help")?.submenu
@@ -287,7 +274,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   static func makeMainMenu(
     target: AnyObject?,
-    quickCheckChord: KeyChord,
     fixAndSendChord: KeyChord
   ) -> NSMenu {
     let mainMenu = NSMenu()
@@ -346,7 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     spellingMenu.addItem(.separator())
     spellingMenu.addItem(command("Check Spelling While Typing", "toggleContinuousSpellChecking:"))
     spellingMenu.addItem(command("Check Grammar With Spelling", "toggleGrammarChecking:"))
-    spellingMenu.addItem(command("Correct Spelling Automatically", "toggleAutomaticSpellingCorrection:"))
+    spellingMenu.addItem(
+      command("Correct Spelling Automatically", "toggleAutomaticSpellingCorrection:"))
     editMenu.addItem(rootItem(title: "Spelling and Grammar", submenu: spellingMenu))
 
     let substitutionsMenu = NSMenu(title: "Substitutions")
@@ -375,17 +362,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let toolsMenu = NSMenu(title: "Tools")
     toolsMenu.addItem(
       shortcutCommand(
-        "Quick Check",
-        "openQuickCheck",
-        shortcut: .quickCheck,
-        chord: quickCheckChord,
-        target: target
-      )
-    )
-    toolsMenu.addItem(
-      shortcutCommand(
         "Fix & Send…",
-        "openPromptGate",
+        "openStandaloneFixAndSend",
         shortcut: .fixAndSend,
         chord: fixAndSendChord,
         target: target
@@ -449,13 +427,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     MenuBarHubView(
       hub: hubModel,
       study: coordinator().studyDrill(),
-      openQuickCheck: { [weak self] in
-        self?.hubController?.close()
-        self?.openQuickCheck()
-      },
       openFixAndSend: { [weak self] in
         self?.hubController?.close()
-        self?.openPromptGate()
+        self?.openStandaloneFixAndSend()
       },
       openMainWindow: { [weak self] in
         self?.hubController?.close()
@@ -481,7 +455,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// Mirrors whatever is currently bound onto the hub's shortcut labels, so a rebind in
   /// Settings shows up in the popover rather than leaving it advertising the old keys.
   private func refreshHubChords() {
-    hubModel.quickCheckChord = shortcutChords[.quickCheck] ?? .defaultQuickCheck
     hubModel.fixAndSendChord = shortcutChords[.fixAndSend] ?? .defaultFixAndSend
   }
 
@@ -557,14 +530,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     refreshShortcutMenuItems()
   }
 
-  private func shortcutAction(for shortcut: BexShortcut) -> @MainActor () -> Void {
+  private func shortcutAction(for _: BexShortcut) -> @MainActor () -> Void {
     { [weak self] in
-      switch shortcut {
-      case .quickCheck:
-        self?.openQuickCheck()
-      case .fixAndSend:
-        self?.openPromptGate()
-      }
+      self?.openPromptGate()
     }
   }
 
@@ -595,14 +563,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       let center = DistributedNotificationCenter.default()
       center.addObserver(
         self,
-        selector: #selector(openQuickCheckForUITesting(_:)),
-        name: Notification.Name("com.bex.desktop.ui-testing.open-quick-check"),
-        object: nil
-      )
-      center.addObserver(
-        self,
-        selector: #selector(openPromptGateForUITesting(_:)),
-        name: Notification.Name("com.bex.desktop.ui-testing.open-prompt-gate"),
+        selector: #selector(openFixAndSendForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.open-fix-and-send"),
         object: nil
       )
       // The hub is an `NSPopover` anchored to the status item, and a status item cannot be
@@ -612,6 +574,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self,
         selector: #selector(openHubForUITesting(_:)),
         name: Notification.Name("com.bex.desktop.ui-testing.open-hub"),
+        object: nil
+      )
+      center.addObserver(
+        self,
+        selector: #selector(replaceFixAndSendDraftForUITesting(_:)),
+        name: Notification.Name("com.bex.desktop.ui-testing.replace-fix-and-send-draft"),
         object: nil
       )
       center.addObserver(
@@ -628,11 +596,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       )
     }
 
-    @objc private func openQuickCheckForUITesting(_ notification: Notification) {
-      openQuickCheck()
-    }
-
-    @objc private func openPromptGateForUITesting(_ notification: Notification) {
+    @objc private func openFixAndSendForUITesting(_ notification: Notification) {
       openPromptGate()
     }
 
@@ -640,6 +604,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       guard let button = statusItem?.button else { return }
       hubController?.show(relativeTo: button)
     }
+    @objc private func replaceFixAndSendDraftForUITesting(_ notification: Notification) {
+      coordinator().showStandaloneFixAndSend(
+        draft: UITestFixtureConfiguration.populatedHistory[0].corrected,
+        usesDraftPersistence: false
+      )
+    }
+
     @objc private func releaseGrammarForUITesting(_ notification: Notification) {
       guard let grammar = services?.grammar as? UITestingGrammarService else { return }
       Task { await grammar.releaseCheck() }
@@ -660,13 +631,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
   }
 
-  @objc private func openQuickCheck() {
-    let interval = WindowCoordinator.beginQuickCheckOpenInterval()
-    coordinator().showQuickCheck(signpostInterval: interval)
-  }
-
   @objc private func openPromptGate() {
     coordinator().showPromptGate()
+  }
+
+  @objc private func openStandaloneFixAndSend() {
+    coordinator().showStandaloneFixAndSend()
   }
 
   @objc private func openHistory() {
@@ -775,7 +745,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       [weak self] _ in
       Task { @MainActor [weak self] in
         await self?.classifyStudyPatternsIfNeeded()
-      await self?.refreshWriterLevelIfNeeded()
+        await self?.refreshWriterLevelIfNeeded()
         await self?.refreshMenuBarBadge()
       }
     }
@@ -850,10 +820,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// `StudyDailyPlan` can spread one batch across ten different lessons instead of six
   /// examples of two.
   ///
-  /// Runs off the interactive path, on purpose. A Quick Check has to answer in about two
-  /// seconds, so this is never folded into the correction prompt; it happens afterwards on
-  /// launch and hourly, where a slow call costs nothing. Only cards never classified
-  /// before are sent, so the steady-state cost is zero calls.
+  /// Runs off the interactive path so this never slows the correction prompt; it happens
+  /// afterwards on launch and hourly, where a slow call costs nothing. Only cards never
+  /// classified before are sent, so the steady-state cost is zero calls.
   ///
   /// Gated on the outbound disclosure the user has already accepted for their current
   /// destination. The learning log is owner-only by design, and this would ship 139 of
@@ -910,7 +879,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// tick. See `WriterLevelRefresh` for why it runs at most daily rather than every tick.
   ///
   /// This is the "점점" in the owner's ask — the correction prompt sees one text and cannot
-  /// accumulate, so the accumulating happens here (docs/learning-mode-plan.md v7.1).
+  /// accumulate, so the accumulating happens here in the writer-level profile.
   private func refreshWriterLevelIfNeeded() async {
     guard let services else { return }
     guard await services.preferences.backgroundAgentEnabled() else { return }

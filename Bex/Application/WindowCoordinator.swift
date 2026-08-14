@@ -1,21 +1,15 @@
 import AppKit
 import Combine
-import OSLog
 import SwiftUI
 
 @MainActor
 final class WindowCoordinator: NSObject, NSWindowDelegate {
   private let services: AppServices
-  private static let signposter = OSSignposter(subsystem: "com.bex.desktop", category: "ui")
   static let currentWelcomeVersion = 1
-  private var quickCheckInterval: OSSignpostIntervalState?
-
-  private var quickCheckPanelController: QuickCheckPanelController?
-  private var quickCheckViewModel: QuickCheckViewModel?
   private var promptGatePanelController: PromptGatePanelController?
   private var promptGateViewModel: PromptGateViewModel?
   private var promptGatePhaseCancellable: AnyCancellable?
-  private var promptGateReinvokeCancellable: AnyCancellable?
+  private var pendingPromptGateSession: PromptGateSession?
   private var pendingManualFixAndSendDraft: String?
   private var welcomeWindowController: NSWindowController?
   private var mainWindowController: NSWindowController?
@@ -78,87 +72,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     super.init()
   }
 
-  static func beginQuickCheckOpenInterval() -> OSSignpostIntervalState {
-    signposter.beginInterval("QuickCheckOpen")
-  }
-
-  func showQuickCheck(
-    draft: String? = nil,
-    signpostInterval: OSSignpostIntervalState? = nil
-  ) {
-    beginQuickCheckSignpost(signpostInterval)
-    if quickCheckPanelController == nil {
-      let viewModel = QuickCheckViewModel(
-        preferences: services.preferences,
-        keychain: services.keychain,
-        data: services.data,
-        grammar: services.grammar,
-        pasteboard: services.pasteboard,
-        learningLog: services.learningLog,
-        considerTaps: services.considerTaps,
-        onDismiss: { [weak self] reason in
-          self?.closeQuickCheck(reason: reason)
-        }
-      )
-      quickCheckViewModel = viewModel
-      let rootView = QuickCheckView(
-        viewModel: viewModel,
-        askThread: makeAskThread(),
-        openSettings: { [weak self] in self?.showSettings(origin: .quickCheck) },
-        openWritingStyles: { [weak self] in self?.showProfiles() },
-        openHistory: { [weak self] in self?.showHistory() }
-      )
-      quickCheckPanelController = QuickCheckPanelController(
-        rootView: AnyView(rootView),
-        dismissalAction: { [weak viewModel] reason in
-          viewModel?.panelDidDismiss(reason)
-        },
-        showAction: { [weak viewModel] in
-          viewModel?.sessionDidShow()
-        },
-        focusAction: { [weak self] in
-          self?.endQuickCheckSignpost()
-        },
-        primaryAction: { [weak viewModel] in
-          viewModel?.performPrimaryAction()
-        },
-        backAction: { [weak viewModel] in
-          viewModel?.backToInput()
-        },
-        copyAction: { [weak viewModel] in
-          viewModel?.copy(closeAfter: false)
-        },
-        autoDismissOnDeactivate: services.autoDismissQuickCheck
-      )
-    }
-    if let draft, let quickCheckViewModel {
-      Task { [weak self, weak quickCheckViewModel] in
-        guard let self, let quickCheckViewModel else { return }
-        await quickCheckViewModel.loadContext()
-        guard !Task.isCancelled else { return }
-        guard confirmQuickCheckReplacementIfNeeded(quickCheckViewModel) else {
-          endQuickCheckSignpost()
-          return
-        }
-        quickCheckViewModel.replaceDraft(with: draft)
-        mainWindowController?.close()
-        quickCheckPanelController?.show()
-      }
-    } else {
-      quickCheckPanelController?.show()
-      if let quickCheckViewModel {
-        Task {
-          await quickCheckViewModel.loadContext()
-        }
-      }
-    }
-  }
-
-  func closeQuickCheck(reason: QuickCheckDismissalReason = .explicitCancel) {
-    _ = reason
-    quickCheckPanelController?.window?.orderOut(nil)
-  }
-
   func showPromptGate() {
     if pendingManualFixAndSendDraft != nil {
       reinvokeManualFixAndSend()
@@ -176,6 +89,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         source: capture.source
       )
       showPromptGate(session: session)
+    } catch BexError.unsupportedPromptTarget {
+      showStandaloneFixAndSend()
     } catch {
       let alert = NSAlert(error: error)
       NSApp.activate(ignoringOtherApps: true)
@@ -198,13 +113,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ = showPromptGate(session: newSession)
         return
       }
-      promptGateReinvokeCancellable = promptGateViewModel.$phase
-        .filter { $0 == .closed }
-        .prefix(1)
-        .sink { [weak self] _ in
-          self?.promptGateReinvokeCancellable = nil
-          _ = self?.showPromptGate(session: newSession)
-        }
+      pendingPromptGateSession = newSession
       promptGateViewModel.cancel()
     } catch {
       let alert = NSAlert(error: error)
@@ -234,6 +143,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
   func closePromptGate() {
     promptGatePanelController?.orderOut()
+    guard pendingPromptGateSession != nil else { return }
+    Task { @MainActor [weak self] in
+      await Task.yield()
+      guard let self,
+        let pendingPromptGateSession,
+        promptGateViewModel?.phase == .closed
+      else { return }
+      self.pendingPromptGateSession = nil
+      _ = showPromptGate(session: pendingPromptGateSession)
+    }
   }
 
   /// Offers one card in the corner after a prompt ships, and only if something is already
@@ -278,13 +197,13 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           dismiss: { [weak self] in
             self?.welcomeWindowController?.close()
           },
-          openQuickCheck: { [weak self] in
+          openFixAndSend: { [weak self] in
             self?.welcomeWindowController?.close()
-            self?.showQuickCheck()
+            self?.showStandaloneFixAndSend()
           },
           setUpProvider: { [weak self] in
             self?.welcomeWindowController?.close()
-            self?.showSettings(origin: .quickCheck)
+            self?.showSettings(origin: .fixAndSend)
           }
         ),
         delegate: self
@@ -299,7 +218,6 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   /// site funnels through here, so "open Bex at Writing Styles" and "the owner clicked
   /// Writing Styles in the sidebar" are the same operation and cannot drift apart.
   func showMain(_ page: MainWindowPage) {
-    quickCheckViewModel?.dismiss(.auxiliaryNavigation)
     if mainWindowController == nil {
       let model = MainWindowModel(
         page: page,
@@ -313,11 +231,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         history: HistoryViewModel(
           data: services.data,
           useAsNewInput: { [weak self] text in
-            self?.replaceQuickCheckDraftFromHistory(with: text)
+            self?.showStandaloneFixAndSend(draft: text, usesDraftPersistence: false)
           },
-          openQuickCheck: { [weak self] in
-            self?.mainWindowController?.close()
-            self?.showQuickCheck()
+          openFixAndSend: { [weak self] in
+            self?.showStandaloneFixAndSend(draft: "")
           }
         ),
         profiles: ProfilesViewModel(
@@ -332,8 +249,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         configuration: Self.mainWindowConfiguration,
         rootView: BexMainWindow(
           model: model,
-          openQuickCheck: { [weak self] in self?.showQuickCheck() },
-          openFixAndSend: { [weak self] in self?.showPromptGate() }
+          openFixAndSend: { [weak self] in self?.showStandaloneFixAndSend() }
         ),
         delegate: self
       )
@@ -385,18 +301,42 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     showMain(.learn)
   }
 
-  private func replaceQuickCheckDraftFromHistory(with text: String) {
-    showQuickCheck(draft: text)
+  func showStandaloneFixAndSend(
+    draft: String = "",
+    usesDraftPersistence: Bool = true
+  ) {
+    let session = PromptGateSession(
+      initialDraft: draft,
+      target: PromptTarget(
+        kind: .copyOnly,
+        applicationName: "Bex",
+        guidance: "Fix & Send will copy the approved correction for use wherever you need it."
+      ),
+      source: .standalone,
+      usesDraftPersistence: usesDraftPersistence
+    )
+    guard let promptGateViewModel, promptGateViewModel.phase != .closed else {
+      mainWindowController?.close()
+      _ = showPromptGate(session: session)
+      return
+    }
+    guard confirmFixAndSendReplacement() else {
+      promptGatePanelController?.show()
+      return
+    }
+    mainWindowController?.close()
+    pendingPromptGateSession = session
+    promptGateViewModel.cancel()
+    if promptGateViewModel.showsDiscardConfirmation {
+      promptGateViewModel.confirmDiscard()
+    }
   }
 
-  private func confirmQuickCheckReplacementIfNeeded(
-    _ viewModel: QuickCheckViewModel
-  ) -> Bool {
-    guard viewModel.hasPreservedUserWork else { return true }
+  private func confirmFixAndSendReplacement() -> Bool {
     let alert = NSAlert()
-    alert.messageText = "Replace the current Quick Check?"
+    alert.messageText = "Replace the current Fix & Send draft?"
     alert.informativeText =
-      "Quick Check has work in progress. Keep it, or replace it with this History entry."
+      "Fix & Send has work in progress. Keep it, or replace it with this History entry."
     alert.addButton(withTitle: "Keep Current")
     alert.addButton(withTitle: "Replace")
     NSApp.activate(ignoringOtherApps: true)
@@ -439,10 +379,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       },
       setupOrigin: nil,
       onDeleteSavedDraft: { [weak self, preferences = services.preferences] in
-        if let quickCheckViewModel = self?.quickCheckViewModel {
-          await quickCheckViewModel.deletePersistedDraft()
+        if let viewModel = self?.promptGateViewModel, viewModel.usesDraftPersistence {
+          await viewModel.deleteSavedDraft()
         } else {
-          await preferences.deleteSavedQuickDraft()
+          await preferences.deleteSavedDraft()
         }
       },
       onClearHistory: { [data = services.data] in
@@ -460,18 +400,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   private func handleSettingsRoute(_ intent: SettingsRouteIntent) {
     mainWindowController?.close()
     switch intent {
-    case .returnToQuickCheck:
-      if let quickCheckViewModel {
-        Task {
-          await quickCheckViewModel.refreshConfiguration()
-          showQuickCheck()
-        }
-      } else {
-        showQuickCheck()
-      }
     case .returnToFixAndSendTarget:
-      guard let promptGateViewModel, let session = promptGateViewModel.session else { return }
-      if session.hookRequestID != nil {
+      guard let promptGateViewModel, let session = promptGateViewModel.session else {
+        showStandaloneFixAndSend()
+        return
+      }
+      if session.source == .standalone || session.hookRequestID != nil {
         Task {
           await promptGateViewModel.refreshConfigurationAfterSettings()
           promptGatePanelController?.show()
@@ -523,6 +457,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       mainWindowPageCancellable = nil
       // `studyViewModel` deliberately survives: it is the session the menu-bar hub is
       // still showing, and closing the window is not finishing the drill.
+      Task { [weak promptGateViewModel] in
+        await promptGateViewModel?.refreshWritingStyles()
+      }
     }
   }
 
@@ -533,6 +470,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         preferences: services.preferences,
         keychain: services.keychain,
         promptGrammar: services.promptGrammar,
+        grammar: services.grammar,
+        data: services.data,
         targetService: services.promptTarget,
         approvalStore: services.approvalStore,
         hookManager: services.hookManager,
@@ -541,6 +480,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         considerTaps: services.considerTaps,
         onClose: { [weak self] in self?.closePromptGate() },
         onOpenSettings: { [weak self] in self?.showSettings(origin: .fixAndSend) },
+        onOpenWritingStyles: { [weak self] in self?.showProfiles() },
         onDelivered: { [weak self] targetName in
           self?.showMicroDrillIfDue(targetName: targetName)
         }
@@ -610,16 +550,4 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     controller.window?.makeKeyAndOrderFront(nil)
   }
 
-  private func beginQuickCheckSignpost(_ interval: OSSignpostIntervalState?) {
-    if let quickCheckInterval {
-      Self.signposter.endInterval("QuickCheckOpen", quickCheckInterval)
-    }
-    quickCheckInterval = interval ?? Self.beginQuickCheckOpenInterval()
-  }
-
-  private func endQuickCheckSignpost() {
-    guard let quickCheckInterval else { return }
-    Self.signposter.endInterval("QuickCheckOpen", quickCheckInterval)
-    self.quickCheckInterval = nil
-  }
 }

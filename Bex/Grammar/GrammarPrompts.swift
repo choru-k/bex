@@ -9,7 +9,7 @@ enum GrammarPrompts {
   /// `[capitalization] "The deploy" → "The deploy"` and rewrote correct developer
   /// vocabulary. Both pollute the Learning counts that Study Mode drills from.
   ///
-  /// Plan v7 (`docs/learning-mode-plan.md`) reweighted the two sections toward expression,
+  /// The learning design reweighted the two sections toward expression,
   /// against the grain of that anti-noise tuning. Both halves were owner decisions:
   ///
   /// - **Consider is now always present**, and offers candidates *without* ranking them. It
@@ -116,7 +116,7 @@ enum GrammarPrompts {
   /// request itself sees one text, so without this it can only judge "did they know it"
   /// from evidence inside that text. `WriterLevelStore` computes the summary in the
   /// background — nothing here costs the correction any extra tokens beyond the text
-  /// itself, which is the owner's latency constraint (docs/learning-mode-plan.md v7.1).
+  /// itself, which is the owner's latency constraint.
   private static func withWriterLevel(_ base: String, _ writerLevel: String?) -> String {
     guard let writerLevel,
       !writerLevel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -132,17 +132,23 @@ enum GrammarPrompts {
   }
 
   static func buildSystemPrompt(profilePrompt: String?, writerLevel: String? = nil) -> String {
-    let base = withWriterLevel(system, writerLevel)
+    withProfileContext(withWriterLevel(system, writerLevel), profilePrompt)
+  }
+
+  static func buildPromptSafeSystem(
+    profilePrompt: String? = nil,
+    writerLevel: String? = nil
+  ) -> String {
+    withProfileContext(withWriterLevel(promptSafeSystem, writerLevel), profilePrompt)
+  }
+
+  private static func withProfileContext(_ base: String, _ profilePrompt: String?) -> String {
     guard let profilePrompt,
       !profilePrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
       return base
     }
     return "\(base)\n\nAdditional context from the user:\n\(profilePrompt)"
-  }
-
-  static func buildPromptSafeSystem(writerLevel: String? = nil) -> String {
-    withWriterLevel(promptSafeSystem, writerLevel)
   }
 
   static func rewriteSystemPrompt(intent: RewriteIntent) -> String {

@@ -13,7 +13,7 @@ enum GrammarCategory: String, CaseIterable, Sendable {
   case plural
   case spelling
   case capitalization
-  /// Dictionary lookups saved from Quick Check, not grammar corrections. `GrammarPrompts`
+  /// Dictionary lookups saved from standalone Fix & Send, not grammar corrections. `GrammarPrompts`
   /// never emits this tag — only `DictionaryLookup.learningLogExplanation` does — so it
   /// exists to keep vocabulary out of the grammar stats (see `recurringCounts`) while
   /// still letting `StudyCardBuilder` drill it like any other card.
@@ -22,7 +22,7 @@ enum GrammarCategory: String, CaseIterable, Sendable {
   /// made. `GrammarPrompts` never emits this tag either — only
   /// `ConsiderTap.learningLogExplanation` does — so like `vocabulary` it exists to keep a
   /// deliberate choice out of the grammar stats while still letting `StudyCardBuilder`
-  /// drill it. See docs/learning-mode-plan.md v7.1 decision 1.
+  /// drill it.
   case expression
   case other
 
@@ -57,8 +57,7 @@ struct GrammarCategoryCount: Equatable, Sendable {
 /// Source-agnostic aggregation over the two-section `explanation` text produced by
 /// `GrammarPrompts` ("Fixed:" grammar corrections, "Consider:" expression suggestions).
 /// Operates on plain `[String]` so it is trivially unit-testable and reusable across any
-/// corpus that shares this explanation format (learning log today, possibly Quick Check
-/// history later — see docs/learning-mode-plan.md v6.2).
+/// corpus that shares this explanation format.
 enum LearningAggregator {
   /// Canonical `[tag]` values found under the "Fixed:" section of one explanation.
   /// Non-canonical bracketed text is ignored. Stops before "Consider:". Tolerates
@@ -205,7 +204,8 @@ enum LearningAggregator {
         counts[tag, default: 0] += 1
       }
     }
-    return counts
+    return
+      counts
       .map { GrammarCategoryCount(category: $0.key, count: $0.value) }
       .sorted {
         $0.count != $1.count ? $0.count > $1.count : $0.category < $1.category

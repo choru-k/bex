@@ -9,12 +9,11 @@ import SwiftUI
 /// `NSMenuItem` at the top of the status menu — same job, same wording, new surface.
 @MainActor
 final class MenuBarHubModel: ObservableObject {
-  @Published var quickCheckChord: KeyChord = .defaultQuickCheck
   @Published var fixAndSendChord: KeyChord = .defaultFixAndSend
   @Published var conflictMessage: String?
 }
 
-/// The menu-bar popover: today's cost, the first due card, and the three commands.
+/// The menu-bar popover: today's cost, the first due card, and primary commands.
 ///
 /// This replaces a plain `NSMenu`, and the replacement is the point rather than a
 /// restyling. The old menu could only *route* to studying — every card cost a click to
@@ -29,7 +28,6 @@ struct MenuBarHubView: View {
   @ObservedObject var hub: MenuBarHubModel
   @ObservedObject var study: StudyViewModel
 
-  let openQuickCheck: () -> Void
   let openFixAndSend: () -> Void
   let openMainWindow: () -> Void
   let openSettings: () -> Void
@@ -132,7 +130,8 @@ struct MenuBarHubView: View {
           viewModel: study,
           card: card,
           scale: .compact,
-          subtitle: "card \(min(study.completedCount + 1, study.sessionTotal)) of \(study.sessionTotal)"
+          subtitle:
+            "card \(min(study.completedCount + 1, study.sessionTotal)) of \(study.sessionTotal)"
         )
         .padding(14)
         .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 10))
@@ -157,12 +156,6 @@ struct MenuBarHubView: View {
 
   private var commands: some View {
     VStack(spacing: 0) {
-      commandRow(
-        "Quick Check",
-        shortcut: hub.quickCheckChord.displayString,
-        identifier: "hub-quick-check",
-        action: openQuickCheck
-      )
       commandRow(
         "Fix & Send",
         shortcut: hub.fixAndSendChord.displayString,

@@ -139,8 +139,7 @@ struct DiffRedline: View {
 struct DiffSummaryAccessibilityElement: NSViewRepresentable {
   let changeCount: Int
   let summary: String
-  /// Per-surface id ("prompt-gate-diff-summary", "quick-check-diff-summary") now that
-  /// the review card is shared.
+  /// Stable accessibility id for the correction review's diff summary.
   var identifier: String = "prompt-gate-diff-summary"
 
   func makeNSView(context: Context) -> NSView {
@@ -162,7 +161,6 @@ struct DiffSummaryAccessibilityElement: NSViewRepresentable {
   }
 }
 
-
 struct AccessibleDiffSummary: Sendable {
   private static let contextCharacterLimit = 24
 
@@ -177,11 +175,11 @@ struct AccessibleDiffSummary: Sendable {
       let after = context(after: index, in: segments)
 
       switch (before, after) {
-      case let (.some(before), .some(after)):
+      case (.some(let before), .some(let after)):
         return "\(action) \(change) between “\(before)” and “\(after)”"
-      case let (.some(before), .none):
+      case (.some(let before), .none):
         return "\(action) \(change) after “\(before)”"
-      case let (.none, .some(after)):
+      case (.none, .some(let after)):
         return "\(action) \(change) before “\(after)”"
       case (.none, .none):
         return "\(action) \(change)"
@@ -289,12 +287,13 @@ struct AccessibleDiffSummary: Sendable {
     }
 
     func description(count: Int) -> String {
-      let noun = switch self {
-      case .space: "space"
-      case .tab: "tab"
-      case .lineBreak: "line break"
-      case .whitespace: "whitespace character"
-      }
+      let noun =
+        switch self {
+        case .space: "space"
+        case .tab: "tab"
+        case .lineBreak: "line break"
+        case .whitespace: "whitespace character"
+        }
       return count == 1 ? "one \(noun)" : "\(count) \(noun)s"
     }
   }

@@ -6,8 +6,8 @@ Bex is a native macOS menubar app for checking English grammar and expression wi
 - [Install](#install)
 - [Use Bex](#use-bex)
 - [Providers](#providers)
-- [Prompt Gate](#prompt-gate)
-- [Prompt Gate integrations](#prompt-gate-integrations)
+- [Fix & Send](#fix--send)
+- [Fix & Send integrations](#fix--send-integrations)
 - [Data and credentials](#data-and-credentials)
 - [Uninstall](#uninstall)
 - [Build and test](#build-and-test)
@@ -54,35 +54,35 @@ Bex runs as a small icon in the macOS menu bar rather than in the Dock.
 
 1. Open **Settings** from the Bex menu and select a provider and model.
 2. Add the provider credential, connect OpenAI Codex, or configure the local Ollama URL.
-3. Press `⌘⇧G` from any app to open Quick Check.
-4. Enter text, run **Check**, review the word-level diff and explanation, then copy the result.
+3. Press `⇧⌘P` from any app to open **Fix & Send**. If a supported editable field is focused, Bex captures that field as the delivery target. Otherwise, type or paste into the standalone composer.
+4. Run the correction, review the word-level diff and explanation, then approve the target-appropriate action: send, paste, or copy.
 
-Quick Check also supports three in-place rewrites:
+You can also choose **Fix & Send** from the Bex menu whenever you want a standalone correction rather than capturing the focused app.
 
-- **More Formal** (`⌘1`)
-- **Friendlier** (`⌘2`)
-- **Shorter** (`⌘3`)
+### Standalone choices
+
+Standalone Fix & Send can retain an unfinished draft between openings and restore it after relaunch if you opt in. Draft retention is independent from correction history: you can keep neither, either, or both under **Settings → Privacy & Local Data**, using **Fix & Send drafts** and **Correction history**. When history is enabled, successful standalone and target-bound corrections are retained; **History** lets you search and filter them, inspect their diffs, reuse an input, or delete entries. Reopening an original from History always starts a standalone Fix & Send review; it never targets the app that received the earlier correction.
 
 ### Look up a word
 
-Type a word or short phrase and press **Look Up** (`⌘D`). It works in either direction — Korean or English in, and you get all four back: the English term, the Korean term, the meaning in plain English, and an example sentence. There is no language to pick; Bex works out which side you typed.
+In standalone Fix & Send, enter a word or short phrase and choose **Look Up**. It works in either direction — Korean or English in, and you get all four back: the English term, the Korean term, the meaning in plain English, and an example sentence. There is no language to pick; Bex works out which side you typed.
 
 **Save to Study** adds the word to your Study deck as a fill-in-the-blank card that asks you to produce the English term. Saving is a deliberate step: looking a word up is not the same as wanting to memorize it, and the deck has no delete. Saved words never count toward the grammar statistics in the Learning window — a word you chose to learn is not a mistake you made.
 
 The Bex menu opens the management windows only when needed:
 
-- **History** — search and filter prior checks, inspect their diffs, reuse an input, or delete entries
-- **Learning** — once enough Prompt Gate corrections have accumulated, review the recurring grammar patterns Bex has noticed in your own writing, and the alternative phrasings it offered. Bex deliberately does not rank those alternatives; choosing one with **I'd use this** records your pick and turns it into a Study card. The menu-bar badge counts alternatives you have not chosen from yet, so it can reach zero
-- **Study** — spaced-repetition drills built from your own past Prompt Gate corrections (a "Fixed: 'a' → 'the'" becomes a fill-in-the-blank card). Cards you get right come back less often, cards you miss come back tomorrow — the same idea as a Leitner flashcard box, sized for one person's own mistakes rather than a shared deck
-- **Profiles** — a profile is a saved writing-context prompt (tone, audience, house style) that Quick Check applies automatically while active; you can maintain profiles by hand or generate one with an AI wizard
-- **Settings** — choose providers, models, and reasoning effort (see [Providers](#providers)), manage credentials, validate Ollama, and select system, light, or dark appearance
+- **History** — manage the corrections you chose to retain and reopen an original in standalone Fix & Send
+- **Learning** — once enough Fix & Send corrections have accumulated, review the recurring grammar patterns Bex has noticed in your own writing, and the alternative phrasings it offered. Bex deliberately does not rank those alternatives; choosing one with **I'd use this** records your pick and turns it into a Study card. The menu-bar badge counts alternatives you have not chosen from yet, so it can reach zero
+- **Study** — spaced-repetition drills built from your own past corrections (a "Fixed: 'a' → 'the'" becomes a fill-in-the-blank card). Cards you get right come back less often, cards you miss come back tomorrow — the same idea as a Leitner flashcard box, sized for one person's own mistakes rather than a shared deck
+- **Writing Style** — save the tone, audience, or house-style context that Fix & Send should apply while that style is active; maintain styles by hand or generate one with the AI wizard
+- **Settings** — choose providers, models, and reasoning effort (see [Providers](#providers)), manage credentials and retention choices, validate Ollama, and select system, light, or dark appearance
 
 Study and Learning share one menu-bar badge: whenever any Study cards are due, the badge shows that count (it is the more time-sensitive of the two); otherwise it falls back to the Learning count when there is new material to review. Bex also asks, once, for permission to send a daily notification reminding you how many Study cards are due — tapping it opens the drill directly. This permission is optional: if you decline or later revoke it in **System Settings → Notifications**, the reminder simply never appears, but the badge and the Study window keep working exactly the same.
 
 ### Troubleshooting
 
 - **No icon in the menu bar:** the bar may be full. Check the overflow area (`⌘`-drag icons) or a menu-bar manager like Bartender/Ice.
-- **`⌘⇧G` does nothing:** macOS or another app may have claimed the shortcut. Choose a different one under **Settings → General → Shortcuts**.
+- **`⇧⌘P` does nothing:** macOS or another app may have claimed the shortcut. Choose a different one under **Settings → General → Shortcuts**.
 - **Credential rejected or empty model list:** re-check the key in **Settings**, and for Ollama confirm the local URL is reachable and a model is pulled.
 
 ## Providers
@@ -97,19 +97,19 @@ Study and Learning share one menu-bar badge: whenever any Study cards are due, t
 
 Available model lists are fetched on demand from every provider. After a successful refresh, Bex uses only models reported by that account or Ollama installation; if a saved model is no longer available, Bex selects the current default when possible, then the first available model.
 
-Small local models may be unable to reproduce protected tokens exactly. Prompt Gate then refuses delivery; select a more capable Ollama model and retry.
+Small local models may be unable to reproduce protected tokens exactly. Fix & Send then refuses delivery; select a more capable Ollama model and retry.
 
 OpenAI Codex adds a **Fast responses** toggle beside the model and effort pickers, which asks OpenAI for its priority service tier. Measured on real corrections it answered about 1.6 seconds sooner, and 3 seconds sooner on the slowest checks, with no change to what Bex corrects. **It is on by default**, because answering while you are still typing is the point of Bex — but OpenAI bills it as increased usage against your ChatGPT account, so turn it off if your quota is tight.
 
 Reasoning-capable providers use the Settings **effort** control (reasoning depth). Medium is the default everywhere except OpenAI Codex, which defaults to Low: on a real-corpus evaluation `gpt-5.6-terra` at Low matched every higher effort setting on correction quality while answering fastest, so the extra reasoning bought nothing. OpenAI sends medium reasoning effort, current Claude models use adaptive thinking with medium effort, Gemini 3 uses medium thinking without sampling overrides, supported legacy Claude and Gemini models use token budgets, and Ollama enables `think` for supported local thinking models unless effort is Low.
 
-## Prompt Gate
+## Fix & Send
 
-Prompt Gate corrects an English prompt while leaving protected technical text untouched. It shows you the full before/after diff and delivers only the correction you explicitly approve.
+Fix & Send corrects English while leaving protected technical text untouched. It shows you the full before/after diff and delivers only the correction you explicitly approve.
 
 ### Focused app flow
 
-1. Focus the original text in its destination app and press `⌘⇧P`.
+1. Focus the original text in its destination app and press `⇧⌘P`.
 2. If macOS asks, grant Bex Accessibility access. Review the target and provider disclosure, then continue.
 3. Review every change. You can edit the correction; Bex recomputes the diff before approval.
 4. Choose **Send Corrected**, **Paste Corrected**, or **Copy** (see the table below). Bex never sends the original.
@@ -119,14 +119,14 @@ Delivery depends on the captured target:
 | Target | How you provide the text | Delivery after approval |
 | --- | --- | --- |
 | Standard, editable macOS text field or text area | Bex captures and later revalidates the exact field | **Send Corrected** replaces the field with the correction. With **Send after approval** enabled, Bex presses Return only after confirming the field still holds the exact correction. |
-| Browser, terminal, rich composer, or unsupported field | Type or paste the original into Bex | **Paste Corrected** pastes the correction; you press Return in the destination. |
+| Browser, terminal, rich composer, unsupported field, or empty field | Type or paste the original into Bex's standalone composer | **Copy** places the correction on the clipboard; paste it into the destination manually. |
 | Accessibility unavailable or target cannot be revalidated | Type or paste the original into Bex | **Copy** places the correction on the clipboard for manual replacement. |
 
-Before correction, Bex masks technical-looking spans: fenced and inline code, templates (`${…}`, `{{…}}`), tags (`<…>`), URLs, paths, command flags, variables (`$VAR`), and mentions (`@name`). Every masked token must reappear exactly once, in order, in the correction; if any is missing, duplicated, or reordered, Prompt Gate refuses delivery.
+Before correction, Bex masks technical-looking spans: fenced and inline code, templates (`${…}`, `{{…}}`), tags (`<…>`), URLs, paths, command flags, variables (`$VAR`), and mentions (`@name`). Every masked token must reappear exactly once, in order, in the correction; if any is missing, duplicated, or reordered, Fix & Send refuses delivery.
 
-## Prompt Gate integrations
+## Fix & Send integrations
 
-Integrations are optional and only relevant if you use one of these terminal AI clients (Oh My Pi, abbreviated OMP, is one such client). The focused-app `⌘⇧P` flow works without any of them.
+Integrations are optional and only relevant if you use one of these terminal AI clients (Oh My Pi, abbreviated OMP, is one such client). The focused-app `⇧⌘P` flow works without any of them.
 
 > **Security note:** Claude Code and Codex own their hook runtimes and can fail open if they terminate the helper or exceed its ~one-hour timeout, so those two integrations are a review aid rather than a security boundary. OMP's `prompt-gate-v1` path fails closed.
 
@@ -144,9 +144,9 @@ The three clients differ only in setup and delivery:
 | --- | --- | --- | --- |
 | Claude Code | None — `/hooks` is inspection-only | Bex pastes → focus the composer and press Return; or Bex copies → replace the retained original with the correction, then press Return | May fail open |
 | Codex | Open `/hooks` and trust the Bex handler | Same as Claude Code | May fail open |
-| OMP | None — uses the reviewed native prompt gate, no marketplace extension | Bex resubmits the correction once through the native gate | Fails closed |
+| OMP | None — uses the reviewed native `prompt-gate-v1` protocol, no marketplace extension | Bex resubmits the correction once through the native gate | Fails closed |
 
-After you accept a provider’s first disclosure, Bex sends installed-hook payloads directly to that configured correction provider by default. To review every masked hook payload before it leaves the Mac, turn on **Settings → Integrations → Confirm each hook payload before sending**. Ambiguous manual focused-app captures remain gated.
+After you accept a provider’s first disclosure, Bex sends installed-hook payloads directly to that configured correction provider by default. To review every masked hook payload before it leaves the Mac, turn on **Settings → Integrations → Confirm each hook payload before sending**.
 
 Bex resolves these exact host-owned targets:
 
@@ -162,11 +162,11 @@ OMP upstream tracking: [can1357/oh-my-pi#7989](https://github.com/can1357/oh-my-
 
 Bex preserves unrelated JSON and file permissions. **Uninstall** removes only Bex-owned artifacts. Drift produces **Update available** or **Needs repair**, never an automatic overwrite; the signed helper is replaced only through an explicit reviewed Update or Repair.
 
-The integration blocks the first prompt before the client model receives it and opens Prompt Gate. After approval:
+The integration blocks the first prompt before the client model receives it and opens Fix & Send. After approval:
 
 - OMP stages the corrected text, acknowledges the exact delivery token, and resubmits it once through the native gate. The matching single-use receipt allows only that exact corrected replay.
 - For Claude Code or Codex, deliver as shown in the table above.
-- Never submit or manually replay the original after cancellation or an error. Remove any original retained by the host, resolve the reported problem, and retry through Prompt Gate.
+- Never submit or manually replay the original after cancellation or an error. Remove any original retained by the host, resolve the reported problem, and retry through Fix & Send.
 
 If a prompt is blocked with a helper or IPC error, keep Bex running, repair the integration if offered, and retry. OMP's `prompt-gate-v1` path blocks on malformed output, timeout, cancellation, helper failure, acknowledgment failure, or replay mismatch, and Bex returns a valid blocking response for every recoverable helper, IPC, correction, cancellation, and delivery failure. **Never bypass a block by submitting the original text.**
 
@@ -182,23 +182,23 @@ If a prompt is blocked with a helper or IPC error, keep Bex running, repair the 
 
 ## Data and credentials
 
-API keys and the OpenAI Codex session are stored in macOS Keychain. Profiles and correction history stay on the Mac at:
+API keys and the OpenAI Codex session are stored in macOS Keychain. Writing Styles and optional correction history stay on the Mac at:
 
 ```text
 ~/Library/Application Support/Bex/data.json
 ```
 
-Bex keeps at most 500 Quick Check history entries and writes its data atomically. Prompt Gate reviews are not added to that history. For Prompt Gate, cloud correction sends the prompt prose—with recognized technical spans replaced by placeholders—directly to the selected provider; Quick Check sends the text as entered. Ollama processes requests at the configured local URL.
+When correction history is enabled, Bex keeps at most 500 entries and writes its data atomically. Cloud Fix & Send correction sends the prompt prose—with recognized technical spans replaced by placeholders—directly to the selected provider. Ollama processes requests at the configured local URL.
 
 Masking is best-effort and covers only recognized spans. Unrecognized sensitive text in ordinary prose—secrets, personal data, or tokens that match no known pattern—is sent to the provider as written. When Bex delivers a correction by copying it, the corrected text stays on the system clipboard, where other apps and Universal Clipboard can read it until it is replaced.
 
-Prompt Gate receipts at `~/Library/Application Support/Bex/PromptGate/receipts` bind the exact text, client, integration, and session, and contain a SHA-256 digest and routing metadata, not prompt text. They are mode `0600`, are consumed once, and expire after two minutes; cancellation and delivery failure revoke them. The local IPC (inter-process communication) rendezvous and integration heartbeat files live under `~/Library/Application Support/Bex/PromptGate`.
+Fix & Send receipts at `~/Library/Application Support/Bex/PromptGate/receipts` bind the exact text, client, integration, and session, and contain a SHA-256 digest and routing metadata, not prompt text. They are mode `0600`, are consumed once, and expire after two minutes; cancellation and delivery failure revoke them. The local IPC (inter-process communication) rendezvous and integration heartbeat files live under `~/Library/Application Support/Bex/PromptGate`.
 
-Prompt Gate corrections you approve are also appended to a local learning log at `~/Library/Application Support/Bex/LearningLog/learning-log.jsonl` (directory `0700`, file `0600`). Unlike receipts, this log stores the full prompt prose you wrote—the original text, the correction, and the explanation—in cleartext, including technical spans that are masked before being sent to a provider. It is append-only, owner-only, and never leaves the Mac. It is not part of Quick Check history. Deleting `~/Library/Application Support/Bex` removes it (see [Uninstall](#uninstall)).
+Fix & Send corrections you approve are also appended to a local learning log at `~/Library/Application Support/Bex/LearningLog/learning-log.jsonl` (directory `0700`, file `0600`). Unlike receipts, this log stores the full prompt prose you wrote—the original text, the correction, and the explanation—in cleartext, including technical spans that are masked before being sent to a provider. It is append-only, owner-only, and never leaves the Mac. It is separate from optional correction history. Deleting `~/Library/Application Support/Bex` removes it (see [Uninstall](#uninstall)).
 
 Two smaller files sit beside that log, same directory, same `0600` mode, and never leave the Mac. `consider-taps.json` records the alternative phrasings you chose with **I'd use this**, and stores the surrounding text they were suggested for, so it contains prompt prose like the log does. `writer-level.json` holds a short profile of your English — what you reliably get right and what you still miss — that Bex recomputes in the background from the log and passes to the corrector so it can tell a typo from a real gap. Deleting either one only costs you the Study cards or the profile; nothing else breaks.
 
-Prompt Gate installs its immutable signed helper at `~/Library/Application Support/Bex/bin/<sha256>/bex-hook`. Legacy shared-helper installations remain removable and migrate only through an explicit reviewed Update or Repair.
+Fix & Send installs its immutable signed helper at `~/Library/Application Support/Bex/bin/<sha256>/bex-hook`. Legacy shared-helper installations remain removable and migrate only through an explicit reviewed Update or Repair.
 
 ## Uninstall
 
@@ -247,7 +247,7 @@ The resulting app is at `build/DerivedData.noindex/Build/Products/Release/Bex.ap
 ```text
 Bex/           Native application source and resources
 BexHook/       Signed helper binary for the Claude Code/Codex/OMP hooks
-BexHookShared/ Prompt Gate receipt store and IPC shared by app and helper
+BexHookShared/ Fix & Send receipt store and IPC shared by app and helper
 BexTests/      Provider, parser, diff, storage, and view-model tests
 BexUITests/    End-to-end native UI tests
 Config/        Application and distribution property lists

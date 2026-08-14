@@ -13,8 +13,8 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertEqual(draftChoice, .undecided)
     XCTAssertEqual(historyChoice, .undecided)
 
-    await preferences.setQuickDraft("must not persist")
-    let draft = await preferences.quickDraft()
+    await preferences.setSavedDraft("must not persist")
+    let draft = await preferences.savedDraft()
     XCTAssertEqual(draft, "")
   }
 
@@ -162,21 +162,21 @@ final class PreferencesContractTests: XCTestCase {
 
     let preferences = fixture.store
     await preferences.setDraftRetentionChoice(.enabled)
-    await preferences.setQuickDraft("saved draft")
-    let savedDraft = await preferences.quickDraft()
+    await preferences.setSavedDraft("saved draft")
+    let savedDraft = await preferences.savedDraft()
     XCTAssertEqual(savedDraft, "saved draft")
 
     await preferences.setDraftRetentionChoice(.disabled)
-    await preferences.setQuickDraft("ignored replacement")
-    let disabledDraft = await preferences.quickDraft()
+    await preferences.setSavedDraft("ignored replacement")
+    let disabledDraft = await preferences.savedDraft()
     XCTAssertEqual(disabledDraft, "")
 
     await preferences.setDraftRetentionChoice(.enabled)
-    let restoredDraft = await preferences.quickDraft()
+    let restoredDraft = await preferences.savedDraft()
     XCTAssertEqual(restoredDraft, "saved draft")
 
-    await preferences.deleteSavedQuickDraft()
-    let deletedDraft = await preferences.quickDraft()
+    await preferences.deleteSavedDraft()
+    let deletedDraft = await preferences.savedDraft()
     XCTAssertEqual(deletedDraft, "")
   }
 
@@ -222,17 +222,12 @@ final class PreferencesContractTests: XCTestCase {
 
   func testOutboundConfirmationMatrixKeepsDisclosureAndOptInGates() {
     XCTAssertFalse(
-      OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
+      OutboundConfirmationContext.standaloneFixAndSend.requiresConfirmation(
         hasAcceptedDisclosure: true
       )
     )
     XCTAssertFalse(
       OutboundConfirmationContext.manualCapturedField.requiresConfirmation(
-        hasAcceptedDisclosure: true
-      )
-    )
-    XCTAssertTrue(
-      OutboundConfirmationContext.ambiguousManual.requiresConfirmation(
         hasAcceptedDisclosure: true
       )
     )
@@ -260,7 +255,7 @@ final class PreferencesContractTests: XCTestCase {
       )
     )
     XCTAssertTrue(
-      OutboundConfirmationContext.quickCheckExternal.requiresConfirmation(
+      OutboundConfirmationContext.standaloneFixAndSend.requiresConfirmation(
         hasAcceptedDisclosure: false
       )
     )
@@ -322,25 +317,89 @@ final class PreferencesContractTests: XCTestCase {
     XCTAssertEqual(reloaded, viewedAt)
   }
 
-  func testKeyChordsDefaultAndPersistIndependently() async {
+  func testLegacyDraftAndRetentionChoicesMigrateWithoutOverwritingCurrentValues() async {
+    let suiteName = "PreferencesMigrationTests-\(UUID().uuidString)"
+    guard let defaults = UserDefaults(suiteName: suiteName) else {
+      XCTFail("Could not create isolated defaults")
+      return
+    }
+    defaults.removePersistentDomain(forName: suiteName)
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    defaults.set("legacy draft", forKey: "quickDraft")
+    defaults.set(RetentionChoice.enabled.rawValue, forKey: "storage.quickDraft.choice")
+    defaults.set(RetentionChoice.enabled.rawValue, forKey: "storage.history.choice")
+
+    let migrated = PreferencesStore(defaults: UserDefaults(suiteName: suiteName)!)
+    let migratedDraft = await migrated.savedDraft()
+    let migratedDraftChoice = await migrated.draftRetentionChoice()
+    let migratedHistoryChoice = await migrated.historyRetentionChoice()
+    XCTAssertEqual(migratedDraft, "legacy draft")
+    XCTAssertEqual(migratedDraftChoice, .enabled)
+    XCTAssertEqual(migratedHistoryChoice, .undecided)
+    let migratedDefaults = UserDefaults(suiteName: suiteName)!
+    XCTAssertNil(migratedDefaults.object(forKey: "quickDraft"))
+    XCTAssertNil(migratedDefaults.object(forKey: "storage.quickDraft.choice"))
+    XCTAssertNil(migratedDefaults.object(forKey: "storage.history.choice"))
+    let disabledSuiteName = "PreferencesDisabledMigrationTests-\(UUID().uuidString)"
+    guard let disabledDefaults = UserDefaults(suiteName: disabledSuiteName) else {
+      XCTFail("Could not create isolated disabled defaults")
+      return
+    }
+    disabledDefaults.removePersistentDomain(forName: disabledSuiteName)
+    defer { disabledDefaults.removePersistentDomain(forName: disabledSuiteName) }
+    disabledDefaults.set(
+      RetentionChoice.disabled.rawValue,
+      forKey: "storage.history.choice"
+    )
+    let disabled = PreferencesStore(defaults: UserDefaults(suiteName: disabledSuiteName)!)
+    let disabledHistoryChoice = await disabled.historyRetentionChoice()
+    XCTAssertEqual(disabledHistoryChoice, .disabled)
+    let migratedDisabledDefaults = UserDefaults(suiteName: disabledSuiteName)!
+    XCTAssertNil(migratedDisabledDefaults.object(forKey: "storage.history.choice"))
+
+    let currentSuiteName = "PreferencesCurrentMigrationTests-\(UUID().uuidString)"
+    guard let currentSeed = UserDefaults(suiteName: currentSuiteName) else {
+      XCTFail("Could not create isolated current defaults")
+      return
+    }
+    currentSeed.removePersistentDomain(forName: currentSuiteName)
+    defer { UserDefaults.standard.removePersistentDomain(forName: currentSuiteName) }
+    currentSeed.set("current draft", forKey: "fixAndSend.savedDraft")
+    currentSeed.set(
+      RetentionChoice.enabled.rawValue,
+      forKey: "storage.fixAndSendDraft.choice"
+    )
+    currentSeed.set(
+      RetentionChoice.enabled.rawValue,
+      forKey: "storage.correctionHistory.choice"
+    )
+    currentSeed.set("stale legacy draft", forKey: "quickDraft")
+    currentSeed.set(RetentionChoice.disabled.rawValue, forKey: "storage.quickDraft.choice")
+    currentSeed.set(RetentionChoice.disabled.rawValue, forKey: "storage.history.choice")
+
+    let current = PreferencesStore(defaults: currentSeed)
+    let currentDraft = await current.savedDraft()
+    let currentDraftChoice = await current.draftRetentionChoice()
+    let currentHistoryChoice = await current.historyRetentionChoice()
+    XCTAssertEqual(currentDraft, "current draft")
+    XCTAssertEqual(currentDraftChoice, .enabled)
+    XCTAssertEqual(currentHistoryChoice, .enabled)
+  }
+
+  func testFixAndSendKeyChordDefaultsAndPersists() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }
 
     let preferences = fixture.store
-    let defaultQuickCheck = await preferences.quickCheckKeyChord()
     let defaultFixAndSend = await preferences.fixAndSendKeyChord()
-    XCTAssertEqual(defaultQuickCheck, .defaultQuickCheck)
     XCTAssertEqual(defaultFixAndSend, .defaultFixAndSend)
 
-    let quickCheck = KeyChord(keyCode: 12, modifiers: 768)
     let fixAndSend = KeyChord(keyCode: 13, modifiers: 1_024)
-    await preferences.setQuickCheckKeyChord(quickCheck)
     await preferences.setFixAndSendKeyChord(fixAndSend)
 
     let reloaded = fixture.reloadedStore()
-    let reloadedQuickCheck = await reloaded.quickCheckKeyChord()
     let reloadedFixAndSend = await reloaded.fixAndSendKeyChord()
-    XCTAssertEqual(reloadedQuickCheck, quickCheck)
     XCTAssertEqual(reloadedFixAndSend, fixAndSend)
   }
 }

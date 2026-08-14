@@ -60,12 +60,12 @@ struct HistoryView: View {
 
         Menu {
           if let entry = selectedEntry {
-            Button("Use Original as Input") {
+            Button("Open Original in Fix & Send") {
               viewModel.useOriginalAsInput(entry)
             }
             .keyboardShortcut("o", modifiers: [.command, .shift])
 
-            Button("Use Corrected as Input") {
+            Button("Open Correction in Fix & Send") {
               viewModel.useCorrectedAsInput(entry)
             }
             .keyboardShortcut("c", modifiers: [.command, .shift])
@@ -148,10 +148,10 @@ struct HistoryView: View {
       }
       .contextMenu(forSelectionType: UUID.self) { selectedIDs in
         if let entry = selectedEntry(in: selectedIDs) {
-          Button("Use Original as Input") {
+          Button("Open Original in Fix & Send") {
             viewModel.useOriginalAsInput(entry)
           }
-          Button("Use Corrected as Input") {
+          Button("Open Correction in Fix & Send") {
             viewModel.useCorrectedAsInput(entry)
           }
         }
@@ -175,14 +175,14 @@ struct HistoryView: View {
         .multilineTextAlignment(.center)
       Button(state.actionTitle) {
         if viewModel.contentState == .empty {
-          viewModel.openQuickCheck()
+          viewModel.openFixAndSend()
         } else {
           viewModel.clearFilters()
         }
       }
       .accessibilityIdentifier(
         viewModel.contentState == .empty
-          ? "history-open-quick-check"
+          ? "history-open-fix-and-send"
           : "history-clear-filters"
       )
     }
@@ -240,11 +240,11 @@ struct HistoryView: View {
       detailSection(title: "Explanation", text: entry.explanation)
 
       HStack {
-        Button("Use Original as Input") {
+        Button("Open Original in Fix & Send") {
           viewModel.useOriginalAsInput(entry)
         }
         .accessibilityIdentifier("history-use-original-\(entry.id.uuidString)")
-        Button("Use Corrected as Input") {
+        Button("Open Correction in Fix & Send") {
           viewModel.useCorrectedAsInput(entry)
         }
         .accessibilityIdentifier("history-use-input-\(entry.id.uuidString)")

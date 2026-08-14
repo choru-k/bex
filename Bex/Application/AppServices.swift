@@ -18,7 +18,6 @@ final class AppServices {
   let hookManager: any HookInstallationManaging
   let promptGateIPC: any PromptGateIPCServicing & HookReviewResponding
   let codexOAuth: CodexOAuthService
-  let autoDismissQuickCheck: Bool
 
   init(
     preferences: PreferencesStore,
@@ -36,8 +35,7 @@ final class AppServices {
     approvalStore: PromptApprovalStore,
     hookManager: any HookInstallationManaging,
     promptGateIPC: any PromptGateIPCServicing & HookReviewResponding,
-    codexOAuth: CodexOAuthService,
-    autoDismissQuickCheck: Bool = true
+    codexOAuth: CodexOAuthService
   ) {
     self.preferences = preferences
     self.keychain = keychain
@@ -55,7 +53,6 @@ final class AppServices {
     self.hookManager = hookManager
     self.promptGateIPC = promptGateIPC
     self.codexOAuth = codexOAuth
-    self.autoDismissQuickCheck = autoDismissQuickCheck
   }
 
   static func production() -> AppServices {

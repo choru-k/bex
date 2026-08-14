@@ -8,10 +8,6 @@ import XCTest
 @MainActor
 final class SettingsNavigationTests: XCTestCase {
   func testApplicationMenuKeepsTaskFallbacksAndNativeCommands() throws {
-    let quickCheckChord = KeyChord(
-      keyCode: UInt32(kVK_ANSI_K),
-      modifiers: UInt32(cmdKey | optionKey)
-    )
     let fixAndSendChord = KeyChord(
       keyCode: UInt32(kVK_ANSI_J),
       modifiers: UInt32(controlKey | shiftKey)
@@ -20,7 +16,6 @@ final class SettingsNavigationTests: XCTestCase {
     let menuTarget = MenuTargetProbe()
     let mainMenu = AppDelegate.makeMainMenu(
       target: menuTarget,
-      quickCheckChord: quickCheckChord,
       fixAndSendChord: fixAndSendChord
     )
 
@@ -30,10 +25,10 @@ final class SettingsNavigationTests: XCTestCase {
     let toolsMenu = mainMenu.item(withTitle: "Tools")?.submenu
     XCTAssertEqual(
       toolsMenu?.items.map(\.title),
-      ["Quick Check", "Fix & Send…", "", "Learn", "History", "Writing Styles"]
+      ["Fix & Send…", "", "Learn", "History", "Writing Styles"]
     )
     let fixAndSendItem = try XCTUnwrap(toolsMenu?.item(withTitle: "Fix & Send…"))
-    XCTAssertEqual(fixAndSendItem.action, NSSelectorFromString("openPromptGate"))
+    XCTAssertEqual(fixAndSendItem.action, NSSelectorFromString("openStandaloneFixAndSend"))
     XCTAssertTrue(NSApp.sendAction(fixAndSendItem.action!, to: fixAndSendItem.target, from: nil))
     XCTAssertEqual(menuTarget.fixAndSendInvocations, 1)
     XCTAssertNil(toolsMenu?.item(withTitle: "Profiles"))
@@ -70,34 +65,21 @@ final class SettingsNavigationTests: XCTestCase {
         windowMenu?.item(withTitle: expected), "Missing standard Window command: \(expected)")
     }
 
-    XCTAssertEqual(shortcutItem(.quickCheck, in: mainMenu)?.keyEquivalent, "k")
     XCTAssertEqual(shortcutItem(.fixAndSend, in: mainMenu)?.keyEquivalent, "j")
   }
 
-  /// The hub shows one conflict line, so both failures have to fit in it — reporting them
-  /// one at a time would mean the second silently replaced the first.
-  func testHotKeyConflictMessageNamesEveryShortcutThatFailed() {
+  func testHotKeyConflictMessageNamesFixAndSendFailure() {
     XCTAssertNil(AppDelegate.hotKeyConflictMessage(for: []))
     XCTAssertEqual(
       AppDelegate.hotKeyConflictMessage(for: [.fixAndSend]),
       "Fix & Send shortcut could not be registered. The command remains available here and "
         + "in the Bex menu."
     )
-    XCTAssertEqual(
-      AppDelegate.hotKeyConflictMessage(for: [.quickCheck, .fixAndSend]),
-      "Quick Check and Fix & Send shortcuts could not be registered. The commands remain "
-        + "available here and in the Bex menu."
-    )
   }
 
-  func testShortcutEditingRejectsDuplicatesAndOSConflictsWithoutChangingPersistence() async {
+  func testShortcutEditingRejectsOSConflictWithoutChangingPersistence() async {
     let fixture = SettingsFixture()
     defer { fixture.remove() }
-    let persistedQuickCheck = KeyChord(
-      keyCode: UInt32(kVK_ANSI_U),
-      modifiers: UInt32(cmdKey | shiftKey)
-    )
-    await fixture.preferences.setQuickCheckKeyChord(persistedQuickCheck)
 
     let shortcutProbe = ShortcutUpdateProbe()
     let viewModel = fixture.makeViewModel { shortcut, chord in
@@ -105,21 +87,7 @@ final class SettingsNavigationTests: XCTestCase {
     }
     await viewModel.load()
 
-    XCTAssertEqual(viewModel.quickCheckKeyChord, persistedQuickCheck)
     XCTAssertEqual(viewModel.fixAndSendKeyChord, KeyChord.defaultFixAndSend)
-
-    XCTAssertEqual(
-      viewModel.updateKeyChord(KeyChord.defaultFixAndSend, for: BexShortcut.quickCheck),
-      .rejected
-    )
-    XCTAssertTrue(shortcutProbe.attemptedUpdates.isEmpty)
-    XCTAssertEqual(
-      viewModel.shortcutError(for: BexShortcut.quickCheck),
-      "That shortcut is already assigned to another Bex command."
-    )
-    XCTAssertEqual(viewModel.quickCheckKeyChord, persistedQuickCheck)
-    let persistedAfterDuplicate = await fixture.preferences.quickCheckKeyChord()
-    XCTAssertEqual(persistedAfterDuplicate, persistedQuickCheck)
 
     let osConflict = KeyChord(
       keyCode: UInt32(kVK_ANSI_I),
@@ -127,17 +95,17 @@ final class SettingsNavigationTests: XCTestCase {
     )
     shortcutProbe.failingChord = osConflict
     XCTAssertEqual(
-      viewModel.updateKeyChord(osConflict, for: BexShortcut.quickCheck),
+      viewModel.updateKeyChord(osConflict, for: BexShortcut.fixAndSend),
       .rejected
     )
     XCTAssertEqual(shortcutProbe.attemptedUpdates.map(\.1), [osConflict])
     XCTAssertEqual(
-      viewModel.shortcutError(for: BexShortcut.quickCheck),
+      viewModel.shortcutError(for: BexShortcut.fixAndSend),
       "macOS or another app is already using that shortcut."
     )
-    XCTAssertEqual(viewModel.quickCheckKeyChord, persistedQuickCheck)
-    let persistedAfterConflict = await fixture.preferences.quickCheckKeyChord()
-    XCTAssertEqual(persistedAfterConflict, persistedQuickCheck)
+    XCTAssertEqual(viewModel.fixAndSendKeyChord, KeyChord.defaultFixAndSend)
+    let persistedAfterConflict = await fixture.preferences.fixAndSendKeyChord()
+    XCTAssertEqual(persistedAfterConflict, KeyChord.defaultFixAndSend)
 
     let replacement = KeyChord(
       keyCode: UInt32(kVK_ANSI_L),
@@ -145,13 +113,13 @@ final class SettingsNavigationTests: XCTestCase {
     )
     shortcutProbe.failingChord = nil
     XCTAssertEqual(
-      viewModel.updateKeyChord(replacement, for: BexShortcut.quickCheck),
+      viewModel.updateKeyChord(replacement, for: BexShortcut.fixAndSend),
       .accepted
     )
     await viewModel.waitForCurrentWork()
-    XCTAssertEqual(viewModel.quickCheckKeyChord, replacement)
-    XCTAssertNil(viewModel.shortcutError(for: BexShortcut.quickCheck))
-    let persistedAfterSuccess = await fixture.preferences.quickCheckKeyChord()
+    XCTAssertEqual(viewModel.fixAndSendKeyChord, replacement)
+    XCTAssertNil(viewModel.shortcutError(for: BexShortcut.fixAndSend))
+    let persistedAfterSuccess = await fixture.preferences.fixAndSendKeyChord()
     XCTAssertEqual(persistedAfterSuccess, replacement)
   }
 
@@ -187,11 +155,13 @@ final class SettingsNavigationTests: XCTestCase {
     XCTAssertFalse(viewModel.isClearingHistory)
     XCTAssertNil(viewModel.userVisibleError)
     let draftDisclosure = SettingsViewModel.draftRetentionDisclosure
-    let historyDisclosure = SettingsViewModel.historyRetentionDisclosure
+    XCTAssertTrue(draftDisclosure.contains("standalone Fix & Send draft"))
+    XCTAssertTrue(draftDisclosure.contains("restored after Bex relaunches"))
     XCTAssertTrue(draftDisclosure.contains("never block correction"))
+    let historyDisclosure = SettingsViewModel.historyRetentionDisclosure
     for requiredDetail in [
-      "original", "correction", "explanation", "provider", "model", "Writing Style name",
-      "timestamp", "at most 500 entries", "Fix & Send is not stored",
+      "standalone and target-bound Fix & Send flows", "original", "correction", "explanation",
+      "provider", "model", "Writing Style name", "timestamp", "at most 500 entries",
     ] {
       XCTAssertTrue(
         historyDisclosure.contains(requiredDetail),
@@ -256,7 +226,7 @@ final class SettingsNavigationTests: XCTestCase {
     XCTAssertTrue(viewModel.accessibilityStatusMessage?.contains("Invoke Fix & Send again") == true)
   }
 
-  func testSelectedProviderConnectionIsTaskFirstAndRoutesToItsOrigin() async throws {
+  func testSelectedProviderConnectionRoutesBackToFixAndSendTarget() async throws {
     let fixture = SettingsFixture()
     defer { fixture.remove() }
     await fixture.preferences.setSelectedProvider(.claude)
@@ -264,33 +234,19 @@ final class SettingsNavigationTests: XCTestCase {
 
     var routeIntents: [SettingsRouteIntent] = []
     let viewModel = fixture.makeViewModel(
-      setupOrigin: .quickCheck,
+      setupOrigin: .fixAndSend,
       connectionSucceeds: true,
       onSetupRoute: { routeIntents.append($0) }
     )
     await viewModel.load()
 
     XCTAssertTrue(viewModel.isSelectedProviderConnected)
-    XCTAssertEqual(viewModel.setupRouteTitle, "Return to Quick Check")
+    XCTAssertEqual(viewModel.setupRouteTitle, "Return to Target and Invoke Fix & Send")
     XCTAssertNil(viewModel.modelFetchError)
     XCTAssertTrue(viewModel.hookStatuses.values.allSatisfy { $0 == .unavailable("Offline") })
 
     await viewModel.requestSetupRoute()
-    XCTAssertEqual(routeIntents, [.returnToQuickCheck])
-
-    var fixAndSendRoutes: [SettingsRouteIntent] = []
-    let fixAndSendViewModel = fixture.makeViewModel(
-      setupOrigin: .fixAndSend,
-      connectionSucceeds: true,
-      onSetupRoute: { fixAndSendRoutes.append($0) }
-    )
-    await fixAndSendViewModel.load()
-    XCTAssertEqual(
-      fixAndSendViewModel.setupRouteTitle,
-      "Return to Target and Invoke Fix & Send"
-    )
-    await fixAndSendViewModel.requestSetupRoute()
-    XCTAssertEqual(fixAndSendRoutes, [.returnToFixAndSendTarget])
+    XCTAssertEqual(routeIntents, [.returnToFixAndSendTarget])
   }
 
   func testProviderDisclosureNamesEachActionPayloadAndOllamaLocation() async {
@@ -307,9 +263,9 @@ final class SettingsNavigationTests: XCTestCase {
       )
     )
     for requiredDetail in [
-      "Quick Check sends the full draft plus any custom Writing Style guidance.",
+      "Standalone Fix & Send sends the full draft plus any custom Writing Style guidance.",
       "Rewrite sends the corrected draft.",
-      "Fix & Send sends the masked prompt; the payload is shown for approval whenever confirmation is required.",
+      "Target-bound Fix & Send sends the masked prompt; the payload is shown for approval whenever confirmation is required.",
       "Writing Style generation sends the labeled context fields you fill in: Role, Audience,"
         + " Tone, Formality, Domain, and Additional notes.",
     ] {
@@ -353,7 +309,8 @@ final class SettingsNavigationTests: XCTestCase {
     let miseDataDirectory = root.appendingPathComponent("mise", isDirectory: true)
 
     func makeExecutable(version: String) throws -> URL {
-      let executable = miseDataDirectory
+      let executable =
+        miseDataDirectory
         .appendingPathComponent(
           "installs/npm-oh-my-pi-pi-coding-agent/\(version)/node_modules/.bin/omp"
         )
@@ -371,7 +328,8 @@ final class SettingsNavigationTests: XCTestCase {
 
     _ = try makeExecutable(version: "17.2.9")
     let newest = try makeExecutable(version: "17.10.0")
-    let symlink = miseDataDirectory
+    let symlink =
+      miseDataDirectory
       .appendingPathComponent(
         "installs/npm-oh-my-pi-pi-coding-agent/99.0.0/node_modules/.bin/omp"
       )
@@ -456,7 +414,7 @@ final class SettingsNavigationTests: XCTestCase {
 private final class MenuTargetProbe: NSObject {
   private(set) var fixAndSendInvocations = 0
 
-  @objc func openPromptGate() {
+  @objc func openStandaloneFixAndSend() {
     fixAndSendInvocations += 1
   }
 }
@@ -577,7 +535,6 @@ private struct SettingsGrammarStub: GrammarServicing {
   ) async throws -> WriterLevelProfile {
     throw BexError.invalidResponse
   }
-
 
   func generateProfile(
     context: ProfileContext,

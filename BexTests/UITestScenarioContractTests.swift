@@ -10,7 +10,6 @@ final class UITestScenarioContractTests: XCTestCase {
         "default",
         "welcome",
         "fresh-consent",
-        "fresh-quick-check",
         "configured-provider",
         "permission-denied",
         "permission-trusted",
@@ -18,7 +17,6 @@ final class UITestScenarioContractTests: XCTestCase {
         "hook-skips-outbound-confirmation",
         "hook-check-in-flight",
         "hotkey-conflict",
-        "quick-check-grammar-in-flight",
         "prompt-delivery-in-flight",
         "delivery-failure-effect",
         "dirty-editor-resume",
@@ -94,18 +92,6 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(consent.preferences.historyRetentionChoice, .undecided)
     XCTAssertEqual(consent.target.source, "A fresh consent UI test draft.")
 
-    let freshQuickCheck = UITestScenario.freshQuickCheck.configuration
-    XCTAssertEqual(freshQuickCheck.preferences.selectedProvider, .claude)
-    XCTAssertEqual(freshQuickCheck.preferences.selectedModel, LLMProvider.claude.defaultModel)
-    XCTAssertEqual(freshQuickCheck.preferences.draftRetentionChoice, .undecided)
-    XCTAssertEqual(freshQuickCheck.preferences.historyRetentionChoice, .undecided)
-    XCTAssertEqual(
-      freshQuickCheck.preferences.activeProfileID,
-      UITestFixtureConfiguration.populatedProfiles.first?.id
-    )
-    XCTAssertEqual(freshQuickCheck.profiles, UITestFixtureConfiguration.populatedProfiles)
-    XCTAssertEqual(freshQuickCheck.launchDestination, .quickCheck)
-
     let configured = UITestScenario.configuredProvider.configuration
     XCTAssertEqual(configured.preferences.selectedProvider, .claude)
     XCTAssertEqual(configured.preferences.selectedModel, LLMProvider.claude.defaultModel)
@@ -113,6 +99,11 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(configured.preferences.acceptedOutboundDisclosureProvider, .claude)
     XCTAssertEqual(configured.credentialProvider, .claude)
 
+    XCTAssertEqual(configured.profiles, UITestFixtureConfiguration.populatedProfiles)
+    XCTAssertEqual(
+      configured.preferences.activeProfileID,
+      UITestFixtureConfiguration.populatedProfiles.first?.id
+    )
     XCTAssertFalse(UITestScenario.permissionDenied.configuration.target.isAccessibilityTrusted)
     XCTAssertFalse(UITestScenario.permissionDenied.configuration.target.requestedAccessibilityTrust)
     XCTAssertTrue(UITestScenario.permissionTrusted.configuration.target.isAccessibilityTrusted)
@@ -135,10 +126,6 @@ final class UITestScenarioContractTests: XCTestCase {
       .conflict
     )
     XCTAssertEqual(
-      UITestScenario.quickCheckGrammarInFlight.configuration.grammarBehavior,
-      .holdFirstCheckThenFailSubsequent
-    )
-    XCTAssertEqual(
       UITestScenario.promptDeliveryInFlight.configuration.target.deliveryGate,
       .untilReleased
     )
@@ -147,10 +134,16 @@ final class UITestScenarioContractTests: XCTestCase {
       UITestScenario.deliveryFailureEffect.configuration.target.deliveryFailureEffect,
       .pastedNotSubmitted
     )
-    XCTAssertTrue(UITestScenario.dirtyEditorResume.configuration.preservesStoredState)
+    let dirtyEditor = UITestScenario.dirtyEditorResume.configuration
+    XCTAssertTrue(dirtyEditor.preservesStoredState)
+    XCTAssertEqual(
+      dirtyEditor.preferences.savedDraft,
+      "A saved UI test draft with unsent changes."
+    )
+    XCTAssertEqual(dirtyEditor.launchDestination, .history)
     XCTAssertTrue(UITestScenario.setupResume.configuration.preservesStoredState)
     XCTAssertEqual(UITestScenario.setupResume.configuration.credentialProvider, nil)
-    XCTAssertEqual(UITestScenario.setupResume.configuration.launchDestination, .setup(.quickCheck))
+    XCTAssertEqual(UITestScenario.setupResume.configuration.launchDestination, .setup(.fixAndSend))
     let integrations = UITestScenario.integrations.configuration
     XCTAssertEqual(integrations.integrations.map(\.id), ["omp-default", "omp-team"])
     XCTAssertEqual(integrations.launchDestination, .settings)
@@ -184,8 +177,8 @@ final class UITestScenarioContractTests: XCTestCase {
       preferences: fixture.preferences,
       data: fixture.data
     )
-    let quickDraft = await fixture.preferences.quickDraft()
-    XCTAssertEqual(quickDraft, "A saved UI test draft with unsent changes.")
+    let savedDraft = await fixture.preferences.savedDraft()
+    XCTAssertEqual(savedDraft, "A saved UI test draft with unsent changes.")
 
     try await UITestScenario.profilesPopulated.configuration.seed(
       preferences: fixture.preferences,
@@ -237,42 +230,6 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertEqual(profiles, [])
     XCTAssertEqual(history, [])
     XCTAssertTrue(services.promptTarget.isAccessibilityTrusted)
-    XCTAssertFalse(services.autoDismissQuickCheck)
-  }
-
-  func testGrammarGateReleasesFirstRequestAndFailsTheNextDeterministically() async throws {
-    let grammar = UITestingGrammarService(behavior: .holdFirstCheckThenFailSubsequent)
-    let destination = try OutboundDestination(
-      provider: .claude,
-      model: LLMProvider.claude.defaultModel
-    )
-    let first = Task {
-      try await grammar.check(
-        text: "this are a test",
-        destination: destination,
-        profilePrompt: nil
-      )
-    }
-    await grammar.releaseCheck()
-    let firstResult = try await first.value
-    XCTAssertEqual(
-      firstResult,
-      GrammarResult(
-        corrected: "this is a test",
-        explanation: "Changed subject-verb agreement."
-      )
-    )
-
-    do {
-      _ = try await grammar.check(
-        text: "this are a test",
-        destination: destination,
-        profilePrompt: nil
-      )
-      XCTFail("Expected the deterministic subsequent-request failure")
-    } catch let error as BexError {
-      XCTAssertEqual(error, .connectionFailure("Forced UI test grammar failure."))
-    }
   }
 
   @MainActor

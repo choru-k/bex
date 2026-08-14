@@ -3,8 +3,8 @@ import XCTest
 
 @testable import Bex
 
-/// Covers v7.1 decision 2 (docs/learning-mode-plan.md): the accumulated level profile that
-/// lets the correction prompt tell a typo from a genuine gap.
+/// Covers the accumulated level profile that lets the correction prompt tell a typo from
+/// a genuine gap.
 final class WriterLevelTests: XCTestCase {
   private static let now = Date(timeIntervalSince1970: 1_800_000_000)
 
@@ -62,7 +62,9 @@ final class WriterLevelTests: XCTestCase {
     let samples = [
       LearningSample(
         date: Self.now, original: "he go store",
-        explanation: "Fixed:\n[verb-tense] \"go\" → \"went\" — past tense.\n\nConsider:\n\"he go\" → \"he headed out\" — livelier."),
+        explanation:
+          "Fixed:\n[verb-tense] \"go\" → \"went\" — past tense.\n\nConsider:\n\"he go\" → \"he headed out\" — livelier."
+      ),
       LearningSample(
         date: Self.now, original: "already perfect",
         explanation: "Consider:\n\"a\" → \"b\" — reason."),
@@ -123,18 +125,18 @@ final class WriterLevelTests: XCTestCase {
   func testWriterLevelIsAppendedToBothPrompts() {
     let summary = "Reliable on articles. Still misses perfect tenses."
 
-    let quickCheck = GrammarPrompts.buildSystemPrompt(
+    let standard = GrammarPrompts.buildSystemPrompt(
       profilePrompt: nil, writerLevel: summary)
-    let promptGate = GrammarPrompts.buildPromptSafeSystem(writerLevel: summary)
+    let promptSafe = GrammarPrompts.buildPromptSafeSystem(writerLevel: summary)
 
-    for prompt in [quickCheck, promptGate] {
+    for prompt in [standard, promptSafe] {
       XCTAssertTrue(prompt.contains(summary))
       // The model must not repeat the profile back at the owner or treat it as a licence
       // to skip a real correction.
       XCTAssertTrue(prompt.contains("never mention it"))
     }
     // The base rules survive injection.
-    XCTAssertTrue(promptGate.contains("BEX_PROTECTED_"))
+    XCTAssertTrue(promptSafe.contains("BEX_PROTECTED_"))
   }
 
   func testAbsentOrBlankWriterLevelLeavesPromptsUnchanged() {
@@ -216,7 +218,8 @@ final class WriterLevelTests: XCTestCase {
     await store.setOwnerNote("Korean-speaking engineer; direct register preferred.")
 
     // A later background pass replaces the computed half.
-    await store.store(Self.profile(daysAgo: 0, sampleCount: 40, summary: "Now reliable on prepositions."))
+    await store.store(
+      Self.profile(daysAgo: 0, sampleCount: 40, summary: "Now reliable on prepositions."))
 
     let stored = await store.current()
     let profile = try XCTUnwrap(stored)

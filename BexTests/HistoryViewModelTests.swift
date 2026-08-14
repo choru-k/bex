@@ -8,12 +8,12 @@ final class HistoryViewModelTests: XCTestCase {
   func testLoadingEmptyAndRouteIntent() async throws {
     let fixture = try makeFixture()
     defer { fixture.cleanUp() }
-    var openedQuickCheck = 0
+    var openedFixAndSend = 0
     var replacementDraft: String?
     let viewModel = HistoryViewModel(
       data: fixture.data,
       useAsNewInput: { replacementDraft = $0 },
-      openQuickCheck: { openedQuickCheck += 1 }
+      openFixAndSend: { openedFixAndSend += 1 }
     )
     defer { viewModel.close() }
 
@@ -27,13 +27,13 @@ final class HistoryViewModelTests: XCTestCase {
       viewModel.emptyStateContent,
       HistoryEmptyStateContent(
         title: "No History Yet",
-        message: "Corrections you save from Quick Check will appear here.",
-        actionTitle: "Open Quick Check"
+        message: "Successful Fix & Send corrections you save will appear here.",
+        actionTitle: "Open Fix & Send"
       )
     )
 
-    viewModel.openQuickCheck()
-    XCTAssertEqual(openedQuickCheck, 1)
+    viewModel.openFixAndSend()
+    XCTAssertEqual(openedFixAndSend, 1)
 
     let entry = makeEntry(id: UUID(), original: "Old", corrected: "New")
     viewModel.useCorrectedAsInput(entry)
@@ -472,7 +472,9 @@ private actor ControlledHistoryRestore {
     started = true
     let waiters = startWaiters
     startWaiters.removeAll()
-    waiters.forEach { $0.resume() }
+    for waiter in waiters {
+      waiter.resume()
+    }
     await withCheckedContinuation { continuation in
       if released {
         continuation.resume()

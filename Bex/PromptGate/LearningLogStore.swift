@@ -6,9 +6,8 @@ extension Notification.Name {
 }
 
 /// Append-only local log of successful Prompt Gate corrections (Claude Code / Codex
-/// terminal prompts). Kept separate from history/data.json per the learning-mode plan
-/// (docs/learning-mode-plan.md, v6.1): this is prompt text on disk, so it stays
-/// owner-only and out of the history schema entirely.
+/// terminal prompts). Kept separate from history/data.json because this is prompt text on
+/// disk, so it stays owner-only and out of the history schema entirely.
 actor LearningLogStore {
   struct Entry: Codable, Equatable, Sendable {
     let timestamp: String
@@ -102,7 +101,8 @@ actor LearningLogStore {
       guard let baseAddress = rawBuffer.baseAddress else { return }
       var offset = 0
       while offset < rawBuffer.count {
-        let result = Darwin.write(descriptor, baseAddress.advanced(by: offset), rawBuffer.count - offset)
+        let result = Darwin.write(
+          descriptor, baseAddress.advanced(by: offset), rawBuffer.count - offset)
         if result <= 0 {
           writeError = CocoaError(.fileWriteUnknown)
           break

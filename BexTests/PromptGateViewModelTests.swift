@@ -8,6 +8,7 @@ private struct PromptGrammarCall: Equatable, Sendable {
   let provider: LLMProvider
   let model: String
   let ollamaEndpoint: String?
+  let profilePrompt: String?
 }
 
 @MainActor
@@ -24,13 +25,13 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertFalse(captured.viewModel.isLoadingSession)
     XCTAssertEqual(captured.viewModel.phase, .reviewing)
 
-    let ambiguousManual = try await Fixture(acceptedDisclosure: true)
+    let standalone = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(
-      ambiguousManual.viewModel.begin(
-        ambiguousManual.composerSession(text: "This are original.")
+      standalone.viewModel.begin(
+        standalone.composerSession(text: "This are original.")
       ))
-    await ambiguousManual.viewModel.waitForCurrentWork()
-    XCTAssertEqual(ambiguousManual.viewModel.phase, .onboarding)
+    await standalone.viewModel.waitForCurrentWork()
+    XCTAssertEqual(standalone.viewModel.phase, .composing)
 
     let hook = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(
@@ -100,10 +101,8 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertTrue(fixture.viewModel.providerDisclosure.contains("claude-test-model"))
   }
 
-  func testComposerConfirmsOnlyAfterDraftExistsAndEveryChangedRequest() async throws {
-    let fixture = try await Fixture(
-      acceptedDisclosure: true
-    )
+  func testStandaloneReusesAcceptedProviderConsentAcrossChangedRequests() async throws {
+    let fixture = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(fixture.viewModel.begin(fixture.composerSession(text: "")))
     await fixture.viewModel.waitForCurrentWork()
     XCTAssertEqual(fixture.viewModel.phase, .composing)
@@ -111,16 +110,209 @@ final class PromptGateViewModelTests: XCTestCase {
     fixture.viewModel.draft = "First manual prompt"
     fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
-    XCTAssertEqual(fixture.viewModel.phase, .onboarding)
-    fixture.viewModel.acceptDisclosure()
-    await fixture.viewModel.waitForCurrentWork()
     XCTAssertEqual(fixture.viewModel.phase, .reviewing)
 
     fixture.viewModel.backToEdit()
     fixture.viewModel.draft = "Changed manual prompt"
     fixture.viewModel.check()
     await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
+  }
+  func testDisclosureShowsExactFrozenWritingStyleGuidance() async throws {
+    let grammar = RecordingPromptGrammar()
+    let fixture = try await Fixture(acceptedDisclosure: false, grammar: grammar)
+    let style = Profile(
+      id: UUID(),
+      name: "Product Writing",
+      prompt: "Use direct verbs and short sentences."
+    )
+    try await fixture.data.saveProfile(style)
+    await fixture.preferences.setActiveProfileID(style.id)
+
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.capturedSession(text: "This are original.")
+      ))
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.viewModel.phase, .composing)
+    XCTAssertTrue(fixture.viewModel.canSelectWritingStyle)
+    fixture.viewModel.check()
+    await fixture.viewModel.waitForCurrentWork()
     XCTAssertEqual(fixture.viewModel.phase, .onboarding)
+    XCTAssertEqual(fixture.viewModel.outboundWritingStyleName, style.name)
+    XCTAssertEqual(fixture.viewModel.outboundWritingStyleGuidance, style.prompt)
+    XCTAssertTrue(fixture.viewModel.providerDisclosure.contains(style.name))
+    let callsBeforeConsent = await grammar.recordedCalls()
+    XCTAssertTrue(callsBeforeConsent.isEmpty)
+
+    fixture.viewModel.acceptDisclosure()
+    await fixture.viewModel.waitForCurrentWork()
+    let callsAfterConsent = await grammar.recordedCalls()
+    XCTAssertEqual(callsAfterConsent.map(\.profilePrompt), [style.prompt])
+  }
+
+  func testWritingStyleIsFrozenFromCheckThroughReview() async throws {
+    let grammar = SuspendedPromptGrammar()
+    let fixture = try await Fixture(grammar: grammar)
+    let first = Profile(id: UUID(), name: "First", prompt: "First guidance.")
+    let second = Profile(id: UUID(), name: "Second", prompt: "Second guidance.")
+    try await fixture.data.saveProfile(first)
+    try await fixture.data.saveProfile(second)
+    await fixture.preferences.setActiveProfileID(first.id)
+
+    XCTAssertTrue(fixture.viewModel.begin(fixture.composerSession(text: "")))
+    await fixture.viewModel.waitForCurrentWork()
+    fixture.viewModel.draft = "This are original."
+    fixture.viewModel.check()
+    await grammar.waitUntilStarted()
+
+    XCTAssertEqual(fixture.viewModel.phase, .checking)
+    XCTAssertFalse(fixture.viewModel.canSelectWritingStyle)
+    await fixture.viewModel.selectWritingStyle(id: second.id)
+    XCTAssertEqual(fixture.viewModel.selectedWritingStyleID, first.id)
+
+    await grammar.resume(
+      with: GrammarResult(corrected: "This is original.", explanation: "Checked grammar.")
+    )
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
+    await fixture.viewModel.selectWritingStyle(id: second.id)
+    XCTAssertEqual(fixture.viewModel.selectedWritingStyleID, first.id)
+
+    fixture.viewModel.backToEdit()
+    await fixture.viewModel.selectWritingStyle(id: second.id)
+    XCTAssertEqual(fixture.viewModel.selectedWritingStyleID, second.id)
+  }
+  func testTargetBoundCheckUsesTheWritingStyleSelectedInPreflight() async throws {
+    let grammar = RecordingPromptGrammar()
+    let fixture = try await Fixture(grammar: grammar)
+    let first = Profile(id: UUID(), name: "First", prompt: "First guidance.")
+    let second = Profile(id: UUID(), name: "Second", prompt: "Second guidance.")
+    try await fixture.data.saveProfile(first)
+    try await fixture.data.saveProfile(second)
+    await fixture.preferences.setActiveProfileID(first.id)
+
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: "This are original.")))
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.viewModel.phase, .composing)
+
+    await fixture.viewModel.selectWritingStyle(id: second.id)
+    fixture.viewModel.check()
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.viewModel.phase, .reviewing)
+    let calls = await grammar.recordedCalls()
+    XCTAssertEqual(calls.map(\.profilePrompt), [second.prompt])
+  }
+
+  func testDeletingSavedDraftCancelsPendingDebouncedWrite() async throws {
+    let fixture = try await Fixture()
+    await fixture.preferences.setDraftRetentionChoice(.enabled)
+    XCTAssertTrue(fixture.viewModel.begin(fixture.composerSession(text: "")))
+    await fixture.viewModel.waitForCurrentWork()
+
+    fixture.viewModel.draft = "Pending debounced draft"
+    await fixture.viewModel.deleteSavedDraft()
+    await fixture.viewModel.waitForCurrentWork()
+
+    let savedDraft = await fixture.preferences.savedDraft()
+    XCTAssertTrue(savedDraft.isEmpty)
+  }
+
+  func testHistoryInputDoesNotOverwriteOrDeleteUnrelatedSavedDraft() async throws {
+    let fixture = try await Fixture()
+    await fixture.preferences.setDraftRetentionChoice(.enabled)
+    await fixture.preferences.setSavedDraft("Unfinished draft A")
+    XCTAssertTrue(
+      fixture.viewModel.begin(
+        fixture.composerSession(text: "History correction B", usesDraftPersistence: false)
+      ))
+    await fixture.viewModel.waitForCurrentWork()
+
+    XCTAssertEqual(fixture.viewModel.draft, "History correction B")
+    XCTAssertFalse(fixture.viewModel.usesDraftPersistence)
+    fixture.viewModel.draft = "Edited history correction B"
+    await fixture.viewModel.setDraftRetentionChoice(.enabled)
+    fixture.viewModel.cancel()
+    await fixture.viewModel.waitForCurrentWork()
+
+    let preservedDraft = await fixture.preferences.savedDraft()
+    XCTAssertEqual(preservedDraft, "Unfinished draft A")
+  }
+
+  func testLookupIsStandaloneOnlyAndChangingTermClearsInFlightState() async throws {
+    let lookupGrammar = SuspendedLookupGrammar()
+    let standalone = try await Fixture(generalGrammar: lookupGrammar)
+    XCTAssertTrue(standalone.viewModel.begin(standalone.composerSession(text: "defer")))
+    await standalone.viewModel.waitForCurrentWork()
+    XCTAssertTrue(standalone.viewModel.canLookUp)
+
+    standalone.viewModel.lookUp()
+    await lookupGrammar.waitUntilStarted()
+    XCTAssertTrue(standalone.viewModel.isLookingUp)
+    standalone.viewModel.draft = "postpone"
+    XCTAssertFalse(standalone.viewModel.isLookingUp)
+    XCTAssertNil(standalone.viewModel.lookup)
+    XCTAssertTrue(standalone.viewModel.canReview)
+
+    standalone.viewModel.check()
+    await standalone.viewModel.waitForCurrentWork()
+    XCTAssertEqual(standalone.viewModel.phase, .reviewing)
+    await lookupGrammar.resume(
+      with: DictionaryLookup(
+        english: "defer",
+        korean: "미루다",
+        simple: "To put something off.",
+        example: "We can defer this."
+      ))
+    XCTAssertNil(standalone.viewModel.lookup)
+
+    let captured = try await Fixture()
+    XCTAssertTrue(captured.viewModel.begin(captured.capturedSession(text: "This are original.")))
+    await captured.viewModel.waitForCurrentWork()
+    captured.viewModel.backToEdit()
+    XCTAssertTrue(captured.viewModel.canReview)
+    XCTAssertFalse(captured.viewModel.canLookUp)
+    captured.viewModel.lookUp()
+    XCTAssertNil(captured.viewModel.lookup)
+  }
+  func testCanceledLookupCannotClearNewLookupForTheSameTerm() async throws {
+    let grammar = SuspendedLookupGrammar()
+    let fixture = try await Fixture(generalGrammar: grammar)
+    XCTAssertTrue(fixture.viewModel.begin(fixture.composerSession(text: "defer")))
+    await fixture.viewModel.waitForCurrentWork()
+
+    fixture.viewModel.lookUp()
+    await grammar.waitUntilStarted(count: 1)
+    fixture.viewModel.draft = "postpone"
+    fixture.viewModel.draft = "defer"
+    fixture.viewModel.lookUp()
+    await grammar.waitUntilStarted(count: 2)
+    XCTAssertTrue(fixture.viewModel.isLookingUp)
+
+    await grammar.resumeCall(
+      0,
+      with: DictionaryLookup(
+        english: "stale",
+        korean: "이전",
+        simple: "Old result.",
+        example: "This is stale."
+      ))
+    await Task.yield()
+    XCTAssertTrue(fixture.viewModel.isLookingUp)
+    XCTAssertNil(fixture.viewModel.lookup)
+
+    await grammar.resumeCall(
+      1,
+      with: DictionaryLookup(
+        english: "defer",
+        korean: "미루다",
+        simple: "To put something off.",
+        example: "We can defer this."
+      ))
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.viewModel.lookup?.english, "defer")
+    XCTAssertFalse(fixture.viewModel.isLookingUp)
   }
 
   func testCheckpointReturnsWithoutRequestAndChangedSourceRechecks() async throws {
@@ -259,15 +451,16 @@ final class PromptGateViewModelTests: XCTestCase {
     )
     XCTAssertEqual(captured.viewModel.reviewPendingStatus, "Nothing has been sent.")
 
-    let composer = try await Fixture()
-    XCTAssertTrue(composer.viewModel.begin(composer.composerSession(text: "This are original.")))
-    await composer.viewModel.waitForCurrentWork()
-    XCTAssertEqual(composer.viewModel.reviewTitle, "Review Correction for Editor")
+    let standalone = try await Fixture()
+    XCTAssertTrue(
+      standalone.viewModel.begin(standalone.composerSession(text: "This are original.")))
+    await standalone.viewModel.waitForCurrentWork()
+    XCTAssertEqual(standalone.viewModel.reviewTitle, "Review Correction")
     XCTAssertEqual(
-      composer.viewModel.reviewContextDescription,
+      standalone.viewModel.reviewContextDescription,
       "Created in Bex · Checked by OpenAI · gpt-test-model"
     )
-    XCTAssertEqual(composer.viewModel.reviewPendingStatus, "Nothing has been pasted.")
+    XCTAssertEqual(standalone.viewModel.reviewPendingStatus, "Nothing has been copied.")
 
     let hook = try await Fixture()
     await hook.hooks.setStatus(.active(lastSeen: Date()))
@@ -527,7 +720,7 @@ final class PromptGateViewModelTests: XCTestCase {
     XCTAssertTrue(fixture.viewModel.maskedSpanSummary.contains("2 spans stay on this Mac"))
     // The chips are the whole point: no sentinel should be left for the owner to decode.
     for segment in segments {
-      if case let .text(text) = segment.content {
+      if case .text(let text) = segment.content {
         XCTAssertFalse(text.contains("BEX_PROTECTED_"))
       }
     }
@@ -724,8 +917,8 @@ final class PromptGateViewModelTests: XCTestCase {
     let manual = try await Fixture(accessibilityTrusted: false)
     XCTAssertTrue(manual.viewModel.begin(manual.composerSession(text: "")))
     await manual.viewModel.waitForCurrentWork()
-    XCTAssertTrue(manual.viewModel.permissionGuidance.contains("manual capture"))
-    XCTAssertTrue(manual.viewModel.permissionGuidance.contains("Enabled client hooks"))
+    XCTAssertTrue(manual.viewModel.permissionGuidance.contains("standalone copy-only"))
+    XCTAssertTrue(manual.viewModel.permissionGuidance.contains("will be copied"))
 
     manual.viewModel.requestAccessibility()
     XCTAssertTrue(
@@ -957,14 +1150,16 @@ private actor RecordingPromptGrammar: PromptGrammarServicing {
 
   func checkPrompt(
     text: String,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String?
   ) async throws -> GrammarResult {
     calls.append(
       PromptGrammarCall(
         text: text,
         provider: destination.provider,
         model: destination.model,
-        ollamaEndpoint: destination.ollamaEndpoint
+        ollamaEndpoint: destination.ollamaEndpoint,
+        profilePrompt: profilePrompt
       )
     )
     let corrected =
@@ -976,14 +1171,16 @@ private actor RecordingPromptGrammar: PromptGrammarServicing {
 
   func checkPrompt(
     protectedText: PromptTechnicalSpanProtector.ProtectedText,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String?
   ) async throws -> GrammarResult {
     calls.append(
       PromptGrammarCall(
         text: protectedText.masked,
         provider: destination.provider,
         model: destination.model,
-        ollamaEndpoint: destination.ollamaEndpoint
+        ollamaEndpoint: destination.ollamaEndpoint,
+        profilePrompt: profilePrompt
       )
     )
     let corrected =
@@ -1005,7 +1202,8 @@ private actor SuspendedPromptGrammar: PromptGrammarServicing {
 
   func checkPrompt(
     text: String,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String?
   ) async throws -> GrammarResult {
     startContinuation?.resume()
     startContinuation = nil
@@ -1118,6 +1316,151 @@ private final class StubPromptTarget: PromptTargetServicing {
   func discard(_ target: PromptTarget) { discarded.append(target) }
 }
 
+private struct PromptGateGeneralGrammar: GrammarServicing {
+  func check(
+    text: String,
+    destination: OutboundDestination,
+    profilePrompt: String?
+  ) async throws -> GrammarResult {
+    fatalError("Not used")
+  }
+
+  func rewrite(
+    text: String,
+    intent: RewriteIntent,
+    destination: OutboundDestination
+  ) async throws -> String {
+    fatalError("Not used")
+  }
+
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup {
+    DictionaryLookup(
+      english: "defer",
+      korean: "미루다",
+      simple: "To put something off until later.",
+      example: "We can defer the migration."
+    )
+  }
+
+  func answerQuestion(
+    question: String,
+    context: String,
+    destination: OutboundDestination
+  ) async throws -> AskAnswer {
+    fatalError("Not used")
+  }
+
+  func classifyStudyPatterns(
+    cards: [StudyCard],
+    destination: OutboundDestination
+  ) async throws -> [String: StudyPattern.Verdict] {
+    fatalError("Not used")
+  }
+
+  func refreshWriterLevel(
+    samples: [LearningSample],
+    destination: OutboundDestination,
+    now: Date
+  ) async throws -> WriterLevelProfile {
+    fatalError("Not used")
+  }
+
+  func generateProfile(
+    context: ProfileContext,
+    destination: OutboundDestination
+  ) async throws -> String {
+    fatalError("Not used")
+  }
+
+  func fetchModels(for provider: LLMProvider) async throws -> [ModelOption] {
+    fatalError("Not used")
+  }
+}
+private actor SuspendedLookupGrammar: GrammarServicing {
+  private var nextCallIndex = 0
+  private var resultContinuations: [Int: CheckedContinuation<DictionaryLookup, Never>] = [:]
+  private var startContinuations: [Int: [CheckedContinuation<Void, Never>]] = [:]
+
+  func check(
+    text: String,
+    destination: OutboundDestination,
+    profilePrompt: String?
+  ) async throws -> GrammarResult {
+    fatalError("Not used")
+  }
+
+  func rewrite(
+    text: String,
+    intent: RewriteIntent,
+    destination: OutboundDestination
+  ) async throws -> String {
+    fatalError("Not used")
+  }
+
+  func define(
+    text: String,
+    destination: OutboundDestination
+  ) async throws -> DictionaryLookup {
+    let callIndex = nextCallIndex
+    nextCallIndex += 1
+    let waiters = startContinuations.removeValue(forKey: nextCallIndex) ?? []
+    for waiter in waiters {
+      waiter.resume()
+    }
+    return await withCheckedContinuation { resultContinuations[callIndex] = $0 }
+  }
+
+  func answerQuestion(
+    question: String,
+    context: String,
+    destination: OutboundDestination
+  ) async throws -> AskAnswer {
+    fatalError("Not used")
+  }
+
+  func classifyStudyPatterns(
+    cards: [StudyCard],
+    destination: OutboundDestination
+  ) async throws -> [String: StudyPattern.Verdict] {
+    fatalError("Not used")
+  }
+
+  func refreshWriterLevel(
+    samples: [LearningSample],
+    destination: OutboundDestination,
+    now: Date
+  ) async throws -> WriterLevelProfile {
+    fatalError("Not used")
+  }
+
+  func generateProfile(
+    context: ProfileContext,
+    destination: OutboundDestination
+  ) async throws -> String {
+    fatalError("Not used")
+  }
+
+  func fetchModels(for provider: LLMProvider) async throws -> [ModelOption] {
+    fatalError("Not used")
+  }
+
+  func waitUntilStarted(count: Int = 1) async {
+    if nextCallIndex >= count { return }
+    await withCheckedContinuation { startContinuations[count, default: []].append($0) }
+  }
+
+  func resume(with result: DictionaryLookup) {
+    resumeCall(0, with: result)
+  }
+
+  func resumeCall(_ callIndex: Int, with result: DictionaryLookup) {
+    resultContinuations.removeValue(forKey: callIndex)?.resume(returning: result)
+  }
+}
+
 @MainActor
 private final class Fixture {
   let viewModel: PromptGateViewModel
@@ -1127,6 +1470,8 @@ private final class Fixture {
   let responder = StubHookResponder()
   let receiptDirectory: URL
   let learningLogDirectory: URL
+  let dataFileURL: URL
+  let data: BexDataStore
   /// Pointed at a temp directory so a test that picks an expression alternative cannot
   /// write a Study card into the real `~/Library/Application Support/Bex`.
   let considerTaps: ConsiderTapStore
@@ -1146,7 +1491,8 @@ private final class Fixture {
     accessibilityTrusted: Bool = true,
     confirmsHookOutboundPayloads: Bool = true,
     providerSetUp: Bool = true,
-    grammar: any PromptGrammarServicing = RecordingPromptGrammar()
+    grammar: any PromptGrammarServicing = RecordingPromptGrammar(),
+    generalGrammar: any GrammarServicing = PromptGateGeneralGrammar()
   ) async throws {
     suite = "com.bex.tests.prompt-gate-vm.\(UUID().uuidString)"
     preferences = PreferencesStore(defaults: UserDefaults(suiteName: suite)!)
@@ -1167,6 +1513,9 @@ private final class Fixture {
     learningLogDirectory = FileManager.default.temporaryDirectory
       .appendingPathComponent("PromptGateLearningLog-\(UUID().uuidString)", isDirectory: true)
     let learningLog = LearningLogStore(directoryURL: learningLogDirectory)
+    dataFileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("PromptGateData-\(UUID().uuidString).json")
+    data = BexDataStore(fileURL: dataFileURL)
     target = StubPromptTarget(isAccessibilityTrusted: accessibilityTrusted)
 
     considerTapDirectory = FileManager.default.temporaryDirectory
@@ -1178,6 +1527,8 @@ private final class Fixture {
       preferences: preferences,
       keychain: keychain,
       promptGrammar: grammar,
+      grammar: generalGrammar,
+      data: data,
       targetService: target,
       approvalStore: approvalStore,
       hookManager: hooks,
@@ -1194,6 +1545,7 @@ private final class Fixture {
     try? FileManager.default.removeItem(at: considerTapDirectory)
     try? FileManager.default.removeItem(at: receiptDirectory)
     try? FileManager.default.removeItem(at: learningLogDirectory)
+    try? FileManager.default.removeItem(at: dataFileURL)
     UserDefaults.standard.removePersistentDomain(forName: suite)
   }
 
@@ -1211,17 +1563,19 @@ private final class Fixture {
     )
   }
 
-  func composerSession(text: String) -> PromptGateSession {
+  func composerSession(
+    text: String,
+    usesDraftPersistence: Bool? = nil
+  ) -> PromptGateSession {
     PromptGateSession(
       initialDraft: text,
       target: PromptTarget(
-        kind: .composerPaste,
-        processID: 100,
-        bundleID: "com.example.editor",
+        kind: .copyOnly,
         applicationName: "Editor",
-        guidance: "Composer"
+        guidance: "Standalone manual entry."
       ),
-      source: .composer
+      source: .standalone,
+      usesDraftPersistence: usesDraftPersistence
     )
   }
 

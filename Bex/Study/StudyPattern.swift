@@ -40,8 +40,8 @@ enum StudyPattern: String, CaseIterable, Codable, Sendable {
   case phrasing
   /// Run-ons and comma splices — clauses joined the wrong way.
   case sentenceJoining = "sentence-joining"
-  /// Vocabulary lookups saved from Quick Check, which arrive already labelled and never
-  /// need the model to classify them.
+  /// Vocabulary lookups saved from standalone Fix & Send, which arrive already labelled
+  /// and never need the model to classify them.
   case vocabulary
   /// Not recognized, or never classified. Excluded from grouping — see the type doc.
   case unclassified
@@ -109,7 +109,7 @@ enum StudyPattern: String, CaseIterable, Codable, Sendable {
     let isDrillable: Bool
   }
 
-  /// Runs in the background, never on the Quick Check path. The owner's constraint is
+  /// Runs in the background, never on the interactive correction path. The owner's constraint is
   /// explicit: a grammar check has to come back in about two seconds, so nothing here may
   /// ever be added to the interactive correction prompt — which is also why the card is
   /// judged *after* the fact from the log rather than at correction time. Background

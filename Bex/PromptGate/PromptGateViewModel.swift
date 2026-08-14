@@ -9,12 +9,26 @@ final class PromptGateViewModel: ObservableObject {
     let original: String
     let destination: OutboundDestination
     let protectedText: PromptTechnicalSpanProtector.ProtectedText
+    let writingStyle: Profile?
     let forcesConfirmation: Bool
+  }
+  private struct PendingLookup {
+    let sessionID: UUID
+    let generation: UUID
+    let term: String
+    let destination: OutboundDestination
   }
 
   @Published private(set) var phase: PromptGatePhase = .closed
   @Published private(set) var session: PromptGateSession?
-  @Published var draft = ""
+  @Published var draft = "" {
+    didSet {
+      guard draft != oldValue else { return }
+      invalidateLookup(for: draft)
+      guard !isSuppressingDraftPersistence else { return }
+      scheduleDraftPersistence()
+    }
+  }
   @Published private(set) var review: PromptGateReview?
   @Published private(set) var selectedProvider: LLMProvider = .openAI
   @Published private(set) var selectedModel = LLMProvider.openAI.defaultModel
@@ -30,10 +44,19 @@ final class PromptGateViewModel: ObservableObject {
   @Published private(set) var showsDiscardConfirmation = false
   @Published private(set) var showsCheckpointReplacementConfirmation = false
   private(set) var accessibilityAnnouncementHistory: [String] = []
+  @Published private(set) var availableWritingStyles: [Profile] = []
+  @Published private(set) var selectedWritingStyleID: UUID?
+  @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
+  @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
+  @Published private(set) var lookup: DictionaryLookup?
+  @Published private(set) var lookupSavedToStudy = false
+  @Published private(set) var isLookingUp = false
 
   private let preferences: PreferencesStore
   private let keychain: KeychainStore
   private let promptGrammar: any PromptGrammarServicing
+  private let grammar: any GrammarServicing
+  private let data: BexDataStore
   private let targetService: any PromptTargetServicing
   private let approvalStore: PromptApprovalStore
   private let hookManager: any HookInstallationManaging
@@ -48,6 +71,7 @@ final class PromptGateViewModel: ObservableObject {
   private let considerTaps: ConsiderTapStore
   private let closePanel: @MainActor () -> Void
   private let openSettingsCallback: @MainActor () -> Void
+  private let openWritingStylesCallback: @MainActor () -> Void
   /// Called once, with the target application's name, after a prompt has fully shipped.
   /// Fires only on the clean success path — a partial delivery leaves the owner with
   /// something to finish by hand, which is not the moment to offer them a drill.
@@ -56,6 +80,10 @@ final class PromptGateViewModel: ObservableObject {
   private var currentTask: Task<Void, Never>?
   private var currentWorkID: UUID?
   private var retiredTasks: [Task<Void, Never>] = []
+  private var lookupTask: Task<Void, Never>?
+  private var draftTask: Task<Void, Never>?
+  private var historyTask: Task<Void, Never>?
+  private var studyLogTask: Task<Void, Never>?
   private var generation = UUID()
   private var activeReceiptID: UUID?
   private var checkpoint: PromptGateReview?
@@ -67,11 +95,19 @@ final class PromptGateViewModel: ObservableObject {
   private var confirmsHookOutboundPayloads = false
   private var isClosing = false
   private var pendingCorrection: PendingCorrection?
+  private var pendingLookup: PendingLookup?
+  private var lookupTerm: String?
+  private var lookupID: UUID?
+  private var draftPersistenceGeneration = 0
+  private var historyPersistenceGeneration = 0
+  private var isSuppressingDraftPersistence = false
 
   init(
     preferences: PreferencesStore,
     keychain: KeychainStore,
     promptGrammar: any PromptGrammarServicing,
+    grammar: any GrammarServicing,
+    data: BexDataStore,
     targetService: any PromptTargetServicing,
     approvalStore: PromptApprovalStore,
     hookManager: any HookInstallationManaging,
@@ -80,11 +116,14 @@ final class PromptGateViewModel: ObservableObject {
     considerTaps: ConsiderTapStore = ConsiderTapStore(),
     onClose: @escaping @MainActor () -> Void,
     onOpenSettings: @escaping @MainActor () -> Void,
+    onOpenWritingStyles: @escaping @MainActor () -> Void = {},
     onDelivered: @escaping @MainActor (String) -> Void = { _ in }
   ) {
     self.preferences = preferences
     self.keychain = keychain
     self.promptGrammar = promptGrammar
+    self.grammar = grammar
+    self.data = data
     self.targetService = targetService
     self.approvalStore = approvalStore
     self.hookManager = hookManager
@@ -93,6 +132,7 @@ final class PromptGateViewModel: ObservableObject {
     self.considerTaps = considerTaps
     closePanel = onClose
     openSettingsCallback = onOpenSettings
+    openWritingStylesCallback = onOpenWritingStyles
     deliveredCallback = onDelivered
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
   }
@@ -110,8 +150,34 @@ final class PromptGateViewModel: ObservableObject {
 
   var canReview: Bool {
     phase == .composing
+      && currentTask == nil
       && providerIsSetUp
+      && !isLookingUp
       && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+  }
+
+  var canLookUp: Bool {
+    canReview && session?.source == .standalone
+  }
+
+  var isStandaloneComposer: Bool {
+    session?.source == .standalone
+  }
+
+  var usesDraftPersistence: Bool {
+    session?.usesDraftPersistence == true
+  }
+
+  var canSelectWritingStyle: Bool {
+    phase == .composing && currentTask == nil && !isLookingUp
+  }
+
+  var writingStyleLabel: String {
+    selectedWritingStyle?.name ?? "Bex Standard"
+  }
+
+  var selectedWritingStyle: Profile? {
+    availableWritingStyles.first { $0.id == selectedWritingStyleID }
   }
 
   var canApprove: Bool {
@@ -153,7 +219,7 @@ final class PromptGateViewModel: ObservableObject {
     switch session.source {
     case .capturedField:
       return "Captured from \(session.target.applicationName) · \(checker)"
-    case .composer:
+    case .standalone:
       return "Created in Bex · \(checker)"
     case .hook:
       let requester = session.knownClient?.displayName ?? session.target.applicationName
@@ -177,11 +243,29 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   var providerDisclosure: String {
-    guard let destination = pendingCorrection?.destination ?? configuredDestination else {
+    guard
+      let destination =
+        pendingLookup?.destination ?? pendingCorrection?.destination ?? configuredDestination
+    else {
       return "Bex cannot prepare an outbound destination until the provider setup is valid."
     }
+    if pendingLookup != nil {
+      return
+        "Bex will send the full lookup term below to \(destination.disclosureTarget), model \(destination.model)."
+    }
+    let writingStyle =
+      pendingCorrection?.writingStyle.map { " Writing Style guidance “\($0.name)” is included." }
+      ?? ""
     return
-      "Bex will send the masked payload below to \(destination.disclosureTarget), model \(destination.model)."
+      "Bex will send the masked payload below to \(destination.disclosureTarget), model \(destination.model).\(writingStyle)"
+  }
+
+  var outboundWritingStyleName: String? {
+    pendingCorrection?.writingStyle?.name
+  }
+
+  var outboundWritingStyleGuidance: String? {
+    pendingCorrection?.writingStyle?.prompt
   }
 
   /// The unranked expression alternatives this correction offered.
@@ -237,17 +321,20 @@ final class PromptGateViewModel: ObservableObject {
     return seen.joined(separator: ", ")
   }
 
+  var isLookupConfirmation: Bool { pendingLookup != nil }
+
   var protectedSpanDisclosure: String {
     let kinds = PromptTechnicalSpanProtector.userFacingProtectedSpanKinds.joined(separator: ", ")
     let provider =
-      (pendingCorrection?.destination ?? configuredDestination)?.provider
+      (pendingLookup?.destination ?? pendingCorrection?.destination ?? configuredDestination)?
+      .provider
       ?? selectedProvider
     return
       "Before the request, Bex replaces recognized \(kinds) with placeholders and restores those recognized spans locally after correction. Unmatched prose and unrecognized sensitive text remain visible to \(provider.displayName)."
   }
 
   var outboundPayload: String {
-    pendingCorrection?.protectedText.masked ?? ""
+    pendingLookup?.term ?? pendingCorrection?.protectedText.masked ?? ""
   }
 
   /// The masked payload split into prose and the spans held back.
@@ -258,6 +345,9 @@ final class PromptGateViewModel: ObservableObject {
   /// Mac" is legible at a glance — the only thing non-negotiable 3 actually cares about
   /// them understanding.
   var outboundSegments: [OutboundSegment] {
+    if let pendingLookup {
+      return [OutboundSegment(id: 0, content: .text(pendingLookup.term))]
+    }
     guard let protectedText = pendingCorrection?.protectedText else { return [] }
     var segments: [OutboundSegment] = []
     var rest = Substring(protectedText.masked)
@@ -285,6 +375,9 @@ final class PromptGateViewModel: ObservableObject {
   /// requires that limit be stated rather than implied, so this counts what was caught and
   /// never claims the text is clean.
   var maskedSpanSummary: String {
+    if pendingLookup != nil {
+      return "The full lookup term is included in this request."
+    }
     let count = maskedSpanCount
     guard count > 0 else { return "No technical spans were recognized in this prompt." }
     return "\(count) span\(count == 1 ? "" : "s") stay\(count == 1 ? "s" : "") on this Mac and "
@@ -293,8 +386,12 @@ final class PromptGateViewModel: ObservableObject {
 
   var confirmationActionLabel: String {
     let provider =
-      (pendingCorrection?.destination ?? configuredDestination)?.provider
+      (pendingLookup?.destination ?? pendingCorrection?.destination ?? configuredDestination)?
+      .provider
       ?? selectedProvider
+    if pendingLookup != nil {
+      return "Send to \(provider.displayName) for Look Up"
+    }
     return provider == .ollama
       ? "Check with Ollama"
       : "Send to \(provider.displayName) for Check"
@@ -349,6 +446,11 @@ final class PromptGateViewModel: ObservableObject {
       return
         "This client hook supplied the prompt without using Accessibility. You can still review it; Bex will copy the approved correction for manual replacement."
     }
+    if session.source == .standalone {
+      return isAccessibilityTrusted
+        ? "Fix & Send is in standalone mode because no editable field was captured. The approved correction will be copied."
+        : "Without Accessibility, Fix & Send uses standalone copy-only mode. The approved correction will be copied."
+    }
     if isAccessibilityTrusted {
       return
         "Accessibility enables manual capture and replacement in other apps. If access was just granted, invoke Fix & Send again to capture the focused field."
@@ -362,16 +464,23 @@ final class PromptGateViewModel: ObservableObject {
     guard phase == .closed else { return false }
 
     currentTask?.cancel()
+    lookupTask?.cancel()
     generation = UUID()
     let sessionGeneration = generation
     self.session = session
+    isSuppressingDraftPersistence = true
     draft = session.initialDraft
+    isSuppressingDraftPersistence = false
     review = nil
+    lookup = nil
+    lookupSavedToStudy = false
+    isLookingUp = false
     checkpoint = nil
     confirmedOutboundDraft = nil
     confirmedOutboundDestination = nil
     configuredDestination = nil
     pendingCorrection = nil
+    pendingLookup = nil
     replacementConfirmedDraft = nil
     isClosing = false
     deliveryFailureEffect = nil
@@ -398,6 +507,10 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   func acceptDisclosure() {
+    if pendingLookup != nil {
+      acceptLookupDisclosure()
+      return
+    }
     guard phase == .onboarding,
       !isLoadingSession,
       providerIsSetUp,
@@ -465,7 +578,7 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   func check() {
-    guard phase == .composing else { return }
+    guard phase == .composing, currentTask == nil, !isLookingUp else { return }
     guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       errorMessage = BexError.emptyInput.localizedDescription
       requestFocus(keyboard: .draftEditor, accessibility: .errorHeading)
@@ -771,6 +884,10 @@ final class PromptGateViewModel: ObservableObject {
       }
       retiredTasks.removeFirst(min(retiredCount, retiredTasks.count))
     }
+    await lookupTask?.value
+    await draftTask?.value
+    await historyTask?.value
+    await studyLogTask?.value
   }
 
   func updateCorrected(_ value: String) {
@@ -782,7 +899,131 @@ final class PromptGateViewModel: ObservableObject {
       ? BexError.emptyInput.localizedDescription
       : nil
   }
+  func selectWritingStyle(id: UUID?) async {
+    guard canSelectWritingStyle,
+      id == nil || availableWritingStyles.contains(where: { $0.id == id })
+    else { return }
+    selectedWritingStyleID = id
+    await preferences.setActiveProfileID(id)
+  }
 
+  func setDraftRetentionChoice(_ choice: RetentionChoice) async {
+    guard usesDraftPersistence else { return }
+    draftPersistenceGeneration &+= 1
+    draftTask?.cancel()
+    draftTask = nil
+    await preferences.setDraftRetentionChoice(choice)
+    draftRetentionChoice = choice
+    if choice == .enabled {
+      await preferences.setSavedDraft(draft)
+    } else {
+      await preferences.deleteSavedDraft()
+    }
+  }
+
+  func setHistoryRetentionChoice(_ choice: RetentionChoice) async {
+    historyPersistenceGeneration &+= 1
+    await preferences.setHistoryRetentionChoice(choice)
+    historyRetentionChoice = choice
+  }
+
+  func deleteSavedDraft() async {
+    draftPersistenceGeneration &+= 1
+    let previousTask = draftTask
+    previousTask?.cancel()
+    draftTask = nil
+    await previousTask?.value
+    await preferences.deleteSavedDraft()
+  }
+
+  func lookUp() {
+    guard canLookUp, let session else { return }
+    let term = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    let sessionGeneration = generation
+    retireCurrentTask()
+    let workID = UUID()
+    currentWorkID = workID
+    currentTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      do {
+        let destination = try await preferences.outboundDestination()
+        let accepted = await preferences.hasAcceptedCurrentOutboundDisclosure(for: destination)
+        let setup = await providerIsSetUp(for: destination)
+        guard self.currentWorkID == workID,
+          self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+          self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == term
+        else {
+          self.finishWork(workID)
+          return
+        }
+        selectedProvider = destination.provider
+        selectedModel = destination.model
+        configuredDestination = destination
+        hasAcceptedDestinationDisclosure = accepted
+        providerIsSetUp = setup
+        guard setup else {
+          phase = .composing
+          errorMessage =
+            "Set up \(destination.provider.displayName) in Settings, then return to Fix & Send."
+          finishWork(workID)
+          return
+        }
+        let pending = PendingLookup(
+          sessionID: session.id,
+          generation: sessionGeneration,
+          term: term,
+          destination: destination
+        )
+        pendingLookup = pending
+        pendingCorrection = nil
+        finishWork(workID)
+        let requiresConfirmation =
+          session.source.outboundConfirmationContext.requiresConfirmation(
+            hasAcceptedDisclosure: accepted,
+            confirmsHookOutboundPayloads: confirmsHookOutboundPayloads
+          )
+        if requiresConfirmation {
+          phase = .onboarding
+          errorMessage = nil
+          requestFocus(keyboard: .primaryAction, accessibility: .disclosureHeading)
+        } else {
+          startLookup(pending)
+        }
+      } catch {
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+          self.finishWork(workID)
+          return
+        }
+        phase = .composing
+        errorMessage = error.localizedDescription
+        finishWork(workID)
+      }
+    }
+  }
+
+  func saveLookupToStudy() {
+    guard let lookup, !lookupSavedToStudy else { return }
+    lookupSavedToStudy = true
+    announce("Saved \(lookup.english) to Study.")
+    studyLogTask = Task { [learningLog, selectedProvider, selectedModel] in
+      await learningLog.append(
+        client: "fix-and-send-dictionary",
+        original: lookup.learningLogOriginal,
+        corrected: lookup.english,
+        explanation: lookup.learningLogExplanation,
+        provider: selectedProvider.rawValue,
+        model: selectedModel
+      )
+    }
+  }
+
+  func openWritingStyles() {
+    openWritingStylesCallback()
+  }
+  func refreshWritingStyles() async {
+    guard session != nil else { return }
+    await loadWritingStyles()
+  }
 
   func openSettings() {
     openSettingsCallback()
@@ -795,6 +1036,7 @@ final class PromptGateViewModel: ObservableObject {
     let provider = await preferences.selectedProvider()
     let model = await preferences.selectedModel(for: provider)
     let hookOutboundConfirmation = await preferences.confirmsHookOutboundPayloads()
+    await loadWritingStyles()
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
     do {
@@ -850,6 +1092,7 @@ final class PromptGateViewModel: ObservableObject {
         original: draft,
         destination: destination,
         protectedText: PromptTechnicalSpanProtector().protect(draft),
+        writingStyle: selectedWritingStyle,
         forcesConfirmation: true
       )
       pendingCorrection = pending
@@ -918,10 +1161,209 @@ final class PromptGateViewModel: ObservableObject {
     return (try? await keychain.hasSetup(for: destination.provider)) ?? false
   }
 
+  private func loadWritingStyles() async {
+    let profiles = (try? await data.loadProfiles()) ?? []
+    let activeID = await preferences.activeProfileID()
+    let defaultID = await preferences.defaultProfileID()
+    availableWritingStyles = profiles
+    if let activeID, profiles.contains(where: { $0.id == activeID }) {
+      selectedWritingStyleID = activeID
+    } else if let defaultID, profiles.contains(where: { $0.id == defaultID }) {
+      selectedWritingStyleID = defaultID
+      await preferences.setActiveProfileID(defaultID)
+    } else {
+      selectedWritingStyleID = nil
+      await preferences.setActiveProfileID(nil)
+    }
+  }
+
+  private func acceptLookupDisclosure() {
+    guard phase == .onboarding,
+      !isLoadingSession,
+      providerIsSetUp,
+      let session,
+      let pending = pendingLookup,
+      pending.sessionID == session.id,
+      pending.generation == generation,
+      pending.term == draft.trimmingCharacters(in: .whitespacesAndNewlines),
+      pending.destination == configuredDestination
+    else { return }
+
+    let sessionGeneration = generation
+    let workID = UUID()
+    currentWorkID = workID
+    currentTask = Task { @MainActor [weak self] in
+      guard let self else { return }
+      let setup = await providerIsSetUp(for: pending.destination)
+      guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+        self.pendingLookup?.term == pending.term,
+        self.configuredDestination == pending.destination,
+        setup
+      else {
+        if self.isCurrent(sessionID: session.id, generation: sessionGeneration), !setup {
+          providerIsSetUp = false
+          phase = .composing
+          errorMessage =
+            "Set up \(pending.destination.provider.displayName) in Settings, then return to Fix & Send."
+        }
+        self.finishWork(workID)
+        return
+      }
+      await preferences.acceptCurrentOutboundDisclosure(for: pending.destination)
+      guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+        self.pendingLookup?.term == pending.term
+      else {
+        self.finishWork(workID)
+        return
+      }
+      hasAcceptedDestinationDisclosure = true
+      finishWork(workID)
+      startLookup(pending)
+    }
+  }
+
+  private func startLookup(_ pending: PendingLookup) {
+    guard let session,
+      pending.sessionID == session.id,
+      pending.generation == generation,
+      pending.term == draft.trimmingCharacters(in: .whitespacesAndNewlines),
+      pending.destination == configuredDestination
+    else { return }
+
+    lookupTask?.cancel()
+    let lookupID = UUID()
+    self.lookupID = lookupID
+    lookupTerm = pending.term
+    let sessionGeneration = generation
+    pendingLookup = nil
+    phase = .composing
+    isLookingUp = true
+    lookup = nil
+    lookupSavedToStudy = false
+    errorMessage = nil
+    announce("Lookup started.")
+    lookupTask = Task { @MainActor [weak self, grammar] in
+      guard let self else { return }
+      do {
+        let entry = try await grammar.define(
+          text: pending.term,
+          destination: pending.destination
+        )
+        try Task.checkCancellation()
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+          self.lookupID == lookupID,
+          self.draft.trimmingCharacters(in: .whitespacesAndNewlines) == pending.term
+        else { return }
+        lookup = entry
+        isLookingUp = false
+        lookupTask = nil
+        self.lookupID = nil
+        announce("Lookup complete.")
+      } catch {
+        guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
+          self.lookupID == lookupID
+        else {
+          return
+        }
+        isLookingUp = false
+        lookupTask = nil
+        self.lookupID = nil
+        lookupTerm = nil
+        if !(error is CancellationError) {
+          errorMessage = message(for: error)
+          announce("Lookup failed.")
+        }
+      }
+    }
+  }
+
+  private func scheduleDraftPersistence() {
+    guard usesDraftPersistence, draftRetentionChoice == .enabled else { return }
+    let savedDraft = draft
+    let persistenceGeneration = draftPersistenceGeneration
+    let previousTask = draftTask
+    previousTask?.cancel()
+    draftTask = Task { [weak self, preferences] in
+      await previousTask?.value
+      try? await Task.sleep(for: .milliseconds(250))
+      guard !Task.isCancelled,
+        let self,
+        self.draftPersistenceGeneration == persistenceGeneration,
+        self.usesDraftPersistence,
+        self.draftRetentionChoice == .enabled
+      else { return }
+      await preferences.setSavedDraft(savedDraft)
+    }
+  }
+
+  private func invalidateLookup(for draft: String) {
+    guard let lookupTerm,
+      lookupTerm != draft.trimmingCharacters(in: .whitespacesAndNewlines)
+    else { return }
+    lookupTask?.cancel()
+    lookupTask = nil
+    lookupID = nil
+    self.lookupTerm = nil
+    isLookingUp = false
+    lookup = nil
+    lookupSavedToStudy = false
+  }
+
+  private func saveHistory(
+    original: String,
+    result: GrammarResult,
+    destination: OutboundDestination,
+    writingStyleName: String?
+  ) {
+    let persistenceGeneration = historyPersistenceGeneration
+    let entry = HistoryEntry(
+      id: UUID(),
+      original: original,
+      corrected: result.corrected,
+      explanation: result.explanation,
+      provider: destination.provider,
+      model: destination.model,
+      timestamp: Date(),
+      profileName: writingStyleName
+    )
+    historyTask = Task { [weak self, preferences, data] in
+      guard let self, self.historyRetentionChoice == .enabled else { return }
+      let choice = await preferences.historyRetentionChoice()
+      guard !Task.isCancelled,
+        self.historyPersistenceGeneration == persistenceGeneration,
+        choice == .enabled
+      else { return }
+      do {
+        try await data.appendHistory(entry)
+      } catch {
+        guard self.session != nil else { return }
+        self.errorMessage = "Correction complete, but history could not be saved."
+      }
+    }
+  }
+
   private func loadSession(sessionID: UUID, generation: UUID, workID: UUID) async {
     let provider = await preferences.selectedProvider()
     let model = await preferences.selectedModel(for: provider)
     let hookOutboundConfirmation = await preferences.confirmsHookOutboundPayloads()
+    let loadedDraftChoice = await preferences.draftRetentionChoice()
+    let loadedHistoryChoice = await preferences.historyRetentionChoice()
+    let restoredDraft = await preferences.savedDraft()
+    let profiles = (try? await data.loadProfiles()) ?? []
+    let activeProfileID = await preferences.activeProfileID()
+    let defaultProfileID = await preferences.defaultProfileID()
+    let resolvedProfileID: UUID?
+    if let activeProfileID, profiles.contains(where: { $0.id == activeProfileID }) {
+      resolvedProfileID = activeProfileID
+    } else if let defaultProfileID, profiles.contains(where: { $0.id == defaultProfileID }) {
+      resolvedProfileID = defaultProfileID
+    } else {
+      resolvedProfileID = nil
+    }
+    if resolvedProfileID != activeProfileID {
+      await preferences.setActiveProfileID(resolvedProfileID)
+    }
+
     let destination: OutboundDestination?
     let destinationErrorMessage: String?
     do {
@@ -955,6 +1397,18 @@ final class PromptGateViewModel: ObservableObject {
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
+    draftRetentionChoice = loadedDraftChoice
+    historyRetentionChoice = loadedHistoryChoice
+    availableWritingStyles = profiles
+    selectedWritingStyleID = resolvedProfileID
+    if session.usesDraftPersistence,
+      draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+      !restoredDraft.isEmpty
+    {
+      isSuppressingDraftPersistence = true
+      draft = restoredDraft
+      isSuppressingDraftPersistence = false
+    }
     guard isCurrent(sessionID: sessionID, generation: generation) else {
       finishWork(workID)
       return
@@ -966,7 +1420,10 @@ final class PromptGateViewModel: ObservableObject {
       phase = .composing
       errorMessage = destinationErrorMessage
       requestFocus(keyboard: .recoveryAction, accessibility: .errorHeading)
-    } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+    } else if session.source.supportsDraftPersistence
+      || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || !profiles.isEmpty
+    {
       phase = .composing
       requestFocus(keyboard: .draftEditor, accessibility: .composerHeading)
     } else if let destination {
@@ -1022,6 +1479,7 @@ final class PromptGateViewModel: ObservableObject {
           original: original,
           destination: destination,
           protectedText: PromptTechnicalSpanProtector().protect(original),
+          writingStyle: selectedWritingStyle,
           forcesConfirmation: forcesConfirmation
         )
         pendingCorrection = pending
@@ -1100,6 +1558,10 @@ final class PromptGateViewModel: ObservableObject {
     let sessionGeneration = pending.generation
     phase = .checking
     errorMessage = nil
+    lookup = nil
+    lookupSavedToStudy = false
+    lookupTerm = nil
+    lookupID = nil
     deliveryFailureEffect = nil
     review = nil
     announce("Checking the prompt with \(destination.provider.displayName).")
@@ -1111,7 +1573,8 @@ final class PromptGateViewModel: ObservableObject {
       do {
         let result = try await promptGrammar.checkPrompt(
           protectedText: pending.protectedText,
-          destination: destination
+          destination: destination,
+          profilePrompt: pending.writingStyle?.prompt
         )
         try Task.checkCancellation()
         // Record the correction BEFORE the "is this session still on screen" guard, so a
@@ -1133,6 +1596,12 @@ final class PromptGateViewModel: ObservableObject {
           explanation: result.explanation,
           provider: destination.provider.rawValue,
           model: destination.model
+        )
+        saveHistory(
+          original: pending.original,
+          result: result,
+          destination: destination,
+          writingStyleName: pending.writingStyle?.name
         )
 
         guard self.isCurrent(sessionID: session.id, generation: sessionGeneration),
@@ -1184,6 +1653,7 @@ final class PromptGateViewModel: ObservableObject {
     guard let session, phase != .closed, !isClosing else { return }
     isClosing = true
     currentTask?.cancel()
+    lookupTask?.cancel()
     generation = UUID()
     let receiptID = activeReceiptID
     activeReceiptID = nil
@@ -1306,19 +1776,30 @@ final class PromptGateViewModel: ObservableObject {
 
   private func closeCurrentSession() {
     guard let session else { return }
+    let deletesStandaloneDraft = session.usesDraftPersistence
     targetService.discard(session.target)
     generation = UUID()
     currentWorkID = nil
     currentTask = nil
+    lookupTask?.cancel()
+    lookupTask = nil
     activeReceiptID = nil
     self.session = nil
+    isSuppressingDraftPersistence = true
     draft = ""
+    isSuppressingDraftPersistence = false
     review = nil
+    lookup = nil
+    lookupSavedToStudy = false
+    isLookingUp = false
+    lookupTerm = nil
     checkpoint = nil
     confirmedOutboundDraft = nil
     confirmedOutboundDestination = nil
     configuredDestination = nil
     pendingCorrection = nil
+    pendingLookup = nil
+    lookupID = nil
     replacementConfirmedDraft = nil
     isClosing = false
     isLoadingSession = false
@@ -1328,6 +1809,15 @@ final class PromptGateViewModel: ObservableObject {
     showsDiscardConfirmation = false
     showsCheckpointReplacementConfirmation = false
     phase = .closed
+    if deletesStandaloneDraft {
+      draftPersistenceGeneration &+= 1
+      let previousTask = draftTask
+      previousTask?.cancel()
+      draftTask = Task { [preferences] in
+        await previousTask?.value
+        await preferences.deleteSavedDraft()
+      }
+    }
     closePanel()
   }
 

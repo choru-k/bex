@@ -22,7 +22,7 @@ enum LearningLogSamples {
   }
 
   /// Log entries plus tapped "Consider" alternatives, oldest first — the card-building
-  /// corpus (docs/learning-mode-plan.md, v7.1 decision 1).
+  /// corpus.
   ///
   /// Only `StudyCardBuilder` callers use this. `LearningMetrics` deliberately keeps reading
   /// `parse` alone, because a tap is a choice made while reviewing, not text the owner

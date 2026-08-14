@@ -8,10 +8,6 @@ struct KeyChord: Codable, Equatable, Hashable, Sendable {
   let keyCode: UInt32
   let modifiers: UInt32
 
-  static let defaultQuickCheck = KeyChord(
-    keyCode: UInt32(kVK_ANSI_G),
-    modifiers: UInt32(cmdKey | shiftKey)
-  )
   static let defaultFixAndSend = KeyChord(
     keyCode: UInt32(kVK_ANSI_P),
     modifiers: UInt32(cmdKey | shiftKey)
@@ -121,22 +117,11 @@ struct KeyChord: Codable, Equatable, Hashable, Sendable {
 }
 
 enum BexShortcut: UInt32, CaseIterable, Sendable {
-  case quickCheck = 1
   case fixAndSend = 2
 
-  var title: String {
-    switch self {
-    case .quickCheck: "Quick Check"
-    case .fixAndSend: "Fix & Send"
-    }
-  }
+  var title: String { "Fix & Send" }
 
-  var defaultChord: KeyChord {
-    switch self {
-    case .quickCheck: .defaultQuickCheck
-    case .fixAndSend: .defaultFixAndSend
-    }
-  }
+  var defaultChord: KeyChord { .defaultFixAndSend }
 }
 
 struct Shortcut: Equatable, Sendable {
@@ -365,14 +350,15 @@ final class GlobalHotKey: HotKeyRegistering {
     do {
       for binding in shortcuts {
         let token = try backend.register(binding.shortcut)
-        pending.append((
-          id: binding.shortcut.id,
-          registration: Registration(
-            token: token,
-            chord: binding.shortcut.chord,
-            action: binding.action
-          )
-        ))
+        pending.append(
+          (
+            id: binding.shortcut.id,
+            registration: Registration(
+              token: token,
+              chord: binding.shortcut.chord,
+              action: binding.action
+            )
+          ))
       }
     } catch {
       for item in pending.reversed() {

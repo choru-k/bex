@@ -1,20 +1,9 @@
 import Foundation
 
-
 struct ProviderClientFactory: Sendable {
   let preferences: PreferencesStore
   let keychain: KeychainStore
   let transport: any HTTPTransport
-
-  init(
-    preferences: PreferencesStore,
-    keychain: KeychainStore,
-    transport: any HTTPTransport
-  ) {
-    self.preferences = preferences
-    self.keychain = keychain
-    self.transport = transport
-  }
 
   func makeClient(
     for destination: OutboundDestination
@@ -95,18 +84,21 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
 
   func checkPrompt(
     text: String,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String? = nil
   ) async throws -> GrammarResult {
     let protectedText = PromptTechnicalSpanProtector().protect(text)
     return try await checkPrompt(
       protectedText: protectedText,
-      destination: destination
+      destination: destination,
+      profilePrompt: profilePrompt
     )
   }
 
   func checkPrompt(
     protectedText: PromptTechnicalSpanProtector.ProtectedText,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String? = nil
   ) async throws -> GrammarResult {
     guard !protectedText.masked.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       throw BexError.emptyInput
@@ -117,7 +109,9 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
       text: protectedText.masked,
       model: destination.model,
       systemPrompt: GrammarPrompts.buildPromptSafeSystem(
-        writerLevel: await writerLevel.summary()),
+        profilePrompt: profilePrompt,
+        writerLevel: await writerLevel.summary()
+      ),
       effort: effort
     )
     return GrammarResult(
@@ -182,12 +176,12 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
       context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? trimmed
       : """
-        The text this question is about:
-        \(context)
+      The text this question is about:
+      \(context)
 
-        The question:
-        \(trimmed)
-        """
+      The question:
+      \(trimmed)
+      """
     let output = try await client.generate(
       text: message,
       model: destination.model,
@@ -199,7 +193,7 @@ actor GrammarService: GrammarServicing, PromptGrammarServicing {
 
   /// Labels each of `cards` with the `StudyPattern` it is an example of, in one call.
   ///
-  /// Background-only by design. The owner's constraint is that a Quick Check must answer
+  /// Background-only by design. The owner's constraint is that an interactive correction must answer
   /// in about two seconds, so classification is deliberately *not* folded into the
   /// correction prompt — it runs later, off the interactive path, where latency costs
   /// nothing. Callers are expected to pass only cards that have never been classified

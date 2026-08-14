@@ -1,7 +1,7 @@
 import Foundation
 
-/// Pure ambient-cue logic for the menu-bar "Learning" badge (docs/learning-mode-plan.md
-/// Phase 1). Operates on already-parsed `LearningSample`s and a `lastViewedAt` cutoff —
+/// Pure ambient-cue logic for the menu-bar Learning badge. Operates on already-parsed
+/// `LearningSample`s and a `lastViewedAt` cutoff —
 /// no `Date()` anywhere in this file, so every path is deterministic and unit-testable;
 /// callers (`AppDelegate`) supply "now" only indirectly, via the `lastViewedAt` value
 /// they read from `PreferencesStore` and via which samples they pass in.
@@ -11,7 +11,7 @@ enum LearningBadge {
     let count: Int
   }
 
-  /// The same threshold that gates the Phase-1 by-hand gate (docs/learning-mode-plan.md):
+  /// The activation threshold:
   /// at least this many corrections total, with at least `activationCategoryThreshold`
   /// grammar categories each recurring at least `activationRecurrenceThreshold` times.
   static let activationEntryThreshold = 20
@@ -42,18 +42,19 @@ enum LearningBadge {
   ) -> Status {
     let recurringCounts = LearningAggregator.recurringCounts(
       explanations: samples.map(\.explanation))
-    let recurringCategoryCount = recurringCounts
+    let recurringCategoryCount =
+      recurringCounts
       .filter { $0.count >= activationRecurrenceThreshold }
       .count
     // Volume gate counts only substantive entries — those with a grammar fix or an
     // expression suggestion. Pure "No changes needed." no-ops carry no learning material,
-    // so they must not inflate the "≥20 reviewed corrections" bar (docs/learning-mode-plan.md).
+    // so they must not inflate the "≥20 reviewed corrections" bar.
     //
     // Weaker since v7 than it looks: nearly every entry now carries a `Consider` section,
     // so in practice this is close to "≥20 prompts sent". Left alone deliberately — the
     // recurrence gate below is the load-bearing half, and retuning a threshold the owner
     // baselined on the pre-v7 corpus is a decision for the re-baselining pass, not a side
-    // effect of a badge fix. See docs/learning-mode-plan.md "v7 costs".
+    // effect of a badge fix.
     let substantiveCount = samples.filter {
       !LearningAggregator.parseFixedTags(from: $0.explanation).isEmpty
         || !LearningAggregator.parseConsiderSuggestions(from: $0.explanation).isEmpty

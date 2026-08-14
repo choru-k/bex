@@ -36,7 +36,6 @@ struct URLSessionTransport: HTTPTransport {
   }
 }
 
-
 protocol GrammarServicing: Sendable {
   func check(
     text: String,
@@ -53,7 +52,7 @@ protocol GrammarServicing: Sendable {
     destination: OutboundDestination
   ) async throws -> DictionaryLookup
   /// Answers one question about a correction or a card. Off the correction path by design —
-  /// `ModelJob.ask` gives it a longer budget than a Quick Check gets.
+  /// `ModelJob.ask` gives it a longer budget than an interactive correction gets.
   func answerQuestion(
     question: String,
     context: String,
@@ -78,22 +77,26 @@ protocol GrammarServicing: Sendable {
 protocol PromptGrammarServicing: Sendable {
   func checkPrompt(
     text: String,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String?
   ) async throws -> GrammarResult
   func checkPrompt(
     protectedText: PromptTechnicalSpanProtector.ProtectedText,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String?
   ) async throws -> GrammarResult
 }
 
 extension PromptGrammarServicing {
   func checkPrompt(
     protectedText: PromptTechnicalSpanProtector.ProtectedText,
-    destination: OutboundDestination
+    destination: OutboundDestination,
+    profilePrompt: String? = nil
   ) async throws -> GrammarResult {
     let result = try await checkPrompt(
       text: protectedText.masked,
-      destination: destination
+      destination: destination,
+      profilePrompt: profilePrompt
     )
     return GrammarResult(
       corrected: try protectedText.restore(result.corrected),

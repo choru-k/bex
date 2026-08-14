@@ -2,8 +2,7 @@ import Darwin
 import Foundation
 
 /// What Bex has worked out about the owner's English from their own logged corrections —
-/// the accumulating half of "점점 나의 수준을 ai 가 판단해서" (docs/learning-mode-plan.md,
-/// v7.1 decision 2).
+/// the accumulating half of "점점 나의 수준을 ai 가 판단해서".
 ///
 /// v7 asks the correction prompt to tell a typo apart from a genuine gap "from the writer's
 /// evident level". A single request cannot do that honestly: it sees one text, so a word
@@ -124,7 +123,7 @@ struct WriterLevelProfile: Codable, Equatable, Sendable {
 /// state inferred from the owner's own mistakes, so it stays 0o700/0o600.
 ///
 /// The in-memory cache is the part that matters for latency. `GrammarService.check` reads
-/// `summary()` on the interactive path, and a Quick Check has to answer in about two
+/// `summary()` on the interactive path, and Fix & Send has to answer in about two
 /// seconds — so the file is read at most once per launch, never per correction.
 actor WriterLevelStore {
   private let directoryURL: URL

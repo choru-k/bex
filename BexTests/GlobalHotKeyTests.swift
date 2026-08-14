@@ -9,24 +9,24 @@ final class GlobalHotKeyTests: XCTestCase {
     let backend = FakeHotKeyRegistrationBackend()
     let hotKey = GlobalHotKey(backend: backend)
     let chord = KeyChord(keyCode: 12, modifiers: UInt32(cmdKey | shiftKey))
-    let quickCheck = Shortcut(id: 1, chord: chord)
-    let fixAndSend = Shortcut(id: 2, chord: chord)
+    let existing = Shortcut(id: 1, chord: chord)
+    let replacement = Shortcut(id: 2, chord: chord)
 
-    try hotKey.register(quickCheck) {}
+    try hotKey.register(existing) {}
 
     let expectedConflict = HotKeyConflict.chordAlreadyRegistered(chord: chord, existingID: 1)
-    XCTAssertEqual(hotKey.conflict(for: fixAndSend), expectedConflict)
-    XCTAssertThrowsError(try hotKey.register(fixAndSend) {}) { error in
+    XCTAssertEqual(hotKey.conflict(for: replacement), expectedConflict)
+    XCTAssertThrowsError(try hotKey.register(replacement) {}) { error in
       XCTAssertEqual(error as? HotKeyRegistrationError, .conflict(expectedConflict))
     }
-    XCTAssertEqual(backend.registrationAttempts, [quickCheck])
-    XCTAssertEqual(backend.activeShortcuts, [quickCheck])
+    XCTAssertEqual(backend.registrationAttempts, [existing])
+    XCTAssertEqual(backend.activeShortcuts, [existing])
   }
 
   func testReplacingSameChordRefreshesActionWithoutReregistering() throws {
     let backend = FakeHotKeyRegistrationBackend()
     let hotKey = GlobalHotKey(backend: backend)
-    let shortcut = Shortcut(id: 1, chord: .defaultQuickCheck)
+    let shortcut = Shortcut(id: 1, chord: .defaultFixAndSend)
     var handledActions: [String] = []
 
     try hotKey.register(shortcut) {
@@ -47,7 +47,7 @@ final class GlobalHotKeyTests: XCTestCase {
   func testFailedReplacementPreservesPreviousRegistrationAndAction() throws {
     let backend = FakeHotKeyRegistrationBackend()
     let hotKey = GlobalHotKey(backend: backend)
-    let original = Shortcut(id: 1, chord: .defaultQuickCheck)
+    let original = Shortcut(id: 1, chord: .defaultFixAndSend)
     let replacement = Shortcut(
       id: 1,
       chord: KeyChord(keyCode: 14, modifiers: UInt32(cmdKey | optionKey))
@@ -77,37 +77,35 @@ final class GlobalHotKeyTests: XCTestCase {
   func testAtomicRegistrationRollsBackEveryNewShortcutWhenOneFails() {
     let backend = FakeHotKeyRegistrationBackend()
     let hotKey = GlobalHotKey(backend: backend)
-    let quickCheck = Shortcut(id: 1, chord: .defaultQuickCheck)
+    let first = Shortcut(
+      id: 1,
+      chord: KeyChord(keyCode: 12, modifiers: UInt32(cmdKey | shiftKey))
+    )
     let fixAndSend = Shortcut(id: 2, chord: .defaultFixAndSend)
     backend.failingChord = fixAndSend.chord
     let action: @MainActor @Sendable () -> Void = {}
 
     XCTAssertThrowsError(
       try hotKey.register([
-        (shortcut: quickCheck, action: action),
+        (shortcut: first, action: action),
         (shortcut: fixAndSend, action: action),
       ])
     ) { error in
       XCTAssertEqual(error as? HotKeyRegistrationError, .carbon(status: -9_876))
     }
 
-    XCTAssertEqual(backend.registrationAttempts, [quickCheck, fixAndSend])
+    XCTAssertEqual(backend.registrationAttempts, [first, fixAndSend])
     XCTAssertTrue(backend.activeShortcuts.isEmpty)
     XCTAssertEqual(backend.unregisteredTokens.count, 1)
-    XCTAssertNil(hotKey.conflict(for: quickCheck))
+    XCTAssertNil(hotKey.conflict(for: first))
     XCTAssertNil(hotKey.conflict(for: fixAndSend))
   }
 
-  func testDefaultChordsMatchProductShortcutsAndDoNotConflict() {
-    XCTAssertEqual(
-      KeyChord.defaultQuickCheck,
-      KeyChord(keyCode: UInt32(kVK_ANSI_G), modifiers: UInt32(cmdKey | shiftKey))
-    )
+  func testDefaultChordMatchesFixAndSendProductShortcut() {
     XCTAssertEqual(
       KeyChord.defaultFixAndSend,
       KeyChord(keyCode: UInt32(kVK_ANSI_P), modifiers: UInt32(cmdKey | shiftKey))
     )
-    XCTAssertNotEqual(KeyChord.defaultQuickCheck, KeyChord.defaultFixAndSend)
   }
 }
 

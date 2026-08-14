@@ -8,10 +8,9 @@ import SwiftUI
 /// sidebar: everything that is not the correction moment now lives in a single place the
 /// owner can navigate without hunting through a menu.
 ///
-/// Quick Check and Fix & Send are deliberately absent. They stay floating panels driven
-/// by their global shortcuts — non-negotiable 1 makes the correction path latency-sacred,
-/// and routing it through a window that has to be found, raised and switched to would be
-/// exactly the wrong trade.
+/// Fix & Send is deliberately absent from the page list. It stays a floating panel driven
+/// by its global shortcut — the correction path is latency-sensitive, and routing it
+/// through a window that has to be found, raised and switched to would be the wrong trade.
 enum MainWindowPage: String, CaseIterable, Identifiable, Hashable {
   case learn
   case history
@@ -102,10 +101,7 @@ final class MainWindowModel: ObservableObject {
 /// right.
 struct BexMainWindow: View {
   @ObservedObject var model: MainWindowModel
-  /// Opens the Quick Check panel. A closure rather than a page because Quick Check is not
-  /// a page — see `MainWindowPage`.
-  let openQuickCheck: () -> Void
-  /// Invokes Fix & Send, for the empty deck's first-run actions (design 4e).
+  /// Invokes the floating Fix & Send workflow from correction entry points.
   let openFixAndSend: () -> Void
 
   var body: some View {
@@ -149,7 +145,7 @@ struct BexMainWindow: View {
         row(.learn)
           .badge(model.study.remainingCount > 0 ? Text("\(model.study.remainingCount)") : nil)
           .tag(MainWindowPage.learn)
-        quickCheckRow
+        fixAndSendRow
         row(.history).tag(MainWindowPage.history)
         row(.writingStyles).tag(MainWindowPage.writingStyles)
       }
@@ -166,16 +162,15 @@ struct BexMainWindow: View {
       .accessibilityIdentifier("main-sidebar-\(page.rawValue)")
   }
 
-  /// An action, not a destination: it raises the floating Quick Check panel and leaves the
-  /// window's own selection alone.
-  private var quickCheckRow: some View {
-    Button(action: openQuickCheck) {
-      Label("Quick Check", systemImage: "checkmark.circle")
+  /// An action, not a destination: it raises Fix & Send and leaves the selection alone.
+  private var fixAndSendRow: some View {
+    Button(action: openFixAndSend) {
+      Label("Fix & Send", systemImage: "checkmark.circle")
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
     .buttonStyle(.plain)
-    .accessibilityIdentifier("main-sidebar-quick-check")
+    .accessibilityIdentifier("main-sidebar-fix-and-send")
   }
 
   private var pinnedSettingsRow: some View {
@@ -208,7 +203,6 @@ struct BexMainWindow: View {
         study: model.study,
         learning: model.learning,
         askThread: model.askThread,
-        openQuickCheck: openQuickCheck,
         openFixAndSend: openFixAndSend
       )
     case .history:

@@ -2,109 +2,89 @@ import XCTest
 
 @MainActor
 final class BexUITests: XCTestCase {
-  func testWelcomeIntroducesCoreWorkflowsAndContinuesToSettings() throws {
+  func testWelcomeIntroducesCoreWorkflowsAndStartsStandaloneSetupReturn() throws {
     continueAfterFailure = false
     let app = launchScenario("welcome")
     defer { app.terminate() }
 
     XCTAssertTrue(app.windows["Welcome to Bex"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.staticTexts["Quick Check"].exists)
     XCTAssertTrue(app.staticTexts["Fix & Send"].exists)
     XCTAssertTrue(app.staticTexts["You stay in control"].exists)
 
     app.buttons["welcome-set-up-provider"].click()
     XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.windows["Welcome to Bex"].waitForNonExistence(timeout: 3))
-  }
-
-  func testCheckShowsReviewCardCopiesCorrectionAndSavesHistory() throws {
-    continueAfterFailure = false
-    let (app, copySink) = launch(openQuickCheck: true, scenario: "configured-provider")
-    defer {
-      app.terminate()
-      try? FileManager.default.removeItem(at: copySink)
-    }
-
-    var input = app.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 5))
-    input.click()
-    typeTextReliably("saved text", into: input)
-    app.typeKey(.escape, modifierFlags: [])
-    XCTAssertTrue(titledSurface(app, "Quick Check").waitForNonExistence(timeout: 3))
-
-    openMenuCommand("Quick Check", in: app)
-    input = app.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 5))
-    XCTAssertEqual(input.value as? String, "")
-    input.click()
-    input.typeKey("a", modifierFlags: .command)
-    input.typeKey(.delete, modifierFlags: [])
-    XCTAssertEqual(input.value as? String, "")
-    typeTextReliably("this are a test", into: input)
-
-    let check = app.buttons["quick-check-check"]
-    XCTAssertTrue(check.isEnabled)
-    check.click()
-
-    // The result is the shared review card (design 4a): an editable final message with
-    // the redline under it, grammar notes behind one Details disclosure, and the footer
-    // as the only surface difference from Fix & Send.
-    let corrected = app.textViews["quick-check-corrected"]
-    XCTAssertTrue(corrected.waitForExistence(timeout: 5))
-    XCTAssertEqual(corrected.value as? String, "this is a test")
-    let diffElement = app.descendants(matching: .any)["quick-check-diff-summary"]
-    let diffSummary = accessibilityText(of: diffElement)
-    XCTAssertTrue(diffSummary.contains("Removed “are” between"))
-    XCTAssertTrue(diffSummary.contains("Inserted “is” between"))
-
-    // The Details disclosure exposes as a disclosure triangle, not a button.
-    app.descendants(matching: .any)["quick-check-details-disclosure"].firstMatch.click()
-    let grammarNotes = app.descendants(matching: .any)["quick-check-explanation"]
-    XCTAssertTrue(grammarNotes.waitForExistence(timeout: 3))
-    XCTAssertEqual(accessibilityText(of: grammarNotes), "Changed subject-verb agreement.")
-
-    app.buttons["quick-check-copy-correction"].click()
-    XCTAssertTrue(titledSurface(app, "Quick Check").waitForNonExistence(timeout: 3))
-    XCTAssertEqual(
-      try String(contentsOf: copySink, encoding: .utf8),
-      "this is a test"
-    )
-
-    openMenuCommand("Quick Check", in: app)
-    XCTAssertTrue(app.textViews["quick-check-input"].waitForExistence(timeout: 5))
-    let historyLink = app.links["quick-check-history"]
-    XCTAssertTrue(historyLink.waitForExistence(timeout: 3))
-    historyLink.click()
-    let historyWindow = app.windows["History"]
-    XCTAssertTrue(historyWindow.waitForExistence(timeout: 5))
-    XCTAssertEqual(historyWindow.disclosureTriangles.count, 1)
-    historyWindow.disclosureTriangles.firstMatch.click()
-    // The row stamps its history-entry id over every child, so the detail is found by
-    // label + value; the section heading shares the label but carries no value.
-    let historyCorrected = historyWindow.staticTexts.matching(
-      NSPredicate(format: "label == 'Corrected' AND value == 'this is a test'")
-    ).firstMatch
-    XCTAssertTrue(historyCorrected.waitForExistence(timeout: 3))
+    let credential = app.secureTextFields["settings-credential-input"]
+    XCTAssertTrue(credential.waitForExistence(timeout: 3))
+    credential.click()
+    credential.typeText("ui-testing-key")
+    app.buttons["settings-save-credential"].click()
+    let returnToFixAndSend = app.buttons["settings-setup-route"]
+    XCTAssertTrue(returnToFixAndSend.waitForExistence(timeout: 3))
+    returnToFixAndSend.click()
+    XCTAssertTrue(app.textViews["prompt-gate-input"].waitForExistence(timeout: 5))
   }
 
   func testMissingCredentialShowsSetupAndNavigatesToSettings() {
     continueAfterFailure = false
-    let (app, copySink) = launch(openQuickCheck: true, missingCredential: true)
+    let (app, targetSink, deliveryEventsSink) = launchPromptGate(missingCredential: true)
     defer {
       app.terminate()
-      try? FileManager.default.removeItem(at: copySink)
+      try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
-    let quickCheck = titledSurface(app, "Quick Check")
-    XCTAssertTrue(quickCheck.waitForExistence(timeout: 5))
-    XCTAssertTrue(quickCheck.staticTexts["Setup required"].waitForExistence(timeout: 3))
-    XCTAssertTrue(quickCheck.staticTexts["Add your OpenAI API key in Settings."].exists)
-    XCTAssertFalse(quickCheck.buttons["quick-check-check"].isEnabled)
-
-    quickCheck.buttons["quick-check-open-settings"].click()
+    XCTAssertTrue(app.textViews["prompt-gate-input"].waitForExistence(timeout: 5))
+    let openSettings = app.buttons["prompt-gate-open-settings"]
+    XCTAssertTrue(openSettings.waitForExistence(timeout: 3))
+    openSettings.click()
     XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
-    XCTAssertTrue(app.descendants(matching: .any)["settings-provider"].waitForExistence(timeout: 3))
-    XCTAssertFalse(quickCheck.exists)
+    XCTAssertTrue(
+      app.descendants(matching: .any)["settings-provider"].waitForExistence(timeout: 3)
+    )
+    XCTAssertFalse(titledSurface(app, "Fix & Send").exists)
+  }
+
+  func testFixAndSendReviewSavesHistory() {
+    continueAfterFailure = false
+    let (app, targetSink, deliveryEventsSink) = launchPromptGate(
+      scenario: "configured-provider"
+    )
+    defer {
+      app.terminate()
+      try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: deliveryEventsSink)
+    }
+
+    let corrected = awaitPromptCorrection(
+      in: app,
+      expected: "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
+    )
+    let writingStyle = app.descendants(matching: .any)["prompt-gate-writing-style"]
+    XCTAssertTrue(writingStyle.waitForExistence(timeout: 3))
+    XCTAssertTrue(accessibilityText(of: writingStyle).contains("Product Writing"))
+    XCTAssertTrue(app.descendants(matching: .any)["prompt-gate-diff-summary"].exists)
+    app.buttons["prompt-gate-delivery-pasteInDestination"].click()
+    XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
+
+    openHub()
+    let openBex = app.descendants(matching: .any)["hub-open-bex"]
+    XCTAssertTrue(openBex.waitForExistence(timeout: 3))
+    openBex.click()
+    let historySidebar = app.descendants(matching: .any)["main-sidebar-history"]
+    XCTAssertTrue(historySidebar.waitForExistence(timeout: 3))
+    historySidebar.click()
+    let historyWindow = app.windows["History"]
+    XCTAssertTrue(historyWindow.waitForExistence(timeout: 5))
+    XCTAssertTrue(historyWindow.disclosureTriangles.firstMatch.waitForExistence(timeout: 3))
+    historyWindow.disclosureTriangles.firstMatch.click()
+    let historyCorrected = historyWindow.staticTexts.matching(
+      NSPredicate(
+        format:
+          "label == 'Corrected' AND value == 'I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1'"
+      )
+    ).firstMatch
+    XCTAssertTrue(historyCorrected.waitForExistence(timeout: 3))
   }
 
   func testPromptGateDisclosureReviewEditCancelAndReopen() throws {
@@ -512,154 +492,50 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(events.contains("partial-failure:omp-ui-test"))
   }
 
-  func testFreshQuickCheckMakesRetentionChoicesAndConfirmsFullCustomPayload() {
-    continueAfterFailure = false
-    let app = launchScenario("fresh-quick-check")
-    defer { app.terminate() }
-
-    XCTAssertTrue(titledSurface(app, "Quick Check").waitForExistence(timeout: 5))
-    XCTAssertTrue(
-      app.descendants(matching: .any)["quick-check-retention-choices"]
-        .waitForExistence(timeout: 3)
-    )
-    let enableDraft = app.buttons["quick-check-enable-draft-retention"]
-    let disableHistory = app.buttons["quick-check-disable-history-retention"]
-    XCTAssertTrue(enableDraft.exists)
-    XCTAssertTrue(disableHistory.exists)
-    enableDraft.click()
-    XCTAssertTrue(enableDraft.waitForNonExistence(timeout: 3))
-    disableHistory.click()
-    XCTAssertTrue(disableHistory.waitForNonExistence(timeout: 3))
-
-    let writingStyle = app.descendants(matching: .any)["quick-check-writing-style"]
-    XCTAssertTrue(writingStyle.waitForExistence(timeout: 3))
-    XCTAssertTrue(accessibilityText(of: writingStyle).contains("Product Writing"))
-    let input = app.textViews["quick-check-input"]
-    input.click()
-    typeTextReliably("this are a test", into: input)
-    app.buttons["quick-check-check"].click()
-
-    let summary = app.descendants(matching: .any)["quick-check-outbound-summary"]
-    XCTAssertTrue(summary.waitForExistence(timeout: 3))
-    for expectedText in [
-      "Check draft",
-      "Claude",
-      "claude-opus-4-8",
-      "Product Writing",
-    ] {
-      XCTAssertTrue(
-        descendant(in: summary, containing: expectedText).waitForExistence(timeout: 3)
-      )
-    }
-    XCTAssertEqual(
-      accessibilityText(
-        of: summary.descendants(matching: .any)[
-          "quick-check-outbound-writing-style-guidance"
-        ]
-      ),
-      "Use concise, direct language for a product team."
-    )
-    XCTAssertEqual(
-      accessibilityText(
-        of: summary.descendants(matching: .any)["quick-check-outbound-full-draft"]
-      ),
-      "this are a test"
-    )
-    app.buttons["quick-check-outbound-confirm"].click()
-    let corrected = app.descendants(matching: .any)["quick-check-corrected"]
-    XCTAssertTrue(corrected.waitForExistence(timeout: 5))
-    XCTAssertEqual(accessibilityText(of: corrected), "this is a test")
-  }
-
   func testHotKeyConflictFixtureExposesDeterministicFallbackMessage() throws {
     continueAfterFailure = false
     let app = launchScenario("hotkey-conflict")
     defer { app.terminate() }
 
     XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
-    // The status item exposes its label ("Bex") but not the identifier set on its button;
-    // the app owns exactly one status item, so firstMatch is unambiguous.
+    // Click the real status item when the display exposes it. Auto-hidden menu bars make it
+    // non-hittable, so the fixture notification opens the exact same hub controller instead
+    // of skipping the route this test exists to exercise.
     let statusItem = app.statusItems.firstMatch
     XCTAssertTrue(statusItem.waitForExistence(timeout: 3))
-    guard statusItem.isHittable else {
-      throw XCTSkip("The menu bar is auto-hidden on this display; the status item cannot be clicked.")
+    if statusItem.isHittable {
+      statusItem.click()
+    } else {
+      openHub()
     }
-    statusItem.click()
     // The status item opens the hub popover now, not an `NSMenu`, so the fallback notice
     // is a line in the popover rather than a disabled menu item.
     let message = app.descendants(matching: .any)["hub-shortcut-conflict"]
     XCTAssertTrue(message.waitForExistence(timeout: 3))
     XCTAssertEqual(
       accessibilityText(of: message),
-      "Quick Check and Fix & Send shortcuts could not be registered. The commands remain "
-        + "available here and in the Bex menu."
+      "Fix & Send shortcut could not be registered. The command remains available here "
+        + "and in the Bex menu."
     )
-    // The commands it points at have to actually be there.
-    XCTAssertTrue(app.descendants(matching: .any)["hub-quick-check"].exists)
-    XCTAssertTrue(app.descendants(matching: .any)["hub-fix-and-send"].exists)
+    let fixAndSend = app.descendants(matching: .any)["hub-fix-and-send"]
+    XCTAssertTrue(fixAndSend.exists)
+    fixAndSend.click()
+    XCTAssertTrue(app.textViews["prompt-gate-input"].waitForExistence(timeout: 5))
   }
-
-  func testQuickCheckAuxiliaryNavigationPreservesInFlightResultErrorDraftAndFocus() {
+  func testUnsupportedGlobalCaptureFallsBackToStandaloneComposer() {
     continueAfterFailure = false
-    let app = launchScenario("quick-check-grammar-in-flight")
+    let app = launchScenario(
+      "history-empty",
+      environment: ["BEX_UI_TEST_UNSUPPORTED_TARGET": "1"]
+    )
     defer { app.terminate() }
+    XCTAssertTrue(app.windows["History"].waitForExistence(timeout: 5))
 
-    var input = app.textViews["quick-check-input"]
+    postUITestingCommand("com.bex.desktop.ui-testing.open-fix-and-send")
+
+    let input = app.textViews["prompt-gate-input"]
     XCTAssertTrue(input.waitForExistence(timeout: 5))
-    XCTAssertEqual(input.value as? String, "this are a test")
-    app.buttons["quick-check-check"].click()
-    XCTAssertTrue(app.descendants(matching: .any)["quick-check-busy-label"].waitForExistence(timeout: 3))
-
-    // The management row and context row are link-style buttons, which expose as links.
-    app.links["quick-check-settings"].click()
-    XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
-    openMenuCommand("Quick Check", in: app)
-    input = app.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 5))
-    XCTAssertEqual(input.value as? String, "this are a test")
-    XCTAssertTrue(app.descendants(matching: .any)["quick-check-busy-label"].exists)
-    XCTAssertTrue(waitForKeyboardFocus(on: input))
-
-    postUITestingCommand("com.bex.desktop.ui-testing.release-grammar")
-    let corrected = app.textViews["quick-check-corrected"]
-    XCTAssertTrue(corrected.waitForExistence(timeout: 5))
-    XCTAssertEqual(accessibilityText(of: corrected), "this is a test")
-
-    // The post-check state is the shared review card, so auxiliary navigation now goes
-    // through the context row (provider/model route to Settings). The card must survive
-    // the round trip.
-    app.links["quick-check-provider"].click()
-    XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
-    openMenuCommand("Quick Check", in: app)
-    XCTAssertTrue(app.textViews["quick-check-corrected"].waitForExistence(timeout: 5))
-    XCTAssertEqual(
-      accessibilityText(of: app.textViews["quick-check-corrected"]),
-      "this is a test"
-    )
-
-    // ⌘[ returns to the draft, which still holds the original text; the scenario fails
-    // the second check deterministically, and the error must survive navigation too.
-    app.typeKey("[", modifierFlags: .command)
-    input = app.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 5))
-    XCTAssertEqual(input.value as? String, "this are a test")
-    XCTAssertTrue(waitForKeyboardFocus(on: input))
-    app.buttons["quick-check-check"].click()
-    let error = app.descendants(matching: .any)["quick-check-error"]
-    XCTAssertTrue(error.waitForExistence(timeout: 5))
-    XCTAssertEqual(accessibilityText(of: error), "Forced UI test grammar failure.")
-
-    app.links["quick-check-writing-styles"].click()
-    XCTAssertTrue(app.windows["Writing Styles"].waitForExistence(timeout: 5))
-    openMenuCommand("Quick Check", in: app)
-    input = app.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 5))
-    XCTAssertEqual(input.value as? String, "this are a test")
-    XCTAssertEqual(
-      accessibilityText(of: app.descendants(matching: .any)["quick-check-error"]),
-      "Forced UI test grammar failure."
-    )
-    XCTAssertTrue(waitForKeyboardFocus(on: input))
+    XCTAssertEqual(input.value as? String, "")
   }
 
   func testPromptDeliveryInFlightGateReleasesOneSubmittedEvent() throws {
@@ -698,7 +574,6 @@ final class BexUITests: XCTestCase {
     )
   }
 
-
   func testNamedPermissionScenariosExposeDistinctSettingsAndCopyOnlyStates() throws {
     continueAfterFailure = false
     let copySink = FileManager.default.temporaryDirectory
@@ -716,7 +591,7 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(deniedStatus.waitForExistence(timeout: 3))
     XCTAssertEqual(accessibilityText(of: deniedStatus), "Accessibility access is not enabled")
 
-    openMenuCommand("Fix & Send", in: denied)
+    openFixAndSend(in: denied)
     let prompt = denied.textViews["prompt-gate-input"]
     XCTAssertTrue(prompt.waitForExistence(timeout: 5))
     prompt.click()
@@ -805,14 +680,18 @@ final class BexUITests: XCTestCase {
     XCTAssertFalse(hook.buttons["prompt-gate-confirm-outbound"].exists)
   }
 
-  func testNamedDirtyEditorAndSetupResumeScenariosLaunchExpectedWork() {
+  func testNamedDirtyEditorAndSetupResumeScenariosLaunchExpectedFixAndSendWork() {
     continueAfterFailure = false
 
     let dirtyEditor = launchScenario("dirty-editor-resume")
-    XCTAssertTrue(titledSurface(dirtyEditor, "Quick Check").waitForExistence(timeout: 5))
-    let input = dirtyEditor.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 3))
-    XCTAssertEqual(input.value as? String, "A saved UI test draft with unsent changes.")
+    XCTAssertTrue(dirtyEditor.windows["History"].waitForExistence(timeout: 5))
+    let reopenSavedDraft = dirtyEditor.buttons["history-open-fix-and-send"]
+    XCTAssertTrue(reopenSavedDraft.waitForExistence(timeout: 3))
+    reopenSavedDraft.click()
+    let savedDraft = "A saved UI test draft with unsent changes."
+    let input = dirtyEditor.textViews["prompt-gate-input"]
+    XCTAssertTrue(input.waitForExistence(timeout: 5))
+    XCTAssertEqual(input.value as? String, savedDraft)
     dirtyEditor.terminate()
 
     let setupResume = launchScenario("setup-resume")
@@ -823,10 +702,11 @@ final class BexUITests: XCTestCase {
     credential.click()
     credential.typeText("ui-testing-key")
     setupResume.buttons["settings-save-credential"].click()
-    let returnToQuickCheck = setupResume.buttons["settings-setup-route"]
-    XCTAssertTrue(returnToQuickCheck.waitForExistence(timeout: 3))
-    returnToQuickCheck.click()
-    XCTAssertTrue(titledSurface(setupResume, "Quick Check").waitForExistence(timeout: 5))
+    let returnToFixAndSend = setupResume.buttons["settings-setup-route"]
+    XCTAssertTrue(returnToFixAndSend.waitForExistence(timeout: 3))
+    returnToFixAndSend.click()
+    XCTAssertTrue(titledSurface(setupResume, "Fix & Send").waitForExistence(timeout: 5))
+    XCTAssertTrue(setupResume.textViews["prompt-gate-input"].waitForExistence(timeout: 3))
   }
 
   func testNamedHistoryAndWritingStyleScenariosCoverEmptyAndPopulatedStates() {
@@ -834,17 +714,45 @@ final class BexUITests: XCTestCase {
 
     let emptyHistory = launchScenario("history-empty")
     XCTAssertTrue(emptyHistory.windows["History"].waitForExistence(timeout: 5))
-    XCTAssertTrue(
-      emptyHistory.buttons["history-open-quick-check"].waitForExistence(timeout: 3)
-    )
+    let openFixAndSend = emptyHistory.buttons["history-open-fix-and-send"]
+    XCTAssertTrue(openFixAndSend.waitForExistence(timeout: 3))
+    openFixAndSend.click()
+    let retentionChoices =
+      emptyHistory.descendants(matching: .any)["prompt-gate-retention-choices"]
+    XCTAssertTrue(retentionChoices.waitForExistence(timeout: 3))
+    emptyHistory.buttons["prompt-gate-enable-draft-retention"].click()
+    emptyHistory.buttons["prompt-gate-disable-history-retention"].click()
+    XCTAssertTrue(retentionChoices.waitForNonExistence(timeout: 3))
     emptyHistory.terminate()
 
     let populatedHistory = launchScenario("history-populated")
     XCTAssertTrue(populatedHistory.windows["History"].waitForExistence(timeout: 5))
+    let entryID = "20000000-0000-0000-0000-000000000001"
     XCTAssertTrue(
-      populatedHistory.descendants(matching: .any)[
-        "history-entry-20000000-0000-0000-0000-000000000001"
-      ].waitForExistence(timeout: 3)
+      populatedHistory.descendants(matching: .any)["history-entry-\(entryID)"]
+        .waitForExistence(timeout: 3)
+    )
+    populatedHistory.windows["History"].disclosureTriangles.firstMatch.click()
+    let useOriginal = populatedHistory.buttons["Open Original in Fix & Send"]
+    XCTAssertTrue(useOriginal.waitForExistence(timeout: 3))
+    useOriginal.click()
+    let original = populatedHistory.textViews["prompt-gate-input"]
+    XCTAssertTrue(original.waitForExistence(timeout: 5))
+    XCTAssertEqual(original.value as? String, "this are a test")
+
+    // The fixture command invokes the same coordinator callback as History's correction
+    // action without asking XCTest to click through the floating Fix & Send panel.
+    postUITestingCommand("com.bex.desktop.ui-testing.replace-fix-and-send-draft")
+    let replace = populatedHistory.dialogs.buttons["Replace"].firstMatch
+    XCTAssertTrue(replace.waitForExistence(timeout: 3))
+    replace.click()
+    let correctedPredicate = NSPredicate(format: "value == %@", "this is a test")
+    XCTAssertEqual(
+      XCTWaiter.wait(
+        for: [XCTNSPredicateExpectation(predicate: correctedPredicate, object: original)],
+        timeout: 5
+      ),
+      .completed
     )
     populatedHistory.terminate()
 
@@ -898,7 +806,7 @@ final class BexUITests: XCTestCase {
     editor.click()
     XCTAssertEqual(editor.value as? String, source)
 
-    openMenuCommand("Fix & Send", in: app)
+    openFixAndSend(in: app)
     Thread.sleep(forTimeInterval: 1)
     // Without Accessibility access the capture itself fails (an alert, no gate), so the
     // skip has to happen here — waiting for the disclosure first would fail before the
@@ -964,26 +872,7 @@ final class BexUITests: XCTestCase {
         .write(to: directory.appendingPathComponent(name))
     }
 
-    // Quick Check after a check: the shared review card, Copy Correction footer (4a),
-    // with the alternatives panel present — the fixture sentence carries a Consider
-    // section precisely so the baseline proves the panel renders here (v3 decision 5).
-    let (quickCheckApp, copySink) = launch(openQuickCheck: true, scenario: "configured-provider")
-    defer { try? FileManager.default.removeItem(at: copySink) }
-    let input = quickCheckApp.textViews["quick-check-input"]
-    XCTAssertTrue(input.waitForExistence(timeout: 5))
-    input.click()
-    typeTextReliably("can you check this are a test", into: input)
-    quickCheckApp.buttons["quick-check-check"].click()
-    XCTAssertTrue(quickCheckApp.textViews["quick-check-corrected"].waitForExistence(timeout: 5))
-    XCTAssertTrue(
-      quickCheckApp.descendants(matching: .any)["quick-check-better-expression"]
-        .waitForExistence(timeout: 3),
-      "the alternatives panel must render on the Quick Check card"
-    )
-    try save(titledSurface(quickCheckApp, "Quick Check"), as: "01-quickcheck-review-card.png")
-    quickCheckApp.terminate()
-
-    // Fix & Send on the same correction: the same card, delivery footer.
+    // Fix & Send correction review with its delivery footer.
     let (promptGateApp, targetSink, deliveryEventsSink) = launchPromptGate()
     defer {
       try? FileManager.default.removeItem(at: targetSink)
@@ -994,7 +883,7 @@ final class BexUITests: XCTestCase {
     )
     promptGateApp.buttons["prompt-gate-confirm-outbound"].click()
     _ = awaitPromptCorrection(in: promptGateApp)
-    try save(titledSurface(promptGateApp, "Fix & Send"), as: "02-fixsend-review-card.png")
+    try save(titledSurface(promptGateApp, "Fix & Send"), as: "01-fixsend-review-card.png")
     promptGateApp.terminate()
 
     // Learn on a fresh install: the first-run empty deck (4e).
@@ -1005,12 +894,12 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(
       learnApp.descendants(matching: .any)["study-first-run"].waitForExistence(timeout: 5)
     )
-    try save(titledSurface(learnApp, "Learn"), as: "03-learn-first-run.png")
+    try save(titledSurface(learnApp, "Learn"), as: "02-learn-first-run.png")
   }
 
-  /// A titled top-level surface, whatever it exposes as. On current macOS an `NSPanel`
-  /// (Quick Check, Fix & Send) is a Dialog in the accessibility tree while plain windows
-  /// stay Windows — `app.windows[title]` silently never matches a panel, which also makes
+  /// A titled top-level surface, whatever it exposes as. On current macOS a Fix & Send
+  /// `NSPanel` is a Dialog in the accessibility tree while plain windows stay Windows —
+  /// `app.windows[title]` silently never matches a panel, which also makes
   /// `waitForNonExistence` on it pass vacuously.
   private func titledSurface(_ app: XCUIApplication, _ title: String) -> XCUIElement {
     app.descendants(matching: .any).matching(
@@ -1038,35 +927,10 @@ final class BexUITests: XCTestCase {
     return app
   }
 
-  private func launch(
-    openQuickCheck: Bool,
-    missingCredential: Bool = false,
-    scenario: String? = nil
-  ) -> (XCUIApplication, URL) {
-    let copySink = FileManager.default.temporaryDirectory
-      .appendingPathComponent("BexUITestCopy-\(UUID().uuidString).txt")
-    try? FileManager.default.removeItem(at: copySink)
-    let app = XCUIApplication()
-    app.launchEnvironment["BEX_UI_TESTING"] = "1"
-    app.launchArguments = ["--ui-testing"]
-    if let scenario {
-      app.launchEnvironment["BEX_UI_TEST_SCENARIO"] = scenario
-    }
-    if openQuickCheck {
-      app.launchArguments.append("--open-quick-check")
-      app.launchEnvironment["BEX_UI_TEST_OPEN_QUICK_CHECK"] = "1"
-    }
-    if missingCredential {
-      app.launchArguments.append("--missing-credential")
-      app.launchEnvironment["BEX_UI_TEST_MISSING_CREDENTIAL"] = "1"
-    }
-    app.launchEnvironment["BEX_UI_TEST_PASTEBOARD_PATH"] = copySink.path
-    app.launch()
-    return (app, copySink)
-  }
-
   private func launchPromptGate(
     deliveryError: Bool = false,
+    missingCredential: Bool = false,
+    scenario: String? = nil,
     source: String =
       "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
   ) -> (XCUIApplication, URL, URL) {
@@ -1080,9 +944,16 @@ final class BexUITests: XCTestCase {
     try? FileManager.default.removeItem(at: copySink)
     try? FileManager.default.removeItem(at: deliveryEventsSink)
     let app = XCUIApplication()
-    app.launchArguments = ["--ui-testing", "--open-prompt-gate"]
+    app.launchArguments = ["--ui-testing", "--open-fix-and-send"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
-    app.launchEnvironment["BEX_UI_TEST_OPEN_PROMPT_GATE"] = "1"
+    app.launchEnvironment["BEX_UI_TEST_OPEN_FIX_AND_SEND"] = "1"
+    if missingCredential {
+      app.launchArguments.append("--missing-credential")
+      app.launchEnvironment["BEX_UI_TEST_MISSING_CREDENTIAL"] = "1"
+    }
+    if let scenario {
+      app.launchEnvironment["BEX_UI_TEST_SCENARIO"] = scenario
+    }
     app.launchEnvironment["BEX_UI_TEST_PROMPT_SOURCE"] = source
     app.launchEnvironment["BEX_UI_TEST_PROMPT_TARGET_PATH"] = targetSink.path
     app.launchEnvironment["BEX_UI_TEST_PROMPT_DELIVERY_EVENTS_PATH"] = deliveryEventsSink.path
@@ -1112,7 +983,6 @@ final class BexUITests: XCTestCase {
     return corrected
   }
 
-
   private struct RecordedDeliveryEvent: Codable, Equatable {
     let sequence: Int
     let effect: String
@@ -1131,31 +1001,18 @@ final class BexUITests: XCTestCase {
     }
     return element.label
   }
-  private func descendant(
-    in root: XCUIElement,
-    containing text: String
-  ) -> XCUIElement {
-    root.descendants(matching: .any).matching(
-      NSPredicate(
-        format: "label CONTAINS[c] %@ OR value CONTAINS[c] %@",
-        text,
-        text
-      )
-    ).firstMatch
-  }
-
-
-  private func waitForKeyboardFocus(on element: XCUIElement) -> Bool {
-    let predicate = NSPredicate(format: "hasKeyboardFocus == true")
-    return XCTWaiter.wait(
-      for: [XCTNSPredicateExpectation(predicate: predicate, object: element)],
-      timeout: 3
-    ) == .completed
-  }
 
   private func postUITestingCommand(_ rawName: String) {
     DistributedNotificationCenter.default().postNotificationName(
       Notification.Name(rawName),
+      object: nil,
+      userInfo: nil,
+      deliverImmediately: true
+    )
+  }
+  private func openHub() {
+    DistributedNotificationCenter.default().postNotificationName(
+      Notification.Name("com.bex.desktop.ui-testing.open-hub"),
       object: nil,
       userInfo: nil,
       deliverImmediately: true
@@ -1186,19 +1043,9 @@ final class BexUITests: XCTestCase {
     XCTAssertEqual(element.value as? String, text)
   }
 
-  private func openMenuCommand(_ title: String, in app: XCUIApplication) {
-    let name: Notification.Name
-    switch title {
-    case "Quick Check":
-      name = Notification.Name("com.bex.desktop.ui-testing.open-quick-check")
-    case "Fix & Send":
-      name = Notification.Name("com.bex.desktop.ui-testing.open-prompt-gate")
-    default:
-      XCTFail("Unknown UI-test command: \(title)")
-      return
-    }
+  private func openFixAndSend(in app: XCUIApplication) {
     DistributedNotificationCenter.default().postNotificationName(
-      name,
+      Notification.Name("com.bex.desktop.ui-testing.open-fix-and-send"),
       object: nil,
       userInfo: nil,
       deliverImmediately: true

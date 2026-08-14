@@ -1,8 +1,8 @@
 import Foundation
 
-/// Pure ambient-cue logic for Study Mode's contribution to the menu-bar badge —
-/// the *push* half of Study Mode (docs/learning-mode-plan.md). Mirrors
-/// `LearningBadge.swift` exactly: no `Date()` anywhere in this file, callers
+/// Pure ambient-cue logic for Study Mode's contribution to the menu-bar badge — the
+/// push half of Study Mode. Mirrors `LearningBadge.swift` exactly: no `Date()` anywhere
+/// in this file, callers
 /// (`AppDelegate`) supply "now" and the loaded `[StudyCard]`/state map, so every path
 /// here is a deterministic function of its arguments and unit-testable without mocking
 /// the clock or touching disk.

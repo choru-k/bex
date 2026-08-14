@@ -7,7 +7,6 @@
     case standard = "default"
     case welcome
     case freshConsent = "fresh-consent"
-    case freshQuickCheck = "fresh-quick-check"
     case configuredProvider = "configured-provider"
     case permissionDenied = "permission-denied"
     case permissionTrusted = "permission-trusted"
@@ -15,7 +14,6 @@
     case hookSkipsOutboundConfirmation = "hook-skips-outbound-confirmation"
     case hookCheckInFlight = "hook-check-in-flight"
     case hotKeyConflict = "hotkey-conflict"
-    case quickCheckGrammarInFlight = "quick-check-grammar-in-flight"
     case promptDeliveryInFlight = "prompt-delivery-in-flight"
     case deliveryFailureEffect = "delivery-failure-effect"
     case dirtyEditorResume = "dirty-editor-resume"
@@ -47,19 +45,6 @@
         configuration.preferences.historyRetentionChoice = .undecided
         configuration.target.source = "A fresh consent UI test draft."
         configuration.launchDestination = .promptGate
-      case .freshQuickCheck:
-        configuration.preferences.selectedProvider = .claude
-        configuration.preferences.selectedModel = LLMProvider.claude.defaultModel
-        configuration.preferences.selectedEffort = .high
-        configuration.preferences.draftRetentionChoice = .undecided
-        configuration.preferences.historyRetentionChoice = .undecided
-        configuration.profiles = UITestFixtureConfiguration.populatedProfiles
-        configuration.preferences.activeProfileID =
-          UITestFixtureConfiguration.populatedProfiles.first?.id
-        configuration.preferences.defaultProfileID =
-          UITestFixtureConfiguration.populatedProfiles.first?.id
-        configuration.credentialProvider = .claude
-        configuration.launchDestination = .quickCheck
       case .configuredProvider:
         configuration.preferences.selectedProvider = .claude
         configuration.preferences.selectedModel = LLMProvider.claude.defaultModel
@@ -68,6 +53,11 @@
         configuration.preferences.historyRetentionChoice = .enabled
         configuration.preferences.acceptedOutboundDisclosureProvider = .claude
         configuration.credentialProvider = .claude
+        configuration.profiles = UITestFixtureConfiguration.populatedProfiles
+        configuration.preferences.activeProfileID =
+          UITestFixtureConfiguration.populatedProfiles.first?.id
+        configuration.preferences.defaultProfileID =
+          UITestFixtureConfiguration.populatedProfiles.first?.id
         configuration.launchDestination = .settings
       case .permissionDenied:
         configuration.target.isAccessibilityTrusted = false
@@ -106,16 +96,6 @@
       case .hotKeyConflict:
         configuration.hotKeyRegistration = .conflict
         configuration.launchDestination = .settings
-      case .quickCheckGrammarInFlight:
-        configuration.preferences.selectedProvider = .claude
-        configuration.preferences.selectedModel = LLMProvider.claude.defaultModel
-        configuration.preferences.draftRetentionChoice = .enabled
-        configuration.preferences.historyRetentionChoice = .enabled
-        configuration.preferences.quickDraft = "this are a test"
-        configuration.preferences.acceptedOutboundDisclosureProvider = .claude
-        configuration.credentialProvider = .claude
-        configuration.grammarBehavior = .holdFirstCheckThenFailSubsequent
-        configuration.launchDestination = .quickCheck
       case .promptDeliveryInFlight:
         configuration.target.source =
           "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
@@ -128,14 +108,15 @@
       case .dirtyEditorResume:
         configuration.preservesStoredState = true
         configuration.preferences.draftRetentionChoice = .enabled
-        configuration.preferences.quickDraft = "A saved UI test draft with unsent changes."
-        configuration.launchDestination = .quickCheck
+        configuration.preferences.savedDraft = "A saved UI test draft with unsent changes."
+        configuration.history = []
+        configuration.launchDestination = .history
       case .setupResume:
         configuration.preservesStoredState = true
         configuration.preferences.selectedProvider = .gemini
         configuration.preferences.selectedModel = LLMProvider.gemini.defaultModel
         configuration.credentialProvider = nil
-        configuration.launchDestination = .setup(.quickCheck)
+        configuration.launchDestination = .setup(.fixAndSend)
       case .historyEmpty:
         configuration.history = []
         configuration.launchDestination = .history
@@ -169,7 +150,6 @@
 
   enum UITestLaunchDestination: Equatable, Sendable {
     case none
-    case quickCheck
     case promptGate
     case hookPromptGate
     case settings
@@ -185,7 +165,6 @@
 
   enum UITestGrammarBehavior: Equatable, Sendable {
     case immediate
-    case holdFirstCheckThenFailSubsequent
     case holdPromptCheck
   }
 
@@ -202,7 +181,7 @@
     var defaultProfileID: UUID?
     var draftRetentionChoice: RetentionChoice?
     var historyRetentionChoice: RetentionChoice?
-    var quickDraft: String?
+    var savedDraft: String?
     var acceptedOutboundDisclosureProvider: LLMProvider?
     var confirmsHookOutboundPayloads: Bool?
   }
@@ -211,6 +190,7 @@
     var isAccessibilityTrusted = true
     var requestedAccessibilityTrust = true
     var source = ""
+    var isUnsupported = false
     var sinkPath: String?
     var deliveryFailureEffect: PromptDeliveryEffect?
     var usesRealTarget = false
@@ -343,6 +323,9 @@
       if environment["BEX_UI_TEST_REAL_TARGET"] == "1" {
         configuration.target.usesRealTarget = true
       }
+      if environment["BEX_UI_TEST_UNSUPPORTED_TARGET"] == "1" {
+        configuration.target.isUnsupported = true
+      }
       return configuration
     }
 
@@ -362,8 +345,8 @@
       if let choice = preferences.historyRetentionChoice {
         await store.setHistoryRetentionChoice(choice)
       }
-      if let draft = preferences.quickDraft {
-        await store.setQuickDraft(draft)
+      if let draft = preferences.savedDraft {
+        await store.setSavedDraft(draft)
       }
       if let id = preferences.activeProfileID {
         await store.setActiveProfileID(id)
@@ -470,7 +453,6 @@
   actor UITestingGrammarService: GrammarServicing, PromptGrammarServicing {
     private let behavior: UITestGrammarBehavior
     private let checkGate = UITestingContinuationGate()
-    private var checkRequestCount = 0
 
     init(behavior: UITestGrammarBehavior) {
       self.behavior = behavior
@@ -485,34 +467,10 @@
       destination: OutboundDestination,
       profilePrompt: String?
     ) async throws -> GrammarResult {
-      checkRequestCount += 1
-      if behavior == .holdFirstCheckThenFailSubsequent {
-        if checkRequestCount == 1 {
-          await checkGate.wait()
-        } else {
-          throw BexError.connectionFailure("Forced UI test grammar failure.")
-        }
-      }
       if text == "this are a test" {
         return GrammarResult(
           corrected: "this is a test",
           explanation: "Changed subject-verb agreement."
-        )
-      }
-      // The screenshot fixture's sentence: a response in the full two-section
-      // GrammarPrompts format, so the captured card shows the alternatives panel
-      // (redesign v3, decision 5). No other UI test types this sentence.
-      if text == "can you check this are a test" {
-        return GrammarResult(
-          corrected: "can you check this is a test",
-          explanation: """
-            Fixed:
-            [subject-verb-agreement] "are" → "is" — the subject is singular.
-            Consider:
-            "can you check" → "could you check" — a touch softer.
-            "can you check" → "mind checking" — casual, common in chat.
-            Which fits?
-            """
         )
       }
       return GrammarResult(corrected: text, explanation: "No changes needed.")
@@ -520,7 +478,8 @@
 
     func checkPrompt(
       text: String,
-      destination: OutboundDestination
+      destination: OutboundDestination,
+      profilePrompt: String?
     ) async throws -> GrammarResult {
       if text == "this are a test" {
         return GrammarResult(
@@ -539,7 +498,8 @@
 
     func checkPrompt(
       protectedText: PromptTechnicalSpanProtector.ProtectedText,
-      destination: OutboundDestination
+      destination: OutboundDestination,
+      profilePrompt: String?
     ) async throws -> GrammarResult {
       if behavior == .holdPromptCheck {
         await checkGate.wait()
@@ -667,6 +627,7 @@
     private let sinkURL: URL
     private let deliveryEventsURL: URL?
     private let requestedAccessibilityTrust: Bool
+    private let isUnsupported: Bool
     private let deliveryFailureEffect: PromptDeliveryEffect?
     private let deliveryGate: UITestingContinuationGate?
     private let pasteboard: any PasteboardWriting
@@ -678,6 +639,7 @@
     ) {
       source = configuration.source
       requestedAccessibilityTrust = configuration.requestedAccessibilityTrust
+      isUnsupported = configuration.isUnsupported
       deliveryFailureEffect = configuration.deliveryFailureEffect
       deliveryGate =
         configuration.deliveryGate == .untilReleased
@@ -707,11 +669,12 @@
     }
 
     func captureFrontmostTarget() throws -> PromptCapture {
+      guard !isUnsupported else {
+        throw BexError.unsupportedPromptTarget
+      }
       let kind: PromptTargetKind
-      if !isAccessibilityTrusted {
+      if !isAccessibilityTrusted || source.isEmpty {
         kind = .copyOnly
-      } else if source.isEmpty {
-        kind = .composerPaste
       } else {
         kind = .capturedField
       }
@@ -721,15 +684,13 @@
         bundleID: "com.bex.ui-test-target",
         applicationName: "UI Test Target",
         guidance: kind == .copyOnly
-          ? "Accessibility is required for manual capture and replacement. Bex will copy the approved correction."
-          : source.isEmpty
-            ? "Bex will paste the correction. Press Return in the target to submit."
-            : "Bex will replace this exact field after approval."
+          ? "No editable field was captured. Bex will copy the approved correction."
+          : "Bex will replace this exact field after approval."
       )
       return PromptCapture(
-        draft: kind == .copyOnly ? "" : source,
+        draft: kind == .capturedField ? source : "",
         target: target,
-        source: kind == .capturedField ? .capturedField : .composer
+        source: kind == .capturedField ? .capturedField : .standalone
       )
     }
 
@@ -1121,7 +1082,6 @@
         hookManager: hookManager,
         promptGateIPC: promptGateIPC,
         codexOAuth: CodexOAuthService(keychain: keychain, transport: transport),
-        autoDismissQuickCheck: false
       )
     }
   }
