@@ -721,7 +721,7 @@ struct SettingsView: View {
         )
         .accessibilityIdentifier("settings-hook-outbound-confirmation")
         Text(
-          "When off, installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Ambiguous manual Fix & Send captures still require confirmation."
+          "Off by default. Installed hooks send prompts directly to your configured provider after you accept that provider’s disclosure. Turn this on to review every masked hook payload before it leaves the Mac. Ambiguous manual Fix & Send captures still require confirmation."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -808,7 +808,7 @@ struct SettingsView: View {
         }
 
         Text(
-          "OMP must advertise native prompt-gate-v1. Builds without it—including 17.0.6—remain unavailable; Bex never installs a best-effort extension."
+          "The selected OMP build must advertise native prompt-gate-v1. If it does not, Bex stays unavailable; input extensions can fail open and are not a safe fallback."
         )
         .font(.caption)
         .foregroundStyle(.secondary)

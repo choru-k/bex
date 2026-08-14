@@ -706,6 +706,11 @@ actor HookInstallationManager: HookInstallationManaging {
     else {
       let detail = String(data: errorOutput, encoding: .utf8)?
         .trimmingCharacters(in: .whitespacesAndNewlines)
+      if detail?.contains("unknown flag: --json") == true {
+        throw BexError.storageFailure(
+          "This OMP build does not implement the native prompt-gate-v1 interface required by Bex (`omp capabilities --json`). OMP input extensions are not fail-closed, so Bex cannot install one as a safe fallback."
+        )
+      }
       throw BexError.storageFailure(
         detail?.isEmpty == false
           ? "OMP capability query failed: \(detail!)"

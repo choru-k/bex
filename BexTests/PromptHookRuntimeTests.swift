@@ -1106,6 +1106,29 @@ final class HookInstallationManagerTests: XCTestCase {
       XCTFail("Expected unavailable OMP target to reject preparation")
     } catch {}
 
+    let unsupportedExecutable = try executable(
+      named: "omp-without-capability-command",
+      script:
+        "printf 'Error: unknown flag: --json\\nRun `omp --help` for available flags.\\n' >&2; exit 1"
+    )
+    do {
+      _ = try await fixture.manager.resolve(
+        .ohMyPi(
+          executable: unsupportedExecutable,
+          profile: "default",
+          workingDirectory: workingDirectory
+        )
+      )
+      XCTFail("Expected an OMP build without the native capability command to remain unavailable")
+    } catch {
+      XCTAssertTrue(
+        error.localizedDescription.contains(
+          "does not implement the native prompt-gate-v1 interface required by Bex"
+        )
+      )
+      XCTAssertFalse(error.localizedDescription.contains("unknown flag"))
+    }
+
     let invalidExecutables = try [
       executable(named: "omp-malformed", script: "printf 'not-json\\n'"),
       executable(named: "omp-nonzero", script: "printf 'failure\\n' >&2; exit 7"),
@@ -1261,6 +1284,46 @@ final class HookHelperOutputTests: XCTestCase {
     XCTAssertEqual(ompObject["event"] as? String, HookProtocolConstants.promptGateCapability)
     XCTAssertEqual(ompObject["integration_id"] as? String, "omp-test")
     XCTAssertEqual(ompObject["decision"] as? String, "block")
+  }
+
+  func testOMPTrivialPromptProducesOneAllowFrameAndHeartbeat() throws {
+    let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/bex-hook")
+    let integrationID = "omp-test-\(UUID().uuidString)"
+    let heartbeatName = Data(integrationID.utf8).base64EncodedString()
+      .replacingOccurrences(of: "/", with: "_")
+      .replacingOccurrences(of: "+", with: "-")
+      .replacingOccurrences(of: "=", with: "")
+    let heartbeatURL = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent("Library/Application Support/Bex/PromptGate/heartbeats")
+      .appendingPathComponent("\(heartbeatName).json")
+    defer { try? FileManager.default.removeItem(at: heartbeatURL) }
+    var input = try JSONSerialization.data(withJSONObject: [
+      "version": HookProtocolConstants.version,
+      "event": HookProtocolConstants.promptGateCapability,
+      "integration_id": integrationID,
+      "text": "안녕하세요",
+      "images": [],
+      "session_id": "omp-helper-test",
+      "cwd": "/tmp",
+      "profile": "default",
+      "source": "prompt",
+    ])
+    input.append(0x0A)
+
+    let output = try runHelper(
+      helper,
+      client: "omp",
+      additionalArguments: [integrationID],
+      input: input
+    )
+    let lines = output.split(separator: 0x0A)
+    XCTAssertEqual(lines.count, 1)
+    let frame = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: Data(lines[0])) as? [String: Any]
+    )
+    XCTAssertEqual(frame["decision"] as? String, "allow")
+    XCTAssertEqual(frame["integration_id"] as? String, integrationID)
+    XCTAssertTrue(FileManager.default.fileExists(atPath: heartbeatURL.path))
   }
 }
 

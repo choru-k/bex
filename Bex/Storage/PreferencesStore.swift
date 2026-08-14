@@ -16,7 +16,7 @@ enum OutboundConfirmationContext: Equatable, Sendable {
 extension OutboundConfirmationContext {
   func requiresConfirmation(
     hasAcceptedDisclosure: Bool,
-    confirmsHookOutboundPayloads: Bool = true
+    confirmsHookOutboundPayloads: Bool = false
   ) -> Bool {
     guard hasAcceptedDisclosure else { return true }
     switch self {
@@ -276,7 +276,7 @@ actor PreferencesStore {
 
   func confirmsHookOutboundPayloads() -> Bool {
     guard defaults.object(forKey: Key.confirmsHookOutboundPayloads) != nil else {
-      return true
+      return false
     }
     return defaults.bool(forKey: Key.confirmsHookOutboundPayloads)
   }

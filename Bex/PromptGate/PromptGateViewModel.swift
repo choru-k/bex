@@ -64,7 +64,7 @@ final class PromptGateViewModel: ObservableObject {
   private var configuredDestination: OutboundDestination?
   private var replacementConfirmedDraft: String?
   private var hasAcceptedDestinationDisclosure = false
-  private var confirmsHookOutboundPayloads = true
+  private var confirmsHookOutboundPayloads = false
   private var isClosing = false
   private var pendingCorrection: PendingCorrection?
 
@@ -611,16 +611,14 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
-          if context?.client != .ohMyPi {
-            issuedReceipt = try await approvalStore.issue(
-              client: client,
-              integrationID: context?.integrationID,
-              text: correction,
-              sessionID: context?.sessionID,
-              cwd: context?.cwd
-            )
-            activeReceiptID = issuedReceipt
-          }
+          issuedReceipt = try await approvalStore.issue(
+            client: client,
+            integrationID: context?.integrationID,
+            text: correction,
+            sessionID: context?.sessionID,
+            cwd: context?.cwd
+          )
+          activeReceiptID = issuedReceipt
           if let requestID = session.hookRequestID {
             do {
               try await hookResponder.complete(

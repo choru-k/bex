@@ -146,7 +146,7 @@ The three clients differ only in setup and delivery:
 | Codex | Open `/hooks` and trust the Bex handler | Same as Claude Code | May fail open |
 | OMP | None — uses the reviewed native prompt gate, no marketplace extension | Bex resubmits the correction once through the native gate | Fails closed |
 
-By default, Bex asks you to confirm each hook prompt before sending it to the configured provider. To skip that per-prompt screen, turn off **Settings → Integrations → Confirm each hook payload before sending**. The first disclosure for each provider still requires approval, and ambiguous manual focused-app captures remain gated.
+After you accept a provider’s first disclosure, Bex sends installed-hook payloads directly to that configured correction provider by default. To review every masked hook payload before it leaves the Mac, turn on **Settings → Integrations → Confirm each hook payload before sending**. Ambiguous manual focused-app captures remain gated.
 
 Bex resolves these exact host-owned targets:
 
@@ -154,7 +154,11 @@ Bex resolves these exact host-owned targets:
 - Codex: `${CODEX_HOME}/hooks.json` when that variable is inherited by Bex, otherwise `~/.codex/hooks.json`
 - OMP: the absolute gate directory returned by `omp capabilities --json` for the selected profile and working directory
 
-OMP must advertise the `prompt-gate-v1` capability. Builds without it — including OMP 17.0.6 — remain unavailable: Bex will not fall back to an unreviewed OMP `input` extension, and a project's own `.omp` extension cannot substitute for the native gate.
+The selected OMP build must advertise the `prompt-gate-v1` capability. When it does not, Bex remains unavailable: Bex will not fall back to an OMP `input` extension because that extension can fail open, and a project's own `.omp` extension cannot substitute for the native gate.
+
+OMP compatibility is capability-based rather than inferred from its version number: run the exact selected binary with `capabilities --json` and verify that it reports `prompt-gate-v1`. The native integration requires Bex 0.8.6 or newer so staged corrections can be replayed through OMP's gate and post-delivery heartbeats complete correctly over its pipes.
+
+OMP upstream tracking: [can1357/oh-my-pi#7989](https://github.com/can1357/oh-my-pi/pull/7989). Until `prompt-gate-v1` appears in an official OMP release, use a compatible build from that change; Bex continues to reject standard builds that do not advertise the capability.
 
 Bex preserves unrelated JSON and file permissions. **Uninstall** removes only Bex-owned artifacts. Drift produces **Update available** or **Needs repair**, never an automatic overwrite; the signed helper is replaced only through an explicit reviewed Update or Repair.
 
@@ -170,7 +174,7 @@ If a prompt is blocked with a helper or IPC error, keep Bex running, repair the 
 
 - **Installed — waiting for first prompt:** restart the client if it was already open, keep Bex running, and submit a test prompt.
 - **Installed — approve Bex in `/hooks`:** open `/hooks` in Codex, trust the handler, then submit a test prompt.
-- **OMP unavailable:** install an OMP build that advertises `prompt-gate-v1`, then resolve the target again.
+- **OMP unavailable:** the selected build does not implement `omp capabilities --json` or does not advertise `prompt-gate-v1`. Bex cannot install until OMP provides that native interface.
 - **Update available / Needs repair:** open a fresh review, verify the new baseline, and Apply.
 - **Nothing changed:** the reviewed file or an ancestor changed identity. Choose **Review Latest Changes**; Bex will not apply a stale review.
 - **Partial failure:** inspect the completed, restored, and retained paths shown in the review sheet before retrying.

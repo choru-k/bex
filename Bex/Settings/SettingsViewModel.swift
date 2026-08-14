@@ -54,7 +54,7 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var oauthInProgress = false
   @Published private(set) var manualCallbackRequired = false
   @Published var callbackURL = ""
-  @Published private(set) var confirmsHookOutboundPayloads = true
+  @Published private(set) var confirmsHookOutboundPayloads = false
   @Published private(set) var codexPriorityTier = true
   @Published private(set) var accessibilityTrusted = false
   @Published private(set) var hookStatuses: [PromptClient: HookInstallationStatus] = [:]
@@ -986,12 +986,59 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
-  private static func defaultOMPExecutablePath() -> String {
-    let candidates = (ProcessInfo.processInfo.environment["PATH"] ?? "")
+  static func defaultOMPExecutablePath(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
+    fileManager: FileManager = .default
+  ) -> String {
+    func isUsableExecutable(_ path: String) -> Bool {
+      let url = URL(fileURLWithPath: path)
+      guard
+        let values = try? url.resourceValues(
+          forKeys: [.isRegularFileKey, .isSymbolicLinkKey]
+        ),
+        values.isRegularFile == true,
+        values.isSymbolicLink != true
+      else {
+        return false
+      }
+      return fileManager.isExecutableFile(atPath: path)
+    }
+
+    let pathCandidates = (environment["PATH"] ?? "")
       .split(separator: ":")
       .map { URL(fileURLWithPath: String($0)).appendingPathComponent("omp").path }
-    return candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) })
-      ?? "/opt/homebrew/bin/omp"
+      + ["/opt/homebrew/bin/omp", "/usr/local/bin/omp"]
+    if let executable = pathCandidates.first(where: isUsableExecutable) {
+      return executable
+    }
+
+    let miseDataDirectory = environment["MISE_DATA_DIR"].map {
+      URL(
+        fileURLWithPath: ($0 as NSString).expandingTildeInPath,
+        isDirectory: true
+      )
+    } ?? homeDirectory.appendingPathComponent(".local/share/mise", isDirectory: true)
+    let installsDirectory = miseDataDirectory
+      .appendingPathComponent("installs/npm-oh-my-pi-pi-coding-agent", isDirectory: true)
+    let versionDirectories = (
+      try? fileManager.contentsOfDirectory(
+        at: installsDirectory,
+        includingPropertiesForKeys: [.isDirectoryKey],
+        options: [.skipsHiddenFiles]
+      )
+    ) ?? []
+    let miseCandidates = versionDirectories
+      .sorted {
+        $0.lastPathComponent.compare(
+          $1.lastPathComponent,
+          options: [.numeric, .caseInsensitive]
+        ) == .orderedDescending
+      }
+      .map {
+        $0.appendingPathComponent("node_modules/.bin/omp").path
+      }
+    return miseCandidates.first(where: isUsableExecutable) ?? ""
   }
 
   private func loadPromptGate() async {
