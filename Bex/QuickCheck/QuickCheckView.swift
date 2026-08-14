@@ -85,6 +85,7 @@ struct QuickCheckView: View {
             alternativesPhrase: viewModel.alternativesPhrase,
             pickedAlternativeID: viewModel.pickedAlternativeID,
             onChooseAlternative: { viewModel.choose($0) },
+            primaryActionHint: "⏎ copies as-is",
             changeCategorySummary: viewModel.changeCategorySummary,
             accessibleDiffSummary: viewModel.accessibleDiffSummary,
             detailsSummary: "Details — original message · grammar notes · checked by "

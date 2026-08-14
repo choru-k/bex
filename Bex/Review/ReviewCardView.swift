@@ -52,6 +52,9 @@ struct ReviewCardView<DetailsExtra: View>: View {
   let alternativesPhrase: String
   let pickedAlternativeID: String?
   let onChooseAlternative: (PromptGateAlternative) -> Void
+  /// The true statement of what the primary key does to unpicked alternatives, worded by
+  /// the host ("⌘⏎ sends as-is" / "⏎ copies as-is") — a shared string lied on one surface.
+  let primaryActionHint: String
   /// e.g. "Subject–verb agreement, Spelling" beside the redline. May be empty.
   let changeCategorySummary: String
   let accessibleDiffSummary: String
@@ -214,11 +217,11 @@ struct ReviewCardView<DetailsExtra: View>: View {
         }
         .accessibilityIdentifier("\(idPrefix)-better-expression")
 
-        ForEach(alternatives) { alternative in
-          alternativeRow(alternative)
+        ForEach(Array(alternatives.enumerated()), id: \.element.id) { index, alternative in
+          alternativeRow(alternative, index: index)
         }
 
-        Text("Unranked — pick what you would actually say, or skip; ⌘⏎ sends as-is.")
+        Text("Unranked — pick what you would actually say, or skip; \(primaryActionHint).")
           .font(.caption)
           .foregroundStyle(.tertiary)
           .fixedSize(horizontal: false, vertical: true)
@@ -234,7 +237,7 @@ struct ReviewCardView<DetailsExtra: View>: View {
     }
   }
 
-  private func alternativeRow(_ alternative: PromptGateAlternative) -> some View {
+  private func alternativeRow(_ alternative: PromptGateAlternative, index: Int) -> some View {
     let isPicked = pickedAlternativeID == alternative.id
     return Button {
       onChooseAlternative(alternative)
@@ -253,6 +256,11 @@ struct ReviewCardView<DetailsExtra: View>: View {
           }
         }
         Spacer(minLength: 0)
+        if index < 9 {
+          Text("⌘\(index + 1)")
+            .font(.caption.monospaced())
+            .foregroundStyle(.tertiary)
+        }
       }
       .padding(.horizontal, 12)
       .padding(.vertical, 9)
@@ -264,8 +272,20 @@ struct ReviewCardView<DetailsExtra: View>: View {
       )
     }
     .buttonStyle(.plain)
+    // ⌘-digit rather than the drill's bare digits: the corrected editor usually holds
+    // focus on this card, and an unmodified key would be swallowed as typing. Without
+    // SOME key the pick is the only mouse-required act in a keyboard app — and the pick
+    // is the one measured expression signal (docs/purpose.md).
+    .keyboardShortcut(Self.pickKey(for: index), modifiers: .command)
     .accessibilityAddTraits(isPicked ? [.isSelected] : [])
     .accessibilityIdentifier("\(idPrefix)-alternative-\(alternative.id)")
+  }
+
+  /// Digit key for the nth alternative, mirroring `StudyCardView.choiceKey`. Falls back
+  /// to a harmless unmatched key past the 9th — the prompt contract offers 2–3.
+  private static func pickKey(for index: Int) -> KeyEquivalent {
+    guard index < 9, let digit = "\(index + 1)".first else { return KeyEquivalent("\u{0}") }
+    return KeyEquivalent(digit)
   }
 
   /// Everything that used to have its own heading: the original message, the model's
