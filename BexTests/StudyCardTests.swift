@@ -424,6 +424,31 @@ final class StudyCardTests: XCTestCase {
     XCTAssertEqual(choicesCards.first?.answerMode, .choices)
   }
 
+  // MARK: - Progress layout
+
+  func testTwentyCardPileFitsTheMenuBarHeader() {
+    let metrics = StudyPileDotsLayout.metrics(
+      total: 20,
+      preferredDotWidth: 20,
+      maximumWidth: 160
+    )
+
+    XCTAssertGreaterThan(metrics.dotWidth, 0)
+    XCTAssertLessThanOrEqual(metrics.width(for: 20), 160)
+  }
+
+  func testShortPileKeepsItsPreferredDashSize() {
+    let metrics = StudyPileDotsLayout.metrics(
+      total: 5,
+      preferredDotWidth: 20,
+      maximumWidth: 160
+    )
+
+    XCTAssertEqual(metrics.dotWidth, 20)
+    XCTAssertEqual(metrics.spacing, 4)
+    XCTAssertEqual(metrics.width(for: 5), 116)
+  }
+
   // MARK: - Dedup by id
 
   func testDedupByIdKeepsFirstOccurrence() {

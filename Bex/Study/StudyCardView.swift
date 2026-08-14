@@ -334,6 +334,56 @@ struct StudyCardStack<Content: View>: View {
   }
 }
 
+/// Fits the session dashes to a bounded host without changing their count.
+///
+/// The menu-bar session can contain 20 cards. At the preferred 20pt dash width plus
+/// spacing, that row is 476pt wide and forces the entire 320pt popover's content off-center.
+/// Window-hosted drills leave `maximumWidth` unset and retain their larger dashes.
+enum StudyPileDotsLayout {
+  static let preferredSpacing: CGFloat = 4
+  static let minimumVisibleDotWidth: CGFloat = 2
+
+  struct Metrics: Equatable {
+    let dotWidth: CGFloat
+    let spacing: CGFloat
+
+    func width(for total: Int) -> CGFloat {
+      guard total > 0 else { return 0 }
+      return CGFloat(total) * dotWidth + CGFloat(max(total - 1, 0)) * spacing
+    }
+  }
+
+  static func metrics(
+    total: Int,
+    preferredDotWidth: CGFloat,
+    maximumWidth: CGFloat?
+  ) -> Metrics {
+    guard total > 0, let maximumWidth else {
+      return Metrics(dotWidth: preferredDotWidth, spacing: preferredSpacing)
+    }
+
+    let availableWidth = max(0, maximumWidth)
+    let count = CGFloat(total)
+    guard total > 1 else {
+      return Metrics(dotWidth: min(preferredDotWidth, availableWidth), spacing: 0)
+    }
+
+    // Preserve a visible mark before preserving the preferred gap. If even 2pt per card
+    // cannot fit, the gap reaches zero and every card still receives an equal share.
+    let minimumDotWidth = min(minimumVisibleDotWidth, availableWidth / count)
+    let maximumSpacing = max(
+      0,
+      (availableWidth - minimumDotWidth * count) / CGFloat(total - 1)
+    )
+    let spacing = min(preferredSpacing, maximumSpacing)
+    let dotWidth = min(
+      preferredDotWidth,
+      max(0, (availableWidth - spacing * CGFloat(total - 1)) / count)
+    )
+    return Metrics(dotWidth: dotWidth, spacing: spacing)
+  }
+}
+
 /// The session's remaining stack, one dash per card.
 ///
 /// Replaces the "3 of 5" readout as the primary progress cue for the same reason the hub
@@ -345,13 +395,21 @@ struct StudyPileDots: View {
   let completed: Int
   var dotWidth: CGFloat = 24
   var dotHeight: CGFloat = 4
+  /// Optional host constraint. When set, dash width and then spacing contract so the
+  /// indicator cannot increase its parent's ideal width beyond this value.
+  var maximumWidth: CGFloat? = nil
 
   var body: some View {
-    HStack(spacing: 4) {
+    let metrics = StudyPileDotsLayout.metrics(
+      total: total,
+      preferredDotWidth: dotWidth,
+      maximumWidth: maximumWidth
+    )
+    HStack(spacing: metrics.spacing) {
       ForEach(0..<max(total, 0), id: \.self) { index in
         Capsule()
           .fill(fill(for: index))
-          .frame(width: dotWidth, height: dotHeight)
+          .frame(width: metrics.dotWidth, height: dotHeight)
       }
     }
     .accessibilityElement(children: .ignore)

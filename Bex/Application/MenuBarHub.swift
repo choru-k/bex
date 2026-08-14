@@ -67,10 +67,14 @@ struct MenuBarHubView: View {
       Spacer(minLength: 8)
 
       if study.sessionTotal > 0 {
+        // Twenty 20pt dashes need 476pt, which makes the 320pt popover lay out every
+        // sibling off-center and clip the card. Keep one dash per card, but fit this
+        // compact instance into the header's share of the popover.
         StudyPileDots(
           total: study.sessionTotal,
           completed: study.completedCount,
-          dotWidth: 20
+          dotWidth: 20,
+          maximumWidth: 160
         )
       }
 
