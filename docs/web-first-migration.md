@@ -81,3 +81,11 @@ node scripts/bex-web.mjs desktop
 
 No automatic merge, release, production data migration or integration reinstallation is
 part of this work. Record actual platform/version and passed checks before promotion.
+
+## Renderer transport follow-up
+
+The opt-in renderer-side native transport and its tested message contract are now
+implemented; see [native-provider-bridge.md](native-provider-bridge.md). It is not
+installed in the fixture lab or native development shell. Native service wiring,
+independent native validation and actual disclosed provider consent remain required
+before activation. No live provider connection is claimed.
