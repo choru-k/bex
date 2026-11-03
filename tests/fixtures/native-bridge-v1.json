@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "plain correction",
+      "request": {
+        "protocolVersion": 1,
+        "text": "The tests passes.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "The tests passes.",
+        "corrected": "The tests pass.",
+        "notes": [
+          {
+            "kind": "correction",
+            "category": "verb-forms",
+            "before": "passes",
+            "after": "pass",
+            "reason": "Plural subject takes pass."
+          }
+        ],
+        "provenance": "provider"
+      },
+      "acceptResult": true
+    },
+    {
+      "name": "astral Unicode and attributed source",
+      "request": {
+        "protocolVersion": 1,
+        "text": "😀 The tests passes.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general"
+        },
+        "source": {
+          "title": "Sample exercise",
+          "section": "1",
+          "excerpt": "A synthetic exercise, not private writing."
+        }
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "😀 The tests passes.",
+        "corrected": "😀 The tests pass.",
+        "notes": [
+          {
+            "kind": "correction",
+            "category": "verb-forms",
+            "before": "passes",
+            "after": "pass",
+            "reason": "Plural subject takes pass."
+          }
+        ],
+        "provenance": "provider"
+      },
+      "acceptResult": true
+    },
+    {
+      "name": "decomposed Unicode exact round-trip",
+      "request": {
+        "protocolVersion": 1,
+        "text": "Café works.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "Café works.",
+        "corrected": "The café works.",
+        "notes": [],
+        "provenance": "provider"
+      },
+      "acceptResult": true
+    },
+    {
+      "name": "canonical-equivalent original is not exact",
+      "request": {
+        "protocolVersion": 1,
+        "text": "Café works.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "Café works.",
+        "corrected": "The café works.",
+        "notes": [],
+        "provenance": "provider"
+      },
+      "acceptResult": false
+    },
+    {
+      "name": "unattributed feedback before span",
+      "request": {
+        "protocolVersion": 1,
+        "text": "The tests passes.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "The tests passes.",
+        "corrected": "The tests pass.",
+        "notes": [
+          {
+            "kind": "correction",
+            "category": "verb-forms",
+            "before": "missing",
+            "after": "pass",
+            "reason": "Plural subject takes pass."
+          }
+        ],
+        "provenance": "provider"
+      },
+      "acceptResult": false
+    },
+    {
+      "name": "fixture provenance rejected by native transport",
+      "request": {
+        "protocolVersion": 1,
+        "text": "The tests passes.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "The tests passes.",
+        "corrected": "The tests pass.",
+        "notes": [
+          {
+            "kind": "correction",
+            "category": "verb-forms",
+            "before": "passes",
+            "after": "pass",
+            "reason": "Plural subject takes pass."
+          }
+        ],
+        "provenance": "fixture"
+      },
+      "acceptResult": false
+    }
+  ]
+}

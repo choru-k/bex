@@ -5,6 +5,29 @@ adapter for a future native correction operation. It is not installed in the Rea
 fixture lab or WKWebView development shell. The existing UI stays fixture-only.
 There is no live provider, credential access, or native service wiring in this slice.
 
+## Native core implementation (not activated)
+
+`native/` contains a standalone, dependency-free Swift package implementing the
+host-side wire parser and consent/job state machine. It is not part of the Bex
+Xcode project and is not imported by the development shell. See
+`native/README.md` for the embedding contract and remaining activation gates.
+
+The core accepts one session, validates request fields independently, bounds
+concurrency and replay history, and creates native-only job identities. A correction
+first yields a consent-required event. Only the native host's explicit resolution
+can yield an authorized correction event. Cancelling retains the job's capacity
+until the host acknowledges that work stopped, preventing unbounded cancel/retry.
+There is no consent UI, provider invocation, credential read or network access in
+the package. These events must be connected to real native protections before use.
+
+Shared synthetic wire vectors in `tests/fixtures/native-bridge-v1.json` are consumed
+by renderer tests and Swift test sources, including exact Unicode correlation.
+The renderer tests run in the cloud; the Swift package is **uncompiled and its
+tests unexecuted here because a Swift toolchain is unavailable**. Static review
+and passing JavaScript vectors do not establish Swift runtime parity. Run
+`swift test --package-path native` in an authorized Swift environment before
+considering any activation, and separately validate the actual macOS host.
+
 ## Lifecycle
 
 A trusted packaged app supplies a narrow `NativeEndpoint`: `postMessage(json)` and

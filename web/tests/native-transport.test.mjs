@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { NativeCorrectionTransport, MAX_BRIDGE_BYTES } from '../src/bridge/nativeTransport.ts';
 import { makeRequest, DEFAULT_POLICY } from '../src/core/model.ts';
 
@@ -7,6 +8,20 @@ const request = () => makeRequest('The tests passes.', DEFAULT_POLICY);
 const result = () => ({ protocolVersion: 1, original: 'The tests passes.', corrected: 'The tests pass.', notes: [], provenance: 'provider' });
 const capabilities = () => ({ providerName: 'Native provider', perRequestConsent: true, operations: ['correct', 'cancel'] });
 const signal = () => new AbortController().signal;
+// Shared with the standalone Swift host tests. Passing here executes the renderer,
+// not Swift: native compilation and XCTest remain a separate acceptance gate.
+const vectors = JSON.parse(readFileSync(new URL('../../tests/fixtures/native-bridge-v1.json', import.meta.url), 'utf8'));
+assert.equal(vectors.version, 1);
+for (const vector of vectors.cases) {
+  test(`shared native wire vector: ${vector.name}`, async t => {
+    const h = harness(t); await h.connect();
+    const pending = h.transport.check(vector.request, signal());
+    assert.deepEqual(h.messages.at(-1).request, vector.request);
+    h.reply(h.messages.at(-1), { kind: 'result', result: vector.result });
+    if (vector.acceptResult) assert.deepEqual(await pending, vector.result);
+    else await assert.rejects(pending, /Invalid native/);
+  });
+}
 function harness(t, timeout = 1000) {
   const messages = [], listeners = new Set();
   const endpoint = { postMessage(json) { messages.push(JSON.parse(json)); },
