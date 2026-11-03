@@ -11,7 +11,7 @@
     "build": "tsc -p tsconfig.json && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 5180 --strictPort",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test tests/core.test.mjs",
+    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/coaching-quality.test.mjs tests/native-smoke.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",
     "check": "npm run typecheck && npm test && npm run build"

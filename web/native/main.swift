@@ -2,20 +2,73 @@ import AppKit
 import Darwin
 import WebKit
 
+// These scripts are exercised verbatim by native-smoke.spec.ts. They expose no
+// native API. Diagnostics are bounded and do not directly read editor/source fields.
+// Error, alert and corrected-result text may still contain page-provided content.
+private let smokeErrorCaptureScript = #"""
+(() => {
+  const errors = [];
+  window.__bexWebLabSmokeErrors = errors;
+  const record = value => {
+    if (errors.length < 5) errors.push(String(value).slice(0, 500));
+  };
+  window.addEventListener('error', event => record(event.message || 'Page script/resource error'), true);
+  window.addEventListener('unhandledrejection', event => {
+    const reason = event.reason;
+    record(reason && typeof reason.message === 'string' ? reason.message : 'Unhandled promise rejection');
+  });
+})();
+"""#
+
+private let smokeProbeScript = #"""
+(shouldClick => {
+  const root = document.querySelector('.shell');
+  const button = document.querySelector('button.primary');
+  const corrected = document.querySelector('[data-testid=corrected]')?.textContent || '';
+  const alert = document.querySelector('[role=alert]')?.textContent || '';
+  const errors = Array.isArray(window.__bexWebLabSmokeErrors) ? window.__bexWebLabSmokeErrors.slice(0, 5) : [];
+  const ready = root?.getAttribute('data-lab-ready') === 'true';
+  const state = root?.getAttribute('data-lab-state') || 'missing';
+  let phase = 'waiting-ready';
+  let clicked = false;
+  if (errors.length || alert) phase = 'error';
+  else if (corrected) phase = 'result';
+  else if (ready) {
+    if (state === 'pending') phase = 'pending';
+    else if (!button || button.disabled) phase = 'waiting-button';
+    else if (shouldClick && state === 'idle') {
+      button.click();
+      clicked = true;
+      phase = 'click-dispatched';
+    } else phase = 'idle';
+  }
+  return { phase, clicked, ready, state, corrected: corrected.slice(0, 200),
+    alert: alert.slice(0, 500), errors, documentState: document.readyState,
+    buttonPresent: !!button, buttonDisabled: button ? button.disabled : null };
+})
+"""#
+
 // Development-only shell. No AX access, Keychain access, file bridge, hook installer,
 // production Bex services, or script-message handlers. Never ship this as Bex.app.
 @MainActor
 final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   private var window: NSWindow?
   private let smoke = ProcessInfo.processInfo.environment["BEX_WEB_LAB_SMOKE"] == "1"
-  private var smokeSubmitted = false
+  private var smokeClickRequested = false
   private var smokeStarted = false
+  private var smokeLastPhase = "not-started"
+  private var smokeLastSnapshot = "No page probe has completed."
   private let origin = URL(string: "http://127.0.0.1:5179")!
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     let configuration = WKWebViewConfiguration()
     configuration.websiteDataStore = .nonPersistent()
     configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+    if smoke {
+      configuration.userContentController.addUserScript(WKUserScript(
+        source: smokeErrorCaptureScript, injectionTime: .atDocumentStart, forMainFrameOnly: true
+      ))
+    }
     let webView = WKWebView(frame: .zero, configuration: configuration)
     webView.navigationDelegate = self
     if #available(macOS 13.3, *) { webView.isInspectable = true }
@@ -51,8 +104,9 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
     NSApp.mainMenu = menu
 
     if smoke {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak webView] in
-        print("BEX_WEB_LAB_SMOKE FAIL: timed out; URL=\(webView?.url?.absoluteString ?? "nil"), loading=\(webView?.isLoading ?? false)")
+      DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self, weak webView] in
+        print("BEX_WEB_LAB_SMOKE FAIL: timed out; URL=\(webView?.url?.absoluteString ?? "nil"), loading=\(webView?.isLoading ?? false), clickRequested=\(self?.smokeClickRequested ?? false)")
+        print("BEX_WEB_LAB_SMOKE last snapshot: \(self?.smokeLastSnapshot ?? "delegate unavailable")")
         fflush(stdout)
         exit(1)
       }
@@ -103,9 +157,7 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
   }
 
   private func pollSmoke(_ webView: WKWebView) {
-    let script = smokeSubmitted
-      ? "document.querySelector('[data-testid=corrected]')?.textContent || ''"
-      : "(() => { const b = document.querySelector('button.primary'); if (!b) return false; b.click(); return true; })()"
+    let script = "JSON.stringify((\(smokeProbeScript))(\(smokeClickRequested ? "false" : "true")))"
     webView.evaluateJavaScript(script) { [weak self, weak webView] value, error in
       guard let self, let webView else { return }
       if let error {
@@ -113,21 +165,36 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
         fflush(stdout)
         exit(1)
       }
-      if self.smokeSubmitted {
-        if let text = value as? String, !text.isEmpty {
-          guard text == "Wouldn’t this make it harder to maintain?" else {
-            print("BEX_WEB_LAB_SMOKE FAIL: unexpected corrected text")
-            fflush(stdout)
-            exit(1)
-          }
-          print("BEX_WEB_LAB_SMOKE PASS: React loaded, sample submitted, corrected result rendered")
-          fflush(stdout)
-          exit(0)
-        }
-      } else if value as? Bool == true {
-        self.smokeSubmitted = true
-        print("BEX_WEB_LAB_SMOKE sample submitted")
+      guard let snapshot = value as? String, let data = snapshot.data(using: .utf8),
+        let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+        let phase = object["phase"] as? String else {
+        print("BEX_WEB_LAB_SMOKE FAIL: invalid page probe response")
         fflush(stdout)
+        exit(1)
+      }
+      self.smokeLastSnapshot = snapshot
+      if object["clicked"] as? Bool == true { self.smokeClickRequested = true }
+      if phase != self.smokeLastPhase {
+        self.smokeLastPhase = phase
+        // A dispatched click is not evidence that React accepted the request.
+        print("BEX_WEB_LAB_SMOKE phase=\(phase): \(snapshot)")
+        fflush(stdout)
+      }
+      if phase == "error" {
+        print("BEX_WEB_LAB_SMOKE FAIL: page reported an error; \(snapshot)")
+        fflush(stdout)
+        exit(1)
+      }
+      if phase == "result" {
+        guard self.smokeClickRequested,
+          object["corrected"] as? String == "Wouldn’t this make it harder to maintain?" else {
+          print("BEX_WEB_LAB_SMOKE FAIL: unexpected corrected result; \(snapshot)")
+          fflush(stdout)
+          exit(1)
+        }
+        print("BEX_WEB_LAB_SMOKE PASS: React ready, click dispatched, corrected result rendered")
+        fflush(stdout)
+        exit(0)
       }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self, weak webView] in
         guard let self, let webView else { return }

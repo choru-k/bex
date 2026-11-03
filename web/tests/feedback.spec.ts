@@ -63,9 +63,10 @@ test('mobile layout fits without horizontal scrolling', async ({ page }) => {
   await expect(page.getByRole('heading', { name: '내가 쓴 문장' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 });
-test('correction sends no request to an external origin', async ({ page }) => {
+test('correction sends no request to an external origin', async ({ page, baseURL }) => {
   const external: string[] = [];
-  page.on('request', request => { if (!request.url().startsWith('http://127.0.0.1:5179/')) external.push(request.url()); });
+  const origin = new URL(baseURL!).origin;
+  page.on('request', request => { if (new URL(request.url()).origin !== origin) external.push(request.url()); });
   await page.getByRole('button', { name: '샘플 피드백 보기' }).click();
   await expect(page.getByTestId('corrected')).toBeVisible();
   expect(external).toEqual([]);

@@ -56,7 +56,7 @@ async function main() {
     return;
   }
   if (command === 'test') {
-    await run(process.execPath, ['--experimental-strip-types', '--test', 'tests/core.test.mjs']);
+    await run(process.execPath, ['--experimental-strip-types', '--test', 'tests/core.test.mjs', 'tests/coaching-quality.test.mjs', 'tests/native-smoke.test.mjs']);
     return;
   }
   if (command === 'desktop' && process.platform !== 'darwin') throw new Error('desktop requires macOS. Use dev for the browser lab.');

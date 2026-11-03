@@ -22,9 +22,13 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [ready, setReady] = useState(false);
   const gate = useRef(new RequestGate());
 
-  useEffect(() => () => gate.current.cancel(), []);
+  useEffect(() => {
+    setReady(true);
+    return () => gate.current.cancel();
+  }, []);
   function invalidate() {
     gate.current.cancel(); setBusy(false); setResult(null); setError(''); setNotice('');
   }
@@ -44,6 +48,9 @@ export function App() {
     } catch { setNotice('브라우저 저장소를 사용할 수 없습니다.'); }
   }
   async function check() {
+    // StrictMode's initial effect cleanup can cancel a request dispatched as
+    // soon as the DOM appears. Accept interactions only after effects are ready.
+    if (!ready) return;
     setError(''); setNotice(''); setResult(null);
     let request;
     try { request = makeRequest(text, policy, sourceEnabled ? source : null); }
@@ -73,7 +80,8 @@ export function App() {
   const notes = result ? presentNotes(result, policy) : [];
 
   return (
-    <main className="shell">
+    <main className="shell" data-lab-ready={ready}
+      data-lab-state={busy ? 'pending' : error ? 'error' : result ? 'result' : 'idle'}>
       <header className="topbar">
         <a className="brand" href="#editor" aria-label="Bex 교정 입력으로 이동"><span className="brand-mark">b.</span><strong>Bex</strong><span className="brand-label">WEB LAB</span></a>
         <span className="mode"><span className="status-dot" />샘플 모드 · AI 미연결</span>
@@ -104,7 +112,7 @@ export function App() {
               onKeyDown={event => { if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') { event.preventDefault(); if (!busy) void check(); } }} />
             <div className="editor-actions"><span className="muted">{text.length.toLocaleString()} / 12,000 · ⌘/Ctrl + Enter</span>
               {busy && <button type="button" className="button secondary" onClick={() => { invalidate(); setNotice('검토를 취소했습니다.'); }}>취소</button>}
-              <button type="button" className="button primary" disabled={busy || !text.trim()} onClick={() => void check()}>{busy ? '샘플 확인 중…' : '샘플 피드백 보기'}<span aria-hidden="true">↗</span></button>
+              <button type="button" className="button primary" disabled={!ready || busy || !text.trim()} onClick={() => void check()}>{busy ? '샘플 확인 중…' : '샘플 피드백 보기'}<span aria-hidden="true">↗</span></button>
             </div>
           </section>
           {error && <p className="alert error" role="alert">{error}</p>}
