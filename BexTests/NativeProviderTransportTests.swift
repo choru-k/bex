@@ -8,6 +8,40 @@ private final class TransportTestCounter: @unchecked Sendable {
   func increment() { lock.withLock { count += 1 } }
 }
 
+private final class TransportTestWeakReference<Value: AnyObject>: @unchecked Sendable {
+  private let lock = NSLock()
+  private weak var stored: Value?
+  var value: Value? { lock.withLock { stored } }
+  init(_ value: Value) { stored = value }
+}
+
+private final class TransportTestOutcome: @unchecked Sendable {
+  private let lock = NSLock()
+  private var stored: Result<(Data, HTTPURLResponse), Error>?
+  private var count = 0
+  var result: Result<(Data, HTTPURLResponse), Error>? { lock.withLock { stored } }
+  var completionCount: Int { lock.withLock { count } }
+  func record(_ result: Result<(Data, HTTPURLResponse), Error>) {
+    lock.withLock { stored = result; count += 1 }
+  }
+}
+
+private func transportResponse(headers: [String: String]? = nil, status: Int = 200,
+                               url: URL? = nil) throws -> HTTPURLResponse {
+  let recipient = try NativeProviderRecipient(destination: transportDestination())
+  return try XCTUnwrap(HTTPURLResponse(url: url ?? recipient.url, statusCode: status,
+    httpVersion: nil, headerFields: headers))
+}
+
+private func transportResponseState(outcome: TransportTestOutcome, maximumBytes: Int = 8,
+                                    cancellation: NativeProviderTaskCancellation = .init())
+  throws -> NativeProviderResponseState {
+  NativeProviderResponseState(recipient: try NativeProviderRecipient(destination:
+    transportDestination()), cancellation: cancellation, maximumBytes: maximumBytes) {
+      outcome.record($0)
+    }
+}
+
 private func transportDestination(_ provider: LLMProvider = .openAI,
                                   model: String = "synthetic-model",
                                   endpoint: String? = nil) throws -> OutboundDestination {
@@ -365,6 +399,308 @@ final class NativeProviderTransportTests: XCTestCase {
       let calls = await transport.calls
       XCTAssertEqual(calls, 1)
     }
+  }
+
+  func testBoundedResponseAccumulatesInOrderAndAcceptsExactCap() throws {
+    for headers in [nil, ["Content-Length": "8"], ["Content-Length": "0008"]] as [[String: String]?] {
+      let outcome = TransportTestOutcome()
+      let response = try transportResponseState(outcome: outcome)
+      XCTAssertEqual(response.receive(try transportResponse(headers: headers)), .allow)
+      XCTAssertEqual(response.receive(Data("abc".utf8)), .accepted)
+      XCTAssertEqual(response.receive(Data()), .accepted)
+      XCTAssertEqual(response.receive(Data("defgh".utf8)), .accepted)
+      XCTAssertEqual(response.bufferedByteCount, 8)
+      XCTAssertNil(outcome.result)
+      response.complete(error: nil)
+      XCTAssertEqual(try XCTUnwrap(outcome.result).get().0, Data("abcdefgh".utf8))
+      XCTAssertEqual(response.bufferedByteCount, 0)
+      XCTAssertEqual(outcome.completionCount, 1)
+    }
+  }
+
+  func testResponseCapAllowsEscapedStructuredJSONEnvelope() throws {
+    // Model the largest one-level JSON escaping expansion for 128,000 bytes.
+    // This is a size-policy fixture, not a valid correction or provider reply.
+    let escaped = String(repeating: "\\u0000", count: 128_000)
+    let envelope = Data(("{\"choices\":[{\"message\":{\"content\":\"" + escaped + "\"}}]}").utf8)
+    XCTAssertEqual(NativeProviderTransport.maximumResponseBytes, 1_048_576)
+    XCTAssertGreaterThan(envelope.count, 128_000)
+    XCTAssertLessThan(envelope.count, NativeProviderTransport.maximumResponseBytes)
+    let outcome = TransportTestOutcome()
+    let response = try transportResponseState(outcome: outcome,
+      maximumBytes: NativeProviderTransport.maximumResponseBytes)
+    XCTAssertEqual(response.receive(try transportResponse()), .allow)
+    XCTAssertEqual(response.receive(envelope), .accepted)
+    response.complete(error: nil)
+    XCTAssertEqual(try XCTUnwrap(outcome.result).get().0, envelope)
+  }
+
+  func testOversizedContentLengthRefusesBeforeAccumulating() throws {
+    for length in ["9", "0009", "1048577", "184467440737095516160000"] {
+      let outcome = TransportTestOutcome()
+      let response = try transportResponseState(outcome: outcome)
+      XCTAssertEqual(response.receive(try transportResponse(headers:
+        ["Content-Length": length])), .cancel, length)
+      XCTAssertEqual(response.bufferedByteCount, 0)
+      XCTAssertEqual(response.receive(Data("ignored".utf8)), .discard)
+      XCTAssertNil(outcome.result)
+      response.complete(error: URLError(.cancelled))
+      assertTransportFailure(outcome, .responseTooLarge)
+    }
+  }
+
+  func testMalformedContentLengthFailsClosed() throws {
+    for length in ["-1", "+1", "1.0", "1, 1", "NaN", ""] {
+      let outcome = TransportTestOutcome()
+      let response = try transportResponseState(outcome: outcome)
+      XCTAssertEqual(response.receive(try transportResponse(headers:
+        ["Content-Length": length])), .cancel, length)
+      response.complete(error: nil)
+      assertTransportFailure(outcome, .refusedResponse)
+    }
+  }
+
+  func testAbsentOrFalseLengthCannotBypassActualChunkCap() throws {
+    for headers in [nil, ["Content-Length": "0"], ["Content-Length": "1"],
+                    ["Transfer-Encoding": "chunked"],
+                    ["Content-Encoding": "gzip", "Content-Length": "2"]] as [[String: String]?] {
+      let outcome = TransportTestOutcome()
+      let response = try transportResponseState(outcome: outcome)
+      XCTAssertEqual(response.receive(try transportResponse(headers: headers)), .allow)
+      XCTAssertEqual(response.receive(Data(repeating: 65, count: 8)), .accepted)
+      XCTAssertEqual(response.bufferedByteCount, 8)
+      XCTAssertEqual(response.receive(Data([66])), .cancel)
+      XCTAssertEqual(response.bufferedByteCount, 0)
+      XCTAssertEqual(response.receive(Data(repeating: 67, count: 100)), .discard)
+      XCTAssertNil(outcome.result)
+      response.complete(error: URLError(.cancelled))
+      assertTransportFailure(outcome, .responseTooLarge)
+    }
+  }
+
+  func testOversizedFirstChunkIsNeverAppendedAndFailureStaysLatched() throws {
+    let outcome = TransportTestOutcome()
+    let response = try transportResponseState(outcome: outcome)
+    XCTAssertEqual(response.receive(try transportResponse()), .allow)
+    XCTAssertEqual(response.receive(Data(repeating: 65, count: 100_000)), .cancel)
+    XCTAssertEqual(response.bufferedByteCount, 0)
+    XCTAssertEqual(response.receive(Data([66])), .discard)
+    XCTAssertEqual(response.receive(try transportResponse()), .cancel)
+    XCTAssertNil(outcome.result)
+    response.complete(error: nil)
+    assertTransportFailure(outcome, .responseTooLarge)
+  }
+
+  func testResponseValidationPrecedesAccumulationAndDuplicateResponsesFailClosed() throws {
+    let refused: [URLResponse] = [
+      try transportResponse(status: 307),
+      try transportResponse(url: URL(string: "https://other.example.test/")),
+      URLResponse(url: URL(string: "https://api.openai.com/v1/chat/completions")!,
+        mimeType: nil, expectedContentLength: 0, textEncodingName: nil),
+    ]
+    for incoming in refused {
+      let outcome = TransportTestOutcome()
+      let response = try transportResponseState(outcome: outcome)
+      XCTAssertEqual(response.receive(incoming), .cancel)
+      XCTAssertEqual(response.receive(Data([65])), .discard)
+      XCTAssertEqual(response.bufferedByteCount, 0)
+      response.complete(error: nil)
+      assertTransportFailure(outcome, .refusedResponse)
+    }
+    let outcome = TransportTestOutcome()
+    let response = try transportResponseState(outcome: outcome)
+    XCTAssertEqual(response.receive(try transportResponse()), .allow)
+    XCTAssertEqual(response.receive(Data(repeating: 65, count: 8)), .accepted)
+    XCTAssertEqual(response.receive(try transportResponse()), .cancel)
+    XCTAssertEqual(response.bufferedByteCount, 0)
+    XCTAssertEqual(response.receive(Data([66])), .discard)
+    response.complete(error: nil)
+    assertTransportFailure(outcome, .refusedResponse)
+  }
+
+  func testResponseStateRejectsDataBeforeHeadersAndCompletionWithoutHeaders() throws {
+    for sendEarlyData in [false, true] {
+      let outcome = TransportTestOutcome()
+      let response = try transportResponseState(outcome: outcome)
+      if sendEarlyData {
+        XCTAssertEqual(response.receive(Data([65])), .cancel)
+        XCTAssertEqual(response.bufferedByteCount, 0)
+      }
+      response.complete(error: nil)
+      assertTransportFailure(outcome, .refusedResponse)
+    }
+  }
+
+  func testResponseStatePreservesNetworkErrorsAndAcceptsEmptyHTTPBody() throws {
+    let failed = TransportTestOutcome()
+    let response = try transportResponseState(outcome: failed)
+    XCTAssertEqual(response.receive(try transportResponse()), .allow)
+    XCTAssertEqual(response.receive(Data([65])), .accepted)
+    response.complete(error: URLError(.timedOut))
+    XCTAssertThrowsError(try XCTUnwrap(failed.result).get()) {
+      XCTAssertEqual(($0 as? URLError)?.code, .timedOut)
+    }
+    XCTAssertEqual(response.bufferedByteCount, 0)
+    let empty = TransportTestOutcome()
+    let emptyResponse = try transportResponseState(outcome: empty)
+    XCTAssertEqual(emptyResponse.receive(try transportResponse(status: 500)), .allow)
+    emptyResponse.complete(error: nil)
+    XCTAssertEqual(try XCTUnwrap(empty.result).get().0, Data())
+    XCTAssertEqual(try XCTUnwrap(empty.result).get().1.statusCode, 500)
+  }
+
+  func testCallerCancellationWinsButNeverCompletesBeforeTerminalCallback() throws {
+    let outcome = TransportTestOutcome()
+    let cancellation = NativeProviderTaskCancellation()
+    let cancels = TransportTestCounter()
+    cancellation.install { cancels.increment() }
+    let response = try transportResponseState(outcome: outcome, cancellation: cancellation)
+    XCTAssertEqual(response.receive(try transportResponse()), .allow)
+    XCTAssertEqual(response.receive(Data(repeating: 65, count: 9)), .cancel)
+    cancellation.cancel()
+    cancellation.cancel()
+    XCTAssertEqual(cancels.value, 1)
+    XCTAssertNil(outcome.result)
+    response.complete(error: URLError(.cancelled))
+    XCTAssertThrowsError(try XCTUnwrap(outcome.result).get()) { XCTAssertTrue($0 is CancellationError) }
+    response.complete(error: nil)
+    cancellation.cancel()
+    XCTAssertEqual(outcome.completionCount, 1)
+    XCTAssertEqual(cancels.value, 1)
+    XCTAssertEqual(response.receive(Data([66])), .discard)
+    XCTAssertEqual(response.receive(try transportResponse()), .cancel)
+  }
+
+  func testDelegateRoutesInterleavedChunksAndCompletesEachTaskOnlyOnce() throws {
+    let delegate = NativeProviderSessionDelegate()
+    let session = URLSession(configuration: NativeProviderTransport.isolatedConfiguration())
+    defer { session.invalidateAndCancel() }
+    let url = try NativeProviderRecipient(destination: transportDestination()).url
+    let firstTask = session.dataTask(with: url) // Neither task is ever resumed.
+    let secondTask = session.dataTask(with: url)
+    let first = TransportTestOutcome()
+    let second = TransportTestOutcome()
+    let firstResponse = try transportResponseState(outcome: first)
+    let secondResponse = try transportResponseState(outcome: second)
+    delegate.register(firstResponse, for: firstTask.taskIdentifier)
+    delegate.register(secondResponse, for: secondTask.taskIdentifier)
+    for task in [firstTask, secondTask] {
+      delegate.urlSession(session, dataTask: task, didReceive: try transportResponse()) {
+        XCTAssertEqual($0, .allow)
+      }
+    }
+    delegate.urlSession(session, dataTask: firstTask, didReceive: Data("ab".utf8))
+    delegate.urlSession(session, dataTask: secondTask, didReceive: Data("12".utf8))
+    delegate.urlSession(session, dataTask: firstTask, didReceive: Data("cd".utf8))
+    delegate.urlSession(session, task: firstTask, didCompleteWithError: nil)
+    delegate.urlSession(session, dataTask: secondTask, didReceive: Data("34".utf8))
+    delegate.urlSession(session, task: secondTask, didCompleteWithError: nil)
+    delegate.urlSession(session, task: firstTask, didCompleteWithError: URLError(.cancelled))
+    delegate.urlSession(session, dataTask: firstTask, didReceive: Data("late".utf8))
+    delegate.urlSession(session, dataTask: firstTask, didReceive: try transportResponse()) {
+      XCTAssertEqual($0, .cancel)
+    }
+    XCTAssertEqual(try XCTUnwrap(first.result).get().0, Data("abcd".utf8))
+    XCTAssertEqual(try XCTUnwrap(second.result).get().0, Data("1234".utf8))
+    XCTAssertEqual(first.completionCount, 1)
+    XCTAssertEqual(second.completionCount, 1)
+  }
+
+  func testOversizeDelegateCancellationRetainsAdmissionUntilTerminalCallback() async throws {
+    let delegate = NativeProviderSessionDelegate()
+    let admission = NativeProviderAdmission()
+    let session = URLSession(configuration: NativeProviderTransport.isolatedConfiguration())
+    defer { session.invalidateAndCancel() }
+    let recipient = try NativeProviderRecipient(destination: transportDestination())
+    let task = session.dataTask(with: recipient.url) // Never resumed; callbacks are synthetic.
+    let cancellation = NativeProviderTaskCancellation()
+    let outcome = TransportTestOutcome()
+    let retained: TransportTestWeakReference<TransportTestCounter>
+    do {
+      let capture = TransportTestCounter()
+      retained = TransportTestWeakReference(capture)
+      cancellation.install { capture.increment() }
+    }
+    let response = NativeProviderResponseState(recipient: recipient,
+      cancellation: cancellation, maximumBytes: 8) {
+        XCTAssertNil(retained.value) // Cancellation capture is cleared before completion.
+        outcome.record($0)
+        admission.complete()
+      }
+    XCTAssertTrue(admission.admit { delegate.register(response, for: task.taskIdentifier) })
+    delegate.urlSession(session, dataTask: task, didReceive: try transportResponse()) {
+      XCTAssertEqual($0, .allow)
+    }
+    delegate.urlSession(session, dataTask: task, didReceive: Data(repeating: 65, count: 9))
+    XCTAssertEqual(response.bufferedByteCount, 0)
+    XCTAssertNil(outcome.result)
+    XCTAssertNotNil(retained.value)
+    XCTAssertTrue(admission.close())
+    delegate.urlSession(session, didBecomeInvalidWithError: nil)
+    await delegate.waitForInvalidation() // Invalidation alone must not drain this task.
+    await withCheckedContinuation { continuation in
+      XCTAssertTrue(admission.registerTaskWaiter(continuation))
+      XCTAssertNil(outcome.result)
+      delegate.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
+    }
+    assertTransportFailure(outcome, .responseTooLarge)
+    XCTAssertNil(retained.value)
+    delegate.urlSession(session, task: task, didCompleteWithError: nil)
+    XCTAssertEqual(outcome.completionCount, 1)
+    await admission.waitForTasks()
+  }
+
+  func testTerminalDelegateCallbackReleasesRegisteredResponseState() throws {
+    let delegate = NativeProviderSessionDelegate()
+    let session = URLSession(configuration: NativeProviderTransport.isolatedConfiguration())
+    defer { session.invalidateAndCancel() }
+    let task = session.dataTask(with: try NativeProviderRecipient(destination:
+      transportDestination()).url) // Never resumed.
+    let outcome = TransportTestOutcome()
+    let retained: TransportTestWeakReference<NativeProviderResponseState>
+    do {
+      let response = try transportResponseState(outcome: outcome)
+      retained = TransportTestWeakReference(response)
+      delegate.register(response, for: task.taskIdentifier)
+    }
+    XCTAssertNotNil(retained.value)
+    delegate.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
+    XCTAssertNil(retained.value)
+    XCTAssertEqual(outcome.completionCount, 1)
+    XCTAssertThrowsError(try XCTUnwrap(outcome.result).get()) { XCTAssertTrue($0 is CancellationError) }
+  }
+
+  func testDelegateHeaderRefusalWaitsForTerminalCallback() throws {
+    let delegate = NativeProviderSessionDelegate()
+    let session = URLSession(configuration: NativeProviderTransport.isolatedConfiguration())
+    defer { session.invalidateAndCancel() }
+    let task = session.dataTask(with: try NativeProviderRecipient(destination:
+      transportDestination()).url) // Never resumed.
+    let outcome = TransportTestOutcome()
+    let response = try transportResponseState(outcome: outcome)
+    delegate.register(response, for: task.taskIdentifier)
+    let callbacks = TransportTestCounter()
+    delegate.urlSession(session, dataTask: task, didReceive: try transportResponse(headers:
+      ["Content-Length": "9"])) {
+        XCTAssertEqual($0, .cancel)
+        callbacks.increment()
+      }
+    XCTAssertEqual(callbacks.value, 1)
+    XCTAssertNil(outcome.result)
+    delegate.urlSession(session, dataTask: task, didReceive: Data(repeating: 65, count: 9))
+    XCTAssertEqual(response.bufferedByteCount, 0)
+    XCTAssertNil(outcome.result)
+    delegate.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
+    assertTransportFailure(outcome, .responseTooLarge)
+  }
+
+  private func assertTransportFailure(_ outcome: TransportTestOutcome,
+                                      _ expected: NativeProviderTransport.Failure,
+                                      file: StaticString = #filePath, line: UInt = #line) {
+    XCTAssertThrowsError(try XCTUnwrap(outcome.result).get(), file: file, line: line) {
+      XCTAssertEqual($0 as? NativeProviderTransport.Failure, expected, file: file, line: line)
+    }
+    XCTAssertEqual(outcome.completionCount, 1, file: file, line: line)
   }
 
   func testClosedTransportNeverCreatesNetworkWork() async throws {

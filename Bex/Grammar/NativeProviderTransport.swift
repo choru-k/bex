@@ -3,7 +3,15 @@ import Foundation
 /// Dedicated to the inactive packaged host. Never changes URLSessionTransport or
 /// the existing app's factory. One immutable recipient and one session per host.
 final class NativeProviderTransport: HTTPTransport, @unchecked Sendable {
-  enum Failure: Error { case invalidDestination, refusedRequest, refusedResponse }
+  enum Failure: Error, Equatable {
+    case invalidDestination, refusedRequest, refusedResponse, responseTooLarge
+  }
+
+  // Cap the provider envelope, not only the extracted structured JSON (128,000
+  // UTF-8 bytes). One level of JSON string escaping can expand it by up to 6x;
+  // 1 MiB leaves space for that plus bounded provider metadata. This is a strict
+  // retained-body bound, not a bound on Foundation's buffers or delivered chunks.
+  static let maximumResponseBytes = 1_048_576
 
   private let recipient: NativeProviderRecipient
   private let lifecycle = NativeProviderAdmission()
@@ -47,23 +55,13 @@ final class NativeProviderTransport: HTTPTransport, @unchecked Sendable {
         // Construct AND resume under the admission lock. close() cannot invalidate
         // the session between checking admission and constructing a task.
         let admitted = lifecycle.admit {
-          let task = session.dataTask(with: request) { data, response, error in
-            defer { lifecycle.complete() }
-            let wasCancelled = cancellation.complete()
-            if wasCancelled || (error as? URLError)?.code == .cancelled {
-              continuation.resume(throwing: CancellationError())
-            } else if let error {
-              continuation.resume(throwing: error)
-            } else {
-              do {
-                let response = try recipient.validate(response)
-                guard let data else { throw Failure.refusedResponse }
-                continuation.resume(returning: (data, response))
-              } catch {
-                continuation.resume(throwing: error)
-              }
+          let task = session.dataTask(with: request)
+          let response = NativeProviderResponseState(recipient: recipient,
+            cancellation: cancellation) { result in
+              defer { lifecycle.complete() }
+              continuation.resume(with: result)
             }
-          }
+          delegate.register(response, for: task.taskIdentifier)
           cancellation.install { task.cancel() }
           task.resume()
         }
@@ -85,7 +83,7 @@ final class NativeProviderTransport: HTTPTransport, @unchecked Sendable {
   }
 
   /// The host separately awaits its coordinator. This also waits for the session's
-  /// task completion handlers and invalidation callback, not just cancellation.
+  /// terminal task callbacks and invalidation callback, not just cancellation.
   /// Invalidation alone does not prove task completion after invalidateAndCancel.
   func closeAndWait() async {
     close()
@@ -93,7 +91,7 @@ final class NativeProviderTransport: HTTPTransport, @unchecked Sendable {
     await delegate.waitForInvalidation()
   }
 
-  // URLSession retains its delegate, which deliberately has NO session/owner link.
+  // URLSession retains its delegate, which deliberately has NO transport/owner link.
   // Dropping an unclosed host cannot leave a session -> transport -> session cycle.
   deinit { session.invalidateAndCancel() }
 }
@@ -238,7 +236,7 @@ final class NativeProviderAdmission: @unchecked Sendable {
 }
 
 /// Handles cancellation arriving before task assignment and breaks the temporary
-/// task/completion/slot cycle only when completion actually runs. Cancellation does
+/// task/response-state/slot cycle only when completion actually runs. Cancellation does
 /// not call any continuation. All mutable state is protected by this lock.
 final class NativeProviderTaskCancellation: @unchecked Sendable {
   private let lock = NSLock()
@@ -273,13 +271,163 @@ final class NativeProviderTaskCancellation: @unchecked Sendable {
   }
 }
 
+/// One bounded body and one terminal callback per admitted task. Header hints are
+/// only an early-rejection optimization; every delivered (possibly decompressed)
+/// chunk is checked before append. No capacity is allocated from Content-Length.
+/// Its separate lock also makes late/concurrent synthetic callbacks safe.
+final class NativeProviderResponseState: @unchecked Sendable {
+  enum ChunkDisposition: Equatable { case accepted, cancel, discard }
+  typealias Completion = @Sendable (Result<(Data, HTTPURLResponse), Error>) -> Void
+
+  private let lock = NSLock()
+  private let recipient: NativeProviderRecipient
+  private let cancellation: NativeProviderTaskCancellation
+  private let maximumBytes: Int
+  private var body = Data()
+  private var response: HTTPURLResponse?
+  private var failure: NativeProviderTransport.Failure?
+  private var completion: Completion?
+
+  init(recipient: NativeProviderRecipient, cancellation: NativeProviderTaskCancellation,
+       maximumBytes: Int = NativeProviderTransport.maximumResponseBytes,
+       completion: @escaping Completion) {
+    precondition(maximumBytes > 0 && maximumBytes <= NativeProviderTransport.maximumResponseBytes)
+    self.recipient = recipient
+    self.cancellation = cancellation
+    self.maximumBytes = maximumBytes
+    self.completion = completion
+  }
+
+  // Internal observation seam for deterministic bounded-retention tests.
+  var bufferedByteCount: Int { lock.withLock { body.count } }
+
+  func receive(_ incoming: URLResponse) -> URLSession.ResponseDisposition {
+    lock.withLock {
+      guard completion != nil, failure == nil else { return .cancel }
+      guard response == nil else { return reject(.refusedResponse) }
+      do {
+        let accepted = try recipient.validate(incoming)
+        guard accepted.expectedContentLength <= Int64(maximumBytes) else {
+          return reject(.responseTooLarge)
+        }
+        if let raw = accepted.value(forHTTPHeaderField: "Content-Length") {
+          // Parse with a cap-aware decimal comparison, including values too large
+          // for Int64. Malformed or conflicting/coalesced lengths fail closed.
+          let digits = raw.trimmingCharacters(in: .whitespaces).utf8
+          guard !digits.isEmpty,
+            digits.allSatisfy({ $0 >= 48 && $0 <= 57 })
+          else { return reject(.refusedResponse) }
+          var length = 0
+          for byte in digits {
+            let digit = Int(byte - 48)
+            guard length < maximumBytes / 10 ||
+              (length == maximumBytes / 10 && digit <= maximumBytes % 10)
+            else { return reject(.responseTooLarge) }
+            length = length * 10 + digit
+          }
+        }
+        response = accepted
+        return .allow
+      } catch {
+        return reject(.refusedResponse)
+      }
+    }
+  }
+
+  func receive(_ chunk: Data) -> ChunkDisposition {
+    lock.withLock {
+      guard completion != nil, failure == nil else { return .discard }
+      guard response != nil else { _ = reject(.refusedResponse); return .cancel }
+      // Subtraction avoids count + chunk.count overflow. Never append a prefix
+      // of an oversized chunk or reserve capacity based on an untrusted length.
+      guard chunk.count <= maximumBytes - body.count else {
+        _ = reject(.responseTooLarge)
+        return .cancel
+      }
+      body.append(chunk)
+      return .accepted
+    }
+  }
+
+  // Called only while holding lock. Release already-buffered bytes immediately;
+  // leave the completion/cancellation slot alive until didCompleteWithError.
+  private func reject(_ error: NativeProviderTransport.Failure) -> URLSession.ResponseDisposition {
+    failure = error
+    body = Data()
+    response = nil
+    return .cancel
+  }
+
+  func complete(error: Error?) {
+    let finished = lock.withLock { () -> (Completion, Result<(Data, HTTPURLResponse), Error>)? in
+      guard let completion else { return nil }
+      let wasCancelled = cancellation.complete()
+      let result: Result<(Data, HTTPURLResponse), Error>
+      if wasCancelled {
+        result = .failure(CancellationError())
+      } else if let failure {
+        // The rejection caused URLSession's cancellation; preserve its fixed
+        // reason instead of relabeling an oversized response as user cancel.
+        result = .failure(failure)
+      } else if (error as? URLError)?.code == .cancelled {
+        result = .failure(CancellationError())
+      } else if let error {
+        result = .failure(error)
+      } else if let response {
+        result = .success((body, response))
+      } else {
+        result = .failure(NativeProviderTransport.Failure.refusedResponse)
+      }
+      self.completion = nil
+      body = Data()
+      response = nil
+      return (completion, result)
+    }
+    if let (completion, result) = finished { completion(result) }
+  }
+}
+
 /// Not the transport itself: URLSession can retain this delegate through its final
-/// callback without retaining the session or host. Lock protects invalidation state.
-final class NativeProviderSessionDelegate: NSObject, URLSessionTaskDelegate,
+/// callback without retaining the transport or host. Pending states retain tasks
+/// only until their terminal callbacks; the lock protects registry/invalidation.
+final class NativeProviderSessionDelegate: NSObject, URLSessionDataDelegate,
   @unchecked Sendable {
   private let lock = NSLock()
   private var invalidated = false
+  private var responses: [Int: NativeProviderResponseState] = [:]
   private var waiters: [CheckedContinuation<Void, Never>] = []
+
+  // Registration occurs under admission before task.resume(), so no response
+  // callback can arrive without its state. Unknown/late callbacks fail closed.
+  func register(_ response: NativeProviderResponseState, for taskIdentifier: Int) {
+    lock.withLock {
+      precondition(!invalidated && responses[taskIdentifier] == nil)
+      responses[taskIdentifier] = response
+    }
+  }
+
+  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                  didReceive response: URLResponse,
+                  completionHandler: @escaping @Sendable
+                    (URLSession.ResponseDisposition) -> Void) {
+    let pending = lock.withLock { responses[dataTask.taskIdentifier] }
+    completionHandler(pending?.receive(response) ?? .cancel)
+  }
+
+  func urlSession(_ session: URLSession, dataTask: URLSessionDataTask,
+                  didReceive data: Data) {
+    let pending = lock.withLock { responses[dataTask.taskIdentifier] }
+    guard let pending else { dataTask.cancel(); return }
+    if pending.receive(data) == .cancel { dataTask.cancel() }
+  }
+
+  func urlSession(_ session: URLSession, task: URLSessionTask,
+                  didCompleteWithError error: Error?) {
+    let pending = lock.withLock { responses.removeValue(forKey: task.taskIdentifier) }
+    // Removing the entry and completing its cancellation slot releases the task
+    // capture before the admission count is decremented by its completion closure.
+    pending?.complete(error: error)
+  }
 
   func urlSession(_ session: URLSession, task: URLSessionTask,
                   willPerformHTTPRedirection response: HTTPURLResponse,
