@@ -59,13 +59,17 @@ rejected rather than embedded into Xcode's substitution language. The file is
 written as `0600`; an unexpected write failure removes only a newly created file
 whose identity and parent still match, or explicitly reports incomplete cleanup.
 
-A digest pin is a selection of **artifact bytes**, not a proof of source
-freshness. A self-consistent old package with its matching old pin is accepted.
+In this legacy flow, a digest pin is a selection of **artifact bytes**, not a
+proof of source freshness. A self-consistent old package with its matching old pin is accepted.
 Neither the package nor this phase binds the web source, lockfile, build config,
 compiler or dependency versions to the resource bytes. There is no signed
 provenance or trusted build attestation. Rebuilding and selecting the intended
 artifact from reviewed sources is a separate responsibility. No claim that these
-resources reflect the current checkout is made.
+resources reflect the current checkout is made by the legacy flow. The separate
+[explicit source-freshness preparation](native-source-freshness.md) now builds
+fresh output, records bounded before/after input continuity and can require a
+matching current-source receipt. It remains an accidental-staleness guard, not
+trusted provenance.
 
 ## Future separately authorized native build
 
@@ -78,6 +82,8 @@ requires all of the following build settings:
 - `BEX_NATIVE_RESOURCE_PACKAGE`: the canonical absolute offline package directory
 - `BEX_NATIVE_RESOURCE_INVENTORY_SHA256`: the reviewed exact inventory digest
 - `BEX_NATIVE_RESOURCE_INPUT_FILE_LIST`: the canonical absolute generated list
+- Optional `BEX_NATIVE_SOURCE_RECEIPT`: select the new source-bound flow explicitly;
+  a present but empty/missing/invalid receipt fails without legacy fallback
 
 No settings file enabling these is committed. The project defaults remain OFF.
 The Node runtime should match the repository's `.node-version`; the phase does
@@ -122,6 +128,8 @@ Before touching outputs the implementation:
    and hashes, and verifies the package again. The HTML precheck is at most 4 KiB;
    each asset is at most 16 MiB; the manifest is at most 64 KiB.
 4. Requires the generated Xcode input list to equal the exact selected input list.
+   If a source receipt is selected, the complete envelope, canonical receipt and
+   current declared source snapshot must also match before and after copying.
 
 It writes only `BexWebUI/native.html`, its two hashed assets, and the sibling
 manifest. Directories are fresh `0755`, files are fresh singly linked `0644`.

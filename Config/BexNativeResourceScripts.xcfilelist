@@ -2,3 +2,4 @@ $(SRCROOT)/scripts/bex-native-resource-build-phase.sh
 $(SRCROOT)/scripts/bex-embed-native-resources.mjs
 $(SRCROOT)/scripts/bex-package-native-resources.mjs
 $(SRCROOT)/scripts/bex-audit-native-resources.mjs
+$(SRCROOT)/scripts/bex-native-source-binding.mjs

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { verifyNativeResourcePackage, RESOURCE_DIRECTORY, MANIFEST_NAME } from './bex-package-native-resources.mjs';
+import { verifyNativeSourceBinding } from './bex-native-source-binding.mjs';
 
 const scriptRoot = path.dirname(fileURLToPath(import.meta.url));
 const fail = message => { throw new Error(message); };
@@ -112,24 +113,45 @@ function readPackage(packageDirectory, expectedDigest) {
   return { root, manifest, files };
 }
 
-function inputFileList(input) {
-  return Buffer.from([input.root, ...input.files.map(file => `${input.root}/${file.relative}`)].join('\n') + '\n');
+/** Pure list rendering, shared by preparation before its completion receipt exists. */
+export function nativeResourceInputListBytes(packageDirectory, manifest, binding) {
+  return Buffer.from([packageDirectory,
+    ...manifest.inventory.map(entry => `${packageDirectory}/${RESOURCE_DIRECTORY}/${entry.path}`),
+    `${packageDirectory}/${MANIFEST_NAME}`, ...(binding?.inputPaths ?? []),
+  ].join('\n') + '\n');
+}
+
+function sourceBinding(input, options) {
+  if (options === undefined) return undefined; // Explicitly retained legacy/unbound flow.
+  if (!options || typeof options !== 'object' || Object.keys(options).sort().join(',') !== 'sourceReceipt,sourceRoot') fail('Source binding requires an explicit receipt and source root');
+  return verifyNativeSourceBinding(options.sourceReceipt, options.sourceRoot, input.root, input.manifest.inventorySha256);
+}
+
+function checkBoundDestination(binding, target) {
+  if (!binding) return;
+  for (const protectedRoot of [path.dirname(binding.receiptPath), binding.sourceRoot]) {
+    if (target === protectedRoot || beneath(target, protectedRoot) || beneath(protectedRoot, target)) fail('Bound output must be disjoint from the preparation envelope and declared source checkout');
+  }
 }
 
 /** Read-only selection plus one exclusive offline .xcfilelist; no .app destination. */
-export function writeNativeResourceInputFileList(packageDirectory, output, expectedDigest) {
+export function writeNativeResourceInputFileList(packageDirectory, output, expectedDigest, options) {
   const target = checkedPath(output, true);
   offlineLocation(target);
   if (!target.endsWith('.xcfilelist')) fail('Input file list output must end in .xcfilelist');
   const parent = path.dirname(target), parentStat = directory(parent);
   const input = readPackage(packageDirectory, expectedDigest);
+  const binding = sourceBinding(input, options);
+  checkBoundDestination(binding, target);
   if (target === input.root || beneath(target, input.root)) fail('Input list must be outside the package');
+  const listBytes = nativeResourceInputListBytes(input.root, input.manifest, binding);
+  if (listBytes.length > 64 * 1024) fail('Generated input list exceeds its size budget');
   const fd = fs.openSync(target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
   let identity;
   try {
     identity = fs.fstatSync(fd);
     fs.fchmodSync(fd, 0o600);
-    fs.writeFileSync(fd, inputFileList(input));
+    fs.writeFileSync(fd, listBytes);
   } catch (error) {
     try {
       checkedPath(target);
@@ -158,11 +180,13 @@ function verifyCopied(input, target) {
   }
 }
 
-function copyIntoResources(input, target) {
+function copyIntoResources(input, target, verifyBinding = () => {}) {
+  verifyBinding();
   const targetStat = directory(target);
   if (target === input.root || beneath(target, input.root) || beneath(input.root, target)) fail('Build destination and input package must be disjoint');
   if (existing(path.join(target, RESOURCE_DIRECTORY)) || existing(path.join(target, MANIFEST_NAME))) {
     verifyCopied(input, target); // Exact repeat is a read-only no-op. Never overwrite.
+    verifyBinding();
     return { inventorySha256: input.manifest.inventorySha256, copied: false };
   }
   const owned = [];
@@ -199,6 +223,7 @@ function copyIntoResources(input, target) {
     checkParents(path.join(target, RESOURCE_DIRECTORY, 'assets'));
     verifyCopied(input, target);
     if (!jsonBytes(readPackage(input.root, input.manifest.inventorySha256).manifest).equals(jsonBytes(input.manifest))) fail('Package changed while copying');
+    verifyBinding();
     return { inventorySha256: input.manifest.inventorySha256, copied: true };
   } catch (error) {
     const failures = [];
@@ -218,10 +243,11 @@ function copyIntoResources(input, target) {
 }
 
 /** Offline integration tests/staging only: existing ordinary directory, never an app. */
-export function stageNativeBuildInputs(packageDirectory, resourceDirectory, expectedDigest) {
+export function stageNativeBuildInputs(packageDirectory, resourceDirectory, expectedDigest, options) {
   const target = checkedPath(resourceDirectory);
   offlineLocation(target);
-  return copyIntoResources(readPackage(packageDirectory, expectedDigest), target);
+  const input = readPackage(packageDirectory, expectedDigest);
+  return copyIntoResources(input, target, () => checkBoundDestination(sourceBinding(input, options), target));
 }
 
 /** Pure context validation. Does not execute Xcode, copy, sign, install or activate. */
@@ -246,16 +272,19 @@ function runXcodeBuildPhase(env) {
   const target = validateXcodeBuildContext(env);
   if (checkedPath(env.BEX_NATIVE_NODE_PATH) !== process.execPath) fail('Use the explicit canonical Node executable selected for this build');
   const input = readPackage(env.BEX_NATIVE_RESOURCE_PACKAGE, env.BEX_NATIVE_RESOURCE_INVENTORY_SHA256);
+  const options = Object.hasOwn(env, 'BEX_NATIVE_SOURCE_RECEIPT')
+    ? { sourceReceipt: env.BEX_NATIVE_SOURCE_RECEIPT, sourceRoot: path.dirname(scriptRoot) } : undefined;
+  const binding = sourceBinding(input, options);
   const list = checkedPath(env.BEX_NATIVE_RESOURCE_INPUT_FILE_LIST);
   offlineLocation(list);
-  if (!readRegular(list, 32 * 1024, 0o600).equals(inputFileList(input))) fail('The selected Xcode input file list does not match the package');
-  return copyIntoResources(input, target);
+  if (!readRegular(list, 64 * 1024, 0o600).equals(nativeResourceInputListBytes(input.root, input.manifest, binding))) fail('The selected Xcode input file list does not match the package');
+  return copyIntoResources(input, target, () => checkBoundDestination(sourceBinding(input, options), target));
 }
 
 function main(args) {
   if (args.length === 1 && args[0] === '--xcode-build-phase') return runXcodeBuildPhase(process.env);
-  if (args.length === 6 && args[0] === '--package' && args[2] === '--inventory-sha256' && args[4] === '--write-input-file-list') return writeNativeResourceInputFileList(args[1], args[5], args[3]);
-  fail('Usage: node scripts/bex-embed-native-resources.mjs --package ABSOLUTE_PACKAGE --inventory-sha256 HASH --write-input-file-list NEW_ABSOLUTE.xcfilelist | --xcode-build-phase');
+  if ((args.length === 6 || (args.length === 8 && args[6] === '--source-receipt')) && args[0] === '--package' && args[2] === '--inventory-sha256' && args[4] === '--write-input-file-list') return writeNativeResourceInputFileList(args[1], args[5], args[3], args.length === 8 ? { sourceReceipt: args[7], sourceRoot: path.dirname(scriptRoot) } : undefined);
+  fail('Usage: node scripts/bex-embed-native-resources.mjs --package ABSOLUTE_PACKAGE --inventory-sha256 HASH --write-input-file-list NEW_ABSOLUTE.xcfilelist [--source-receipt ABSOLUTE_RECEIPT] | --xcode-build-phase');
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try { process.stdout.write(`${JSON.stringify(main(process.argv.slice(2)), null, 2)}\n`); }

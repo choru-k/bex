@@ -24,6 +24,12 @@
 		A0000000000000000000005F /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006A /* UserNotifications.framework */; };
 		B10000000000000000000001 /* NativeBridgeCore in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000003 /* NativeBridgeCore */; };
 		B10000000000000000000004 /* NativeBridgeCore in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* NativeBridgeCore */; };
+		C70000000000000000000001 /* AppKit.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000061 /* AppKit.framework */; };
+		C70000000000000000000002 /* Foundation.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000063 /* Foundation.framework */; };
+		C70000000000000000000003 /* Security.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000064 /* Security.framework */; };
+		C70000000000000000000004 /* ApplicationServices.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000069 /* ApplicationServices.framework */; };
+		C70000000000000000000005 /* ServiceManagement.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = C70000000000000000000006 /* ServiceManagement.framework */; };
+		C70000000000000000000007 /* AX LaunchAgent in Copy LaunchAgent */ = {isa = PBXBuildFile; fileRef = C70000000000000000000008 /* AX LaunchAgent */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -65,6 +71,9 @@
 		A00000000000000000000068 /* OSLog.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OSLog.framework; path = System/Library/Frameworks/OSLog.framework; sourceTree = SDKROOT; };
 		A00000000000000000000069 /* ApplicationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ApplicationServices.framework; path = System/Library/Frameworks/ApplicationServices.framework; sourceTree = SDKROOT; };
 		A0000000000000000000006A /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
+		C70000000000000000000006 /* ServiceManagement.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ServiceManagement.framework; path = System/Library/Frameworks/ServiceManagement.framework; sourceTree = SDKROOT; };
+		C70000000000000000000008 /* AX LaunchAgent */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Config/com.bex.accessibility.agent.plist; sourceTree = "<group>"; };
+		C70000000000000000000009 /* BexAccessibility.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BexAccessibility.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -93,6 +102,8 @@
 			path = BexHook;
 			sourceTree = "<group>";
 		};
+		C70000000000000000000010 /* BexAccessibilityShared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = BexAccessibilityShared; sourceTree = "<group>"; };
+		C70000000000000000000011 /* BexAccessibilityHost */ = {isa = PBXFileSystemSynchronizedRootGroup; path = BexAccessibilityHost; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +151,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C70000000000000000000012 /* AX Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (C70000000000000000000001, C70000000000000000000002, C70000000000000000000003, C70000000000000000000004, C70000000000000000000005, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -151,6 +168,9 @@
 				A00000000000000000000043 /* BexUITests */,
 				A00000000000000000000044 /* BexHookShared */,
 				A00000000000000000000045 /* BexHook */,
+				C70000000000000000000010 /* BexAccessibilityShared */,
+				C70000000000000000000011 /* BexAccessibilityHost */,
+				C70000000000000000000008 /* AX LaunchAgent */,
 				A00000000000000000000004 /* Frameworks */,
 				A00000000000000000000003 /* Products */,
 			);
@@ -163,6 +183,7 @@
 				A00000000000000000000022 /* BexTests.xctest */,
 				A00000000000000000000023 /* BexUITests.xctest */,
 				A00000000000000000000024 /* bex-hook */,
+				C70000000000000000000009 /* BexAccessibility.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -205,6 +226,7 @@
 			fileSystemSynchronizedGroups = (
 				A00000000000000000000041 /* Bex */,
 				A00000000000000000000044 /* BexHookShared */,
+				C70000000000000000000010 /* BexAccessibilityShared */,
 			);
 			name = Bex;
 			packageProductDependencies = (
@@ -283,6 +305,18 @@
 			productReference = A00000000000000000000024 /* bex-hook */;
 			productType = "com.apple.product-type.tool";
 		};
+		C70000000000000000000013 /* BexAccessibility */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C70000000000000000000014;
+			buildPhases = (C70000000000000000000015, C70000000000000000000012, C70000000000000000000016, );
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (C70000000000000000000010, C70000000000000000000011, );
+			name = BexAccessibility;
+			productName = BexAccessibility;
+			productReference = C70000000000000000000009;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -330,6 +364,7 @@
 				A00000000000000000000012 /* BexTests */,
 				A00000000000000000000013 /* BexUITests */,
 				A00000000000000000000014 /* bex-hook */,
+				C70000000000000000000013 /* BexAccessibility */,
 			);
 		};
 /* End PBXProject section */
@@ -368,6 +403,15 @@
 				A0000000000000000000005E /* bex-hook in Embed Helpers */,
 			);
 			name = "Embed Helpers";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C70000000000000000000016 /* Copy LaunchAgent into independent host only */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchAgents;
+			dstSubfolderSpec = 1;
+			files = (C70000000000000000000007, );
+			name = "Copy LaunchAgent";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -424,6 +468,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C70000000000000000000015 /* AX Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -744,6 +789,40 @@
 			};
 			name = Release;
 		};
+		C70000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ESURPGU29C;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AccessibilityHost-Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.accessibility;
+				PRODUCT_NAME = BexAccessibility;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		C70000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ESURPGU29C;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AccessibilityHost-Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.accessibility;
+				PRODUCT_NAME = BexAccessibility;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -789,6 +868,12 @@
 				A00000000000000000000151 /* Debug */,
 				A00000000000000000000152 /* Release */,
 			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C70000000000000000000014 /* BexAccessibility configuration list */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (C70000000000000000000017, C70000000000000000000018, );
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
