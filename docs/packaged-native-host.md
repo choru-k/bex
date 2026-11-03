@@ -37,6 +37,9 @@ WKWebView development lab remain fixture-only.
    of trust or consent.
 3. Review immutable packaged resources and CSP, relative asset loading and build
    provenance. A separate native web build is not an audited app packaging path.
+   The [offline resource audit](native-resource-audit.md) checks the exact native
+   HTML/CSP and hashed three-file staging inventory. It does not establish JavaScript
+   semantics, signing, provenance, race-free filesystems or WebKit enforcement.
    No resource-copy build phase is added here; absent assets fail closed.
 4. Implement the account/settings mutation barrier across every mutation path:
    revoke admission and await `closeAndWait()` BEFORE changing credentials, account,

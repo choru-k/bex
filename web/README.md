@@ -127,3 +127,8 @@ explicit text-free connection, repeated connect clicks, capability rejection,
 stale replies, timeout, terminal cancellation/disconnect, provider labels,
 source transfer, consent-denied errors, and unmount cleanup. It does not exercise
 native dialogs, credentials, devices, or live providers.
+
+After building the alternate native page, run the offline resource audit from the
+repository root: `node scripts/bex-audit-native-resources.mjs --dist-native web/dist-native`.
+It verifies the strict native CSP/HTML and records hashes without copying files into
+the app. See `docs/native-resource-audit.md` for the exact profile and trust limits.
