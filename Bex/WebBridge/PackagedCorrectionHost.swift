@@ -13,6 +13,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   private let documentURL: URL
   private let webView: WKWebView
   private let presenter: NativeCorrectionConsentPresenter
+  private let providerTransport: NativeProviderTransport
   private var coordinator: NativeCorrectionCoordinator?
   private var allowedInitialNavigation = false
   private var committed = false
@@ -69,8 +70,14 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     presenter = try NativeCorrectionConsentPresenter(window: window,
       providerName: destination.provider.displayName,
       destinationDescription: destination.disclosureTarget, model: destination.model)
+    providerTransport = try NativeProviderTransport(destination: destination)
     super.init()
-    let provider = NativeStructuredCorrectionProvider(factory: factory,
+    // Never pass the caller's potentially shared/custom transport into this host.
+    // Stores remain mutable: closeAndWait BEFORE account/settings mutation is still
+    // a mandatory activation gate, separate from session/recipient isolation.
+    let isolatedFactory = ProviderClientFactory(preferences: factory.preferences,
+      keychain: factory.keychain, transport: providerTransport)
+    let provider = NativeStructuredCorrectionProvider(factory: isolatedFactory,
       destination: destination, effort: effort)
     coordinator = try NativeCorrectionCoordinator(providerName: destination.provider.displayName,
       consent: presenter, provider: provider, emit: { [weak self] json in self?.emit(json) })
@@ -113,6 +120,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
     committed = false
     coordinator?.close()
+    providerTransport.close()
     presenter.close()
     webView.stopLoading()
     webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
@@ -123,6 +131,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   func closeAndWait() async {
     close()
     await coordinator?.closeAndWait()
+    await providerTransport.closeAndWait()
   }
 
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,

@@ -8,6 +8,9 @@ WKWebView development lab remain fixture-only.
 ## Implemented wiring
 
 - `PackagedCorrectionHost` accepts native-owned factory/destination/effort values.
+  It rebuilds the factory with its own [isolated provider transport](native-provider-transport.md),
+  ignoring any caller-supplied transport. This remains inactive and uncompiled;
+  the existing app's transport/factory wiring does not change.
   It looks only for `Bundle.main/BexWebUI/native.html`, rejecting missing or symlinked
   entry assets. There is no development-server or arbitrary-document initializer.
 - The candidate creates a nonpersistent WKWebView, installs resource-blocking rules
@@ -17,6 +20,7 @@ WKWebView development lab remain fixture-only.
 - The real structured provider, coordinator and consent presenter are connected in
   this candidate. Navigation/failure/process termination/window close revoke work
   and message delivery. `closeAndWait()` is required before replacing the lifetime.
+  It awaits both coordinator work and provider-session task completion/invalidation.
 - `NativeCorrectionConsentPresenter` shows full native destination/model and all
   text/source/options as read-only plain text, with a bounded scrolling viewport.
   Cancel is the default. Its FIFO has at most four admitted requests; queued work
