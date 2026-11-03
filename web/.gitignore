@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.native-build/
+test-results/
+playwright-report/
+.env
+.env.*
+!.env.example
