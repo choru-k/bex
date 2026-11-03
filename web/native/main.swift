@@ -130,8 +130,14 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
   func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-let app = NSApplication.shared
-app.setActivationPolicy(.regular)
-let delegate = WebLabDelegate()
-app.delegate = delegate
-app.run()
+@main
+struct WebLabApplication {
+  @MainActor
+  static func main() {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.regular)
+    let delegate = WebLabDelegate()
+    app.delegate = delegate
+    withExtendedLifetime(delegate) { app.run() }
+  }
+}

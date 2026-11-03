@@ -62,7 +62,7 @@ async function main() {
   if (command === 'desktop' && process.platform !== 'darwin') throw new Error('desktop requires macOS. Use dev for the browser lab.');
   if (!existsSync(path.join(web, 'node_modules', '.bin', 'vite'))) {
     console.log('Installing web dependencies in web/node_modules; no native Bex files are changed.');
-    await run('npm', ['install']);
+    await run('npm', [existsSync(path.join(web, 'package-lock.json')) ? 'ci' : 'install']);
   }
   if (command === 'check') { await run('npm', ['run', 'check']); return; }
   if (command === 'e2e') {
@@ -88,7 +88,7 @@ async function main() {
 <key>CFBundleVersion</key><string>1</string>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict></plist>\n`);
-  await run('xcrun', ['swiftc', '-swift-version', '5', 'native/main.swift', '-o', executable, '-framework', 'AppKit', '-framework', 'WebKit']);
+  await run('xcrun', ['swiftc', '-parse-as-library', '-swift-version', '5', 'native/main.swift', '-o', executable, '-framework', 'AppKit', '-framework', 'WebKit']);
   const server = launch(process.execPath, [path.join(web, 'node_modules', 'vite', 'bin', 'vite.js'), '--host', '127.0.0.1', '--port', '5179', '--strictPort']);
   // Register immediately: an early server exit must not become an unhandled rejection.
   let serverFailure;

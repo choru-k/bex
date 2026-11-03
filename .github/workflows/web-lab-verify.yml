@@ -40,14 +40,10 @@ jobs:
         run: |
           mkdir -p verification
           { node --version; npm --version; uname -a; } | tee verification/environment.log
-      - name: Install dependencies and capture lockfile
+      - name: Install locked dependencies
         run: |
           set -o pipefail
-          if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund 2>&1 | tee verification/install.log
-          else
-            npm install --no-audit --no-fund --fetch-retries=2 2>&1 | tee verification/install.log
-          fi
+          npm ci --no-audit --no-fund 2>&1 | tee verification/install.log
       - name: Typecheck, core tests and production build
         run: |
           set -o pipefail
@@ -56,7 +52,7 @@ jobs:
         if: runner.os == 'macOS' && !cancelled()
         run: |
           set -o pipefail
-          xcrun swiftc -swift-version 5 native/main.swift -o verification/BexWebLab -framework AppKit -framework WebKit 2>&1 | tee verification/native-build.log
+          xcrun swiftc -parse-as-library -swift-version 5 native/main.swift -o verification/BexWebLab -framework AppKit -framework WebKit 2>&1 | tee verification/native-build.log
       - name: Install browser engines (Linux)
         if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium webkit
@@ -77,7 +73,7 @@ jobs:
           npm run test:e2e 2>&1 | tee verification/browser-tests.log
       - name: Ensure smoke restored source files
         if: always()
-        run: git diff --exit-code -- src native ../scripts
+        run: git diff --exit-code -- src native ../scripts package-lock.json
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
