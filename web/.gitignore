@@ -8,3 +8,4 @@ playwright-report/
 !.env.example
 verification/
 .parallel/
+dist-native/

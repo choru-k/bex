@@ -87,3 +87,43 @@ Verified in the authoring Linux environment: 39 core tests, core-only strict che
 with available TypeScript 5.8.3, launcher JavaScript syntax and Swift syntax parsing.
 Not verified there: installed TS 7 project build, React rendering/HMR, Playwright
 suite, macOS typechecking, WKWebView execution or live Bex integration. Keep the PR draft.
+
+### Explicit native renderer candidate (not the default lab)
+
+`npm run build` and `src/main.tsx` still build the fixture-only `index.html`.
+`npm run build:native` separately emits `dist-native/native.html` with relative
+assets. It does not copy resources into the Bex application, launch it, register
+it with macOS, or select a native runtime provider.
+
+The alternate entry expects the packaged host's
+`window.__bexNativeCorrectionEndpoint` (`postMessage(string)` and
+`subscribe(listener) -> unsubscribe`). The global declaration is not an origin
+or authentication mechanism: the host remains responsible for exact-document,
+main-frame, navigation, capability, and per-request consent enforcement.
+
+The page does nothing until **Connect native** is clicked. The handshake sends
+only bridge/session/request identifiers, never writing, policy, or source.
+After verified capabilities, the editor starts empty and displays the returned
+provider name. Each correction sends the writing, learning policy, and any
+selected source title/section/excerpt to the host. Provider transmission requires
+native consent for that particular request. The native view does not claim
+sample/offline operation and never substitutes fixture success on failure.
+Learning preferences are session-only in this alternate view.
+
+A host binds one session per document. Cancelling, disconnecting, or failing the
+handshake closes this page's connection permanently; reopen the document through
+the native host to try again. The page does not auto-reconnect or reload. Editor
+cancellation, editing, disconnect, and unmount invalidate pending results.
+
+Cloud-only lifecycle coverage (not browser/WebKit/AppKit verification):
+
+```
+# Use an existing isolated harness with jsdom and TypeScript 5.x. No app deps added.
+BEX_NODE_HARNESS=/tmp/bex-native-node-harness node tests/native-renderer.node.cjs
+```
+
+The harness uses real React with a fake endpoint and synthetic strings. It checks
+explicit text-free connection, repeated connect clicks, capability rejection,
+stale replies, timeout, terminal cancellation/disconnect, provider labels,
+source transfer, consent-denied errors, and unmount cleanup. It does not exercise
+native dialogs, credentials, devices, or live providers.

@@ -1,5 +1,9 @@
 # Structured native provider adapter (unactivated)
 
+The later [packaged host candidate](packaged-native-host.md) supplies concrete
+consent/host/renderer wiring without installing it in the app. Its native UI,
+WebKit controls and resource packaging remain unverified activation gates.
+
 `Bex/Grammar/NativeStructuredCorrectionProvider.swift` implements the existing
 `NativeCorrectionProviderService` using `ProviderClientFactory.makeClient` and
 `LLMProviderClient.generate`. Xcode links the local `native` package into Bex and
