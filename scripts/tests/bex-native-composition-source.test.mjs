@@ -65,7 +65,11 @@ test('owner starts replacement only after exact session full drain', () => {
 });
 
 test('termination is synchronous when dormant and joins one retained full drain when active', () => {
-  const terminate = body(delegate, '  func applicationShouldTerminate(', '  func applicationWillTerminate(');
+  const allTermination = body(delegate, '  func applicationShouldTerminate(', '  func applicationWillTerminate(');
+  // Independent helper injection has its own dormant shutdown branch and source tests.
+  const legacyStart = allTermination.indexOf('    guard let owner = services?.packagedCorrectionWindows');
+  assert.ok(legacyStart >= 0);
+  const terminate = allTermination.slice(legacyStart);
   const shutdown = terminate.indexOf('owner.shutdown()');
   const dormant = terminate.indexOf('guard owner.hasOutstandingWork else { return .terminateNow }');
   const task = terminate.indexOf('packagedTerminationTask = Task');

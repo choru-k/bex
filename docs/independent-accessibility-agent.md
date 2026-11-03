@@ -2,7 +2,7 @@
 
 ## Status and boundaries
 
-This change adds actual read-only Accessibility service, client, capture registry and asynchronous manual-Copy adapter source, plus a separately built `BexAccessibility.app` host. It is **not a completed production migration**: `AppServices`, `WindowCoordinator`, the synchronous `PromptTargetServicing` implementation and prompt-gate production composition remain unchanged. The current safe manual path continues to work. No runtime selector or fallback silently switches to the new agent.
+This change adds actual read-only Accessibility service, client, capture registry and asynchronous manual-Copy adapter source, plus a separately built `BexAccessibility.app` host. It is **not a completed production migration**: `AppServices` and the synchronous `PromptTargetServicing` implementation remain unchanged. The existing coordinator, prompt view model and settings now accept a narrow optional helper dependency, defaulting to nil. Production construction never supplies it. The current synchronous/manual path remains selected; no runtime selector, setting, menu, factory or fallback enables the helper.
 
 The helper is not embedded in Bex.app, is not a dependency of Bex's build target and has no automatic installer/updater. The new standalone scheme builds only the independent host. Normal Bex UI/policy updates therefore have no source path that replaces, registers or reconfigures this separate app. Existing terminal `bex-hook` compatibility/reuse is a different lifecycle and is unchanged here.
 
@@ -13,7 +13,7 @@ The helper is not embedded in Bex.app, is not a dependency of Bex's build target
 - `BexAccessibilityShared`: bounded versioned wire contract, exact signing identity, per-connection capture store, read-only AX observer and NSXPC listener.
 - `BexAccessibilityHost`: standalone AppKit setup window and separate `--agent` entry point for launchd.
 - `Bex/Application/AccessibilityAgentClient.swift`: lazy authenticated client. Construction performs no connection, registration or permission request.
-- `Bex/Application/IndependentAccessibilityTargetService.swift`: actual asynchronous capture, validation, one-shot Copy, discard and stop implementation. It is deliberately not selected by production and does not pretend to conform to the existing synchronous capture interface.
+- `Bex/Application/IndependentAccessibilityTargetService.swift`: actual asynchronous capture, validation, one-shot Copy, discard and stop implementation. It is deliberately not selected by production and does not pretend to conform to the existing synchronous capture interface. The existing coordinator/view-model/settings classes contain the unselected dependency-injected branch, rather than duplicate controllers.
 - `Config/com.bex.accessibility.agent.plist`: host-owned per-user Aqua LaunchAgent, copied only into the standalone host's `Contents/Library/LaunchAgents` directory. `BundleProgram` resolves to that host's own executable, with `--agent`; no arbitrary executable path, RunAtLoad, KeepAlive or privileged service is specified.
 
 The normal host launch shows setup only. Registration, unregistration and the Accessibility prompt require separate explicit buttons, a valid production signature and the canonical `/Applications/BexAccessibility.app` path. Registration can bootstrap the background service and must be treated as an activation step during a future authorized validation/release. No such button was invoked during this work. The current setup status reports trust for the setup process; it does not claim proof of the launchd process's TCC attribution.
@@ -62,9 +62,9 @@ Native test source is provided in `AccessibilityCaptureStoreTests.swift` and `In
 3. Review/install the independently versioned host at its stable path, then explicitly authorize registration and a fresh Accessibility grant. Inspect which process macOS holds responsible for the grant. Confirm service registration, approval, reconnect, login, disable and removal behavior rather than inferring it from plist contents.
 4. Keep the host bytes/path/signature unchanged across a UI/policy-only Bex update and compare observed registration and TCC behavior. Separately test a compatible signed host update and incompatible contract rejection. Record exact artifacts/OS/build/signing identities. A fresh grant or reset for one test cannot prove persistence in another.
 5. Test secure/unsupported fields, hung/slow AX destinations, app exit/PID reuse, focus/value changes, revocation and return of permission, cancelled/closed reviews, silent connections, maximum-size traffic, reconnect and stop/drain interleavings. Verify no automatic text replacement or Return occurs.
-6. Only after those checks, review a separate production migration of synchronous capture/validation to the asynchronous adapter. Keep unavailable/not-enrolled states explicit; do not silently request permission, reinstall the host or switch back to a differently trusted capture path.
+6. Run the new dormant composition mock tests and native coordinator/view-model interleavings, then review production selection as a separate change. Legacy capture/status paths are still synchronous. Keep unavailable/not-enabled states explicit; do not silently request permission, reinstall the host or switch back to a differently trusted capture path.
 
-No installer, updater, activation automation or production migration is included here. The source implementation is intentionally dormant until that gate is met.
+No installer, updater, activation automation or production selection is included here. The source implementation is intentionally dormant until that gate is met.
 
 ## Primary references
 
@@ -75,3 +75,17 @@ No installer, updater, activation automation or production migration is included
 - [AX messaging timeout scope](https://developer.apple.com/documentation/applicationservices/1459345-axuielementsetmessagingtimeout)
 - [NSXPCConnection invalidation](https://developer.apple.com/documentation/foundation/nsxpcconnection/invalidate())
 - [Code-signing requirements and identity continuity](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements)
+
+## Dormant async composition seam
+
+The helper backend is an immutable optional initializer dependency of the existing `WindowCoordinator`, `PromptGateViewModel` and `SettingsViewModel`. Production `AppDelegate` constructs `WindowCoordinator(services: services)` with no helper. The coordinator passes the same injected instance to both view models, so captured, manual and hook target capabilities cannot be reassigned to the legacy registry. There is no global async-protocol rewrite and no second UI controller.
+
+The nil/default branches retain synchronous capture, trust reads and validation. Source checks pin important original branch slices to the pre-integration source. This establishes source preservation, not native behavior equivalence or compilation proof.
+
+Only the helper branch owns an async capture task. Duplicate hotkeys coalesce. Close, settings/main navigation, standalone/history entry, hook arrival and termination retire its generation. Both success and failure are checked against the exact previous session and UTF-8 drafts; rejected successful captures are discarded. Capture failure leaves the draft intact and offers guidance for explicit manual entry, never a silent capture/permission/provider fallback. Returning from Settings retains the current review and does not activate the external app or recapture it.
+
+Each helper-only validation await is followed by cancellation and current-session/generation checks before receipt issuance, host acknowledgement or Copy. Existing uncertain acknowledgement semantics remain terminal. Status is a fresh, shared in-flight read rather than cached trust. Individual UI observers can be cancelled without cancelling that transport; terminal backend shutdown owns cancellation/drain. Helper UI says unavailable or not enabled when those causes cannot be distinguished, and its Check action never requests main-app Accessibility permission.
+
+Termination closes helper admission and revokes current/pending capabilities synchronously before scheduling async drain. Queued presentation is rejected after stop. Native tests use fake transport, temporary stores and captured clipboard writes. They remain unrun; no test result here claims native permission, IPC or UI validation.
+
+The composition adds 14 native mock tests (six coordinator/status-owner, six existing-view-model, two Settings) on top of the 25 helper-boundary tests. All 39 remain uncompiled and unrun in this environment. Source regressions can be checked with `node --test scripts/tests/bex-accessibility-composition-source.test.mjs`; source hashes and portable passing tests cannot prove runtime equivalence. Successful native UI, signed-peer rejection, launchd and TCC validation still require the separate authorized acceptance gate.

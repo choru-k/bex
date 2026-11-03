@@ -150,9 +150,14 @@ test('manual Copy consumes and checks exact identity after suspension before one
   assert.equal((delivery.match(/pasteboard.write\(/g) ?? []).length, 1);
   assert.match(afterReply, /PromptDeliveryFailure\(effect: \.unknown/);
   assert.match(adapter, /action == \.copyCorrection/);
-  for (const path of ['Bex/Application/AppServices.swift', 'Bex/Application/WindowCoordinator.swift',
-    'Bex/Application/PromptTargetService.swift', 'Bex/PromptGate/PromptGateViewModel.swift']) {
+  for (const path of ['Bex/Application/AppServices.swift', 'Bex/Application/PromptTargetService.swift']) {
     assert.doesNotMatch(read(path), /IndependentAccessibilityTargetService|AccessibilityAgentClient/);
+  }
+  // Existing classes accept optional immutable injection, but no production caller selects it.
+  assert.match(read('Bex/Application/AppDelegate.swift'), /let coordinator = WindowCoordinator\(services: services\)/);
+  for (const path of ['Bex/Application/WindowCoordinator.swift', 'Bex/PromptGate/PromptGateViewModel.swift', 'Bex/Settings/SettingsViewModel.swift']) {
+    assert.match(read(path), /independentTargetService: IndependentAccessibilityTargetService\? = nil/);
+    assert.doesNotMatch(read(path), /IndependentAccessibilityTargetService\(/);
   }
 });
 

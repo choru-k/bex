@@ -348,7 +348,7 @@ struct PromptGateView: View {
         if !viewModel.isAccessibilityTrusted,
           viewModel.session?.hookRequestID == nil
         {
-          Button("Request Accessibility") { viewModel.requestAccessibility() }
+          Button(viewModel.accessibilityActionLabel) { viewModel.requestAccessibility() }
             .accessibilityIdentifier("prompt-gate-accessibility")
         }
       }

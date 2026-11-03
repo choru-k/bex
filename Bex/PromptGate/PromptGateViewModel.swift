@@ -58,6 +58,10 @@ final class PromptGateViewModel: ObservableObject {
   private let grammar: any GrammarServicing
   private let data: BexDataStore
   private let targetService: any PromptTargetServicing
+  private let independentTargetService: IndependentAccessibilityTargetService?
+  private var independentStatusTask: Task<Void, Never>?
+  private var independentStatusGeneration = UUID()
+  var accessibilityActionLabel: String { independentTargetService == nil ? "Request Accessibility" : "Check Capture Service" }
   private let approvalStore: PromptApprovalStore
   private let hookManager: any HookInstallationManaging
   private let hookResponder: any HookReviewResponding
@@ -109,6 +113,7 @@ final class PromptGateViewModel: ObservableObject {
     grammar: any GrammarServicing,
     data: BexDataStore,
     targetService: any PromptTargetServicing,
+    independentTargetService: IndependentAccessibilityTargetService? = nil,
     approvalStore: PromptApprovalStore,
     hookManager: any HookInstallationManaging,
     hookResponder: any HookReviewResponding,
@@ -125,6 +130,7 @@ final class PromptGateViewModel: ObservableObject {
     self.grammar = grammar
     self.data = data
     self.targetService = targetService
+    self.independentTargetService = independentTargetService
     self.approvalStore = approvalStore
     self.hookManager = hookManager
     self.hookResponder = hookResponder
@@ -134,7 +140,8 @@ final class PromptGateViewModel: ObservableObject {
     openSettingsCallback = onOpenSettings
     openWritingStylesCallback = onOpenWritingStyles
     deliveredCallback = onDelivered
-    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if independentTargetService == nil { isAccessibilityTrusted = targetService.isAccessibilityTrusted }
+    else { isAccessibilityTrusted = false }
   }
 
   var providerDisclosureIsAccepted: Bool { hasAcceptedDestinationDisclosure }
@@ -433,6 +440,9 @@ final class PromptGateViewModel: ObservableObject {
       return
         "This client hook supplied the prompt without using Accessibility. You can still review it; Bex will copy the approved correction for manual replacement."
     }
+    if independentTargetService != nil {
+      return "The independent Bex Accessibility service only reads a draft after an explicit capture. Configure its permission in the separate host app. If unavailable, enter your draft manually; corrections remain Copy-only."
+    }
     if session.source == .standalone {
       return isAccessibilityTrusted
         ? "Fix & Send is in standalone mode because no editable field was captured. The approved correction will be copied."
@@ -479,7 +489,8 @@ final class PromptGateViewModel: ObservableObject {
     accessibilityAnnouncementHistory = []
     isLoadingSession = true
     phase = .onboarding
-    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus() }
+    else { isAccessibilityTrusted = targetService.isAccessibilityTrusted }
 
     let workID = UUID()
     currentWorkID = workID
@@ -552,13 +563,58 @@ final class PromptGateViewModel: ObservableObject {
     }
   }
 
+  func invalidateIndependentSession() {
+    guard let independentTargetService else { return }
+    if let requestID = session?.hookRequestID { invalidateHookRequest(id: requestID); return }
+    retireCurrentTask()
+    lookupTask?.cancel()
+    if let session { independentTargetService.discard(session.target) }
+    cancelIndependentAccessibilityStatus()
+    generation = UUID()
+    phase = .invalidated
+    currentWorkID = nil
+  }
+
+  func cancelIndependentAccessibilityStatus() {
+    guard independentTargetService != nil else { return }
+    independentStatusGeneration = UUID()
+    independentStatusTask?.cancel()
+    independentStatusTask = nil
+    isAccessibilityTrusted = false
+    accessibilityStatusMessage = nil
+  }
+
+  private func refreshIndependentAccessibilityStatus() {
+    guard let helper = independentTargetService else { return }
+    cancelIndependentAccessibilityStatus()
+    accessibilityStatusMessage = "Checking the independent capture service…"
+    let statusGeneration = independentStatusGeneration
+    let sessionID = session?.id
+    let sessionGeneration = generation
+    independentStatusTask = Task { @MainActor [weak self, helper] in
+      let trusted: Bool?
+      do { trusted = try await helper.accessibilityStatus() } catch { trusted = nil }
+      guard let self, !Task.isCancelled, self.independentStatusGeneration == statusGeneration,
+        self.session?.id == sessionID, self.generation == sessionGeneration, self.phase != .closed else { return }
+      self.isAccessibilityTrusted = trusted == true
+      self.accessibilityStatusMessage = trusted == true
+        ? "The independent capture service reports Accessibility access."
+        : (trusted == false
+          ? "The independent capture service does not have Accessibility access. Review setup in Bex Accessibility. You can still enter a draft manually."
+          : "The independent capture service is unavailable or not enabled. Check its separate setup; Bex will not switch services or request main-app access.")
+      self.independentStatusTask = nil
+    }
+  }
+
   func requestAccessibility() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     let wasTrusted = isAccessibilityTrusted
     isAccessibilityTrusted = targetService.requestAccessibilityTrust()
     updateAccessibilityStatus(wasTrusted: wasTrusted)
   }
 
   func refreshAccessibilityState() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     let wasTrusted = isAccessibilityTrusted
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
     updateAccessibilityStatus(wasTrusted: wasTrusted)
@@ -689,7 +745,14 @@ final class PromptGateViewModel: ObservableObject {
       var hookDeliveryMayHaveCommitted = false
       do {
         // Reject stale, forged or consumed target capabilities before any host receipt.
-        try targetService.validateDelivery(to: session.target, action: action)
+        if let independentTargetService {
+          try await independentTargetService.validateDelivery(to: session.target, action: action)
+          try Task.checkCancellation()
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering
+          else { throw CancellationError() }
+        } else {
+          try targetService.validateDelivery(to: session.target, action: action)
+        }
         if session.hookRequestID != nil {
           guard let client = session.knownClient else {
             throw PromptDeliveryFailure(
@@ -717,7 +780,14 @@ final class PromptGateViewModel: ObservableObject {
             )
           }
           try Task.checkCancellation()
-          try targetService.validateDelivery(to: session.target, action: action)
+          if let independentTargetService {
+            try await independentTargetService.validateDelivery(to: session.target, action: action)
+            try Task.checkCancellation()
+            guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering
+            else { throw CancellationError() }
+          } else {
+            try targetService.validateDelivery(to: session.target, action: action)
+          }
           issuedReceipt = try await approvalStore.issue(
             client: client,
             integrationID: context.integrationID,
@@ -730,7 +800,14 @@ final class PromptGateViewModel: ObservableObject {
           guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
             throw CancellationError()
           }
-          try targetService.validateDelivery(to: session.target, action: action)
+          if let independentTargetService {
+            try await independentTargetService.validateDelivery(to: session.target, action: action)
+            try Task.checkCancellation()
+            guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering
+            else { throw CancellationError() }
+          } else {
+            try targetService.validateDelivery(to: session.target, action: action)
+          }
           if let requestID = session.hookRequestID {
             do {
               // From this point a timeout/cancellation cannot prove the host did nothing.
@@ -752,11 +829,21 @@ final class PromptGateViewModel: ObservableObject {
           throw CancellationError()
         }
 
-        let outcome = try await targetService.deliver(
-          correction,
-          to: session.target,
-          action: action
-        )
+        let outcome: PromptDeliveryOutcome
+        if let independentTargetService {
+          outcome = try await independentTargetService.deliver(correction, to: session.target, action: action)
+          // Copy may already have happened. Never update or close a newer review.
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering else {
+            self.finishWork(workID)
+            return
+          }
+        } else {
+          outcome = try await targetService.deliver(
+            correction,
+            to: session.target,
+            action: action
+          )
+        }
         activeReceiptID = nil
         finishWork(workID)
         announce(successAnnouncement(for: outcome, target: session.target))
@@ -862,7 +949,11 @@ final class PromptGateViewModel: ObservableObject {
   func invalidateHookRequest(id: UUID) {
     guard session?.hookRequestID == id, phase != .closed else { return }
     retireCurrentTask()
-    if let session { targetService.discard(session.target) }
+    if let session {
+      if let independentTargetService { independentTargetService.discard(session.target) }
+      else { targetService.discard(session.target) }
+    }
+    cancelIndependentAccessibilityStatus()
     let receiptID = activeReceiptID
     activeReceiptID = nil
     generation = UUID()
@@ -1075,7 +1166,8 @@ final class PromptGateViewModel: ObservableObject {
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
-    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus() }
+    else { isAccessibilityTrusted = targetService.isAccessibilityTrusted }
     if destinationChanged {
       confirmedOutboundDraft = nil
       confirmedOutboundDestination = nil
@@ -1683,6 +1775,7 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   private func updateAccessibilityStatus(wasTrusted: Bool) {
+    guard independentTargetService == nil else { return }
     if isAccessibilityTrusted {
       accessibilityStatusMessage =
         wasTrusted
@@ -1779,7 +1872,9 @@ final class PromptGateViewModel: ObservableObject {
   private func closeCurrentSession() {
     guard let session else { return }
     let deletesStandaloneDraft = session.usesDraftPersistence
-    targetService.discard(session.target)
+    if let independentTargetService { independentTargetService.discard(session.target) }
+    else { targetService.discard(session.target) }
+    cancelIndependentAccessibilityStatus()
     generation = UUID()
     currentWorkID = nil
     currentTask = nil

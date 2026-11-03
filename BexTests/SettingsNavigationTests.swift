@@ -7,6 +7,46 @@ import XCTest
 
 @MainActor
 final class SettingsNavigationTests: XCTestCase {
+  func testInjectedSettingsChecksOnlyHelperAndNeverRequestsMainAppAccess() async throws {
+    let fixture = SettingsFixture()
+    defer { fixture.remove() }
+    let client = CompositionAXClient()
+    client.failure = .unavailable
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: CompositionCopyRecorder())
+    fixture.target.grantsOnRequest = true
+    let viewModel = fixture.makeViewModel(independentTargetService: helper)
+    viewModel.requestAccessibility()
+    for _ in 0..<1_000 {
+      if viewModel.accessibilityStatusMessage?.contains("unavailable") == true { break }
+      await Task.yield()
+    }
+    XCTAssertEqual(fixture.target.requestCount, 0)
+    XCTAssertFalse(viewModel.accessibilityTrusted)
+    XCTAssertEqual(viewModel.accessibilityActionLabel, "Check Capture Service")
+    XCTAssertTrue(viewModel.accessibilityStatusMessage?.contains("unavailable") == true)
+    await helper.stop()
+  }
+
+  func testClosedSettingsRejectsLateHelperStatusWithoutCancellingSharedTransport() async throws {
+    let fixture = SettingsFixture()
+    defer { fixture.remove() }
+    let client = CompositionAXClient()
+    client.pauseStatus = true
+    let session = client.currentSession
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: CompositionCopyRecorder())
+    let viewModel = fixture.makeViewModel(independentTargetService: helper)
+    viewModel.refreshAccessibilityState()
+    for _ in 0..<1_000 { if client.statusCount == 1 { break }; await Task.yield() }
+    XCTAssertEqual(client.statusCount, 1)
+    viewModel.cancelIndependentAccessibilityStatus()
+    client.resumeStatus()
+    for _ in 0..<30 { await Task.yield() }
+    XCTAssertFalse(viewModel.accessibilityTrusted)
+    XCTAssertNil(viewModel.accessibilityStatusMessage)
+    XCTAssertEqual(client.currentSession, session)
+    await helper.stop()
+  }
+
   func testApplicationMenuKeepsTaskFallbacksAndNativeCommands() throws {
     let fixAndSendChord = KeyChord(
       keyCode: UInt32(kVK_ANSI_J),
@@ -440,6 +480,7 @@ private final class SettingsFixture {
 
   func makeViewModel(
     setupOrigin: SettingsSetupOrigin? = nil,
+    independentTargetService: IndependentAccessibilityTargetService? = nil,
     connectionSucceeds: Bool = false,
     updateShortcut: @escaping @MainActor (BexShortcut, KeyChord) throws -> Void = { _, _ in },
     onDeleteSavedDraft: @escaping @MainActor () -> Void = {},
@@ -453,6 +494,7 @@ private final class SettingsFixture {
       grammar: SettingsGrammarStub(connectionSucceeds: connectionSucceeds),
       codexOAuth: CodexOAuthService(keychain: keychain, transport: transport),
       promptTarget: target,
+      independentTargetService: independentTargetService,
       hookManager: hooks,
       applyAppearance: { _ in },
       setupOrigin: setupOrigin,

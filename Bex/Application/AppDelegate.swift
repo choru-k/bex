@@ -241,6 +241,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    if let windowCoordinator, windowCoordinator.usesIndependentAccessibility {
+      // Unreachable in production composition. An injected validation owner must drain
+      // its own backend before termination; never declare an outstanding capture done.
+      windowCoordinator.closeIndependentAccessibilityAdmission()
+      let owner = services?.packagedCorrectionWindows
+      owner?.shutdown()
+      if packagedTerminationTask == nil {
+        packagedTerminationTask = Task { @MainActor in
+          await windowCoordinator.shutdownIndependentAccessibility()
+          await owner?.shutdownAndWait()
+          sender.reply(toApplicationShouldTerminate: true)
+        }
+      }
+      return .terminateLater
+    }
     guard let owner = services?.packagedCorrectionWindows else { return .terminateNow }
     owner.shutdown() // Close admission and revoke synchronously, before yielding.
     guard owner.hasOutstandingWork else { return .terminateNow }

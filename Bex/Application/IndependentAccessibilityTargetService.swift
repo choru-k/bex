@@ -21,6 +21,7 @@ final class IndependentAccessibilityTargetService {
   private var generation = UUID()
   private var stopped = false
   private var inFlightCaptures = 0
+  private var statusRequest: (id: UUID, task: Task<Bool, any Error>)?
 
   init(client: any AccessibilityAgentClientServing = AccessibilityAgentClient(),
        pasteboard: any PasteboardWriting = SystemPasteboard(), now: @escaping @MainActor () -> Date = { Date() }) {
@@ -31,9 +32,20 @@ final class IndependentAccessibilityTargetService {
   }
 
   func accessibilityStatus() async throws -> Bool {
+    try Task.checkCancellation()
     guard !stopped else { throw AccessibilityAgentFailure.cancelled }
     let startedGeneration = generation
-    let trusted = try await client.status()
+    let request: (id: UUID, task: Task<Bool, any Error>)
+    if let statusRequest { request = statusRequest }
+    else {
+      // This owner, not an individual UI observer, owns transport cancellation.
+      // Closing Settings must not revoke a different view's captured target.
+      request = (UUID(), Task { @MainActor [client] in try await client.status() })
+      statusRequest = request
+    }
+    defer { if statusRequest?.id == request.id { statusRequest = nil } }
+    let trusted = try await request.task.value
+    try Task.checkCancellation()
     guard !stopped, generation == startedGeneration else { throw AccessibilityAgentFailure.cancelled }
     return trusted
   }
@@ -50,6 +62,7 @@ final class IndependentAccessibilityTargetService {
   }
 
   func captureFrontmostTarget() async throws -> PromptCapture {
+    try Task.checkCancellation()
     guard !stopped else { throw AccessibilityAgentFailure.cancelled }
     prune()
     guard issued.count + consuming.count + inFlightCaptures < AccessibilityAgentContract.maximumCaptures else {
@@ -117,12 +130,21 @@ final class IndependentAccessibilityTargetService {
     Task { @MainActor [client] in await client.discard(entry.remote.token, session: entry.session) }
   }
 
-  func stop() async {
+  func closeAdmission() {
     stopped = true
     generation = UUID()
     issued.removeAll()
     consuming.removeAll()
+    statusRequest?.task.cancel()
+  }
+
+  func stop() async {
+    closeAdmission()
+    let status = statusRequest?.task
+    statusRequest = nil
+    status?.cancel()
     await client.stop()
+    _ = try? await status?.value
   }
 
   private func liveEntry(_ target: PromptTarget, action: PromptDeliveryAction, expectedGeneration: UUID? = nil) throws -> Issued {

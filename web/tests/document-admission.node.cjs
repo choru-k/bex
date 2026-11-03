@@ -5,13 +5,13 @@ require.extensions['.ts'] = (module, file) => module._compile(ts.transpileModule
 let parser = async () => ({ format: 'pdf', suggestedTitle: 'Synthetic', units: [{ label: 'PDF 파일 페이지 1', text: 'Synthetic text' }], warnings: [] }); let calls = 0;
 const oldLoad = Module._load;
 Module._load = function(request, parent, isMain) {
-  if (request === './extractPdf.ts') return { extractPdf(...args) { calls++; return parser(...args); } };
+  if (request === './pdfLoader.ts') return { async loadPdfExtractor() { return (...args) => { calls++; return parser(...args); }; } };
   if (request === './extractEpub.ts') return { extractEpub(...args) { calls++; return parser(...args); } };
   return oldLoad.call(this, request, parent, isMain);
 };
 const { importStudyDocument } = require('../src/study/documents/importDocument.ts'); Module._load = oldLoad;
 const { SafeDocumentError } = require('../src/study/documents/documentModel.ts');
-const file = (arrayBuffer = async () => new Uint8Array([1, 2]).buffer) => ({ size: 2, name: 'synthetic.pdf', arrayBuffer });
+const file = (arrayBuffer = async () => new Uint8Array([1, 2]).buffer) => ({ size: 10, name: 'synthetic.pdf', slice: () => ({ arrayBuffer: async () => new TextEncoder().encode('%PDF-').buffer }), arrayBuffer });
 const tick = () => new Promise(resolve => setImmediate(resolve)); let count = 0;
 async function scenario(name, run) { await run(); count++; console.log('PASS ' + name); }
 (async () => {
@@ -26,7 +26,7 @@ async function scenario(name, run) { await run(); count++; console.log('PASS ' +
   await scenario('cancel during uncancellable file read remains pending until read actually settles and starts no parser', async () => {
     let finish; const before = calls; const controller = new AbortController(); let settled = false;
     const pending = importStudyDocument(file(() => new Promise(resolve => { finish = resolve; })), controller.signal);
-    pending.then(() => { settled = true; }, () => { settled = true; }); controller.abort(); await tick(); assert.equal(settled, false);
+    pending.then(() => { settled = true; }, () => { settled = true; }); await tick(); controller.abort(); await tick(); assert.equal(settled, false);
     finish(new Uint8Array([1]).buffer); await assert.rejects(pending, { name: 'AbortError' }); assert.equal(calls, before);
   });
   await scenario('deadline during slow file read stays pending and cannot admit a parser when bytes arrive later', async () => {
@@ -34,7 +34,7 @@ async function scenario(name, run) { await run(); count++; console.log('PASS ' +
     global.setTimeout = callback => { timeout = callback; return 1; };
     try {
       const pending = importStudyDocument(file(() => new Promise(resolve => { finish = resolve; })), new AbortController().signal);
-      timeout(); await tick(); finish(new Uint8Array([1]).buffer); await assert.rejects(pending, /시간 한도/); assert.equal(calls, before);
+      await tick(); timeout(); await tick(); finish(new Uint8Array([1]).buffer); await assert.rejects(pending, /시간 한도/); assert.equal(calls, before);
     } finally { global.setTimeout = original; }
   });
   console.log(`${count} document boundary/admission scenarios passed.`);

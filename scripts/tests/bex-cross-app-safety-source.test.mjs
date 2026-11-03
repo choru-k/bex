@@ -101,9 +101,10 @@ test('invalidation and rejected/replaced sessions release exact live capabilitie
   const invalidate = body(vm, '  func invalidateHookRequest(', '  func waitForCurrentWork()');
   assert.match(invalidate, /targetService\.discard\(session\.target\)/);
   assert.doesNotMatch(invalidate, /original prompt remained blocked/);
-  assert.match(windows, /if !began \{ services\.promptTarget\.discard\(session\.target\) \}/);
-  assert.match(windows, /guard confirmFixAndSendReplacement\(\) else \{\s+services\.promptTarget\.discard\(session\.target\)/);
-  assert.equal((windows.match(/if let pendingPromptGateSession \{ services\.promptTarget\.discard\(pendingPromptGateSession\.target\) \}/g) ?? []).length, 2);
+  assert.match(windows, /if !began \{\s+if let independentTargetService \{ independentTargetService.discard\(session.target\) \}\s+else \{ services\.promptTarget\.discard\(session\.target\) \}/);
+  assert.match(windows, /guard confirmFixAndSendReplacement\(\) else \{\s+if let independentTargetService \{ independentTargetService.discard\(session.target\) \}\s+else \{ services\.promptTarget\.discard\(session\.target\)/);
+  assert.equal((windows.match(/services\.promptTarget\.discard\(pendingPromptGateSession\.target\)/g) ?? []).length, 2);
+  assert.match(windows, /independentTargetService.discard\(pendingPromptGateSession.target\)/);
 });
 
 test('native UI fixtures and visible descriptions match copy-only semantics', () => {

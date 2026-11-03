@@ -668,9 +668,7 @@ struct SettingsView: View {
 
       Section("Accessibility") {
         Label(
-          viewModel.accessibilityTrusted
-            ? "Accessibility access is enabled"
-            : "Accessibility access is not enabled",
+          viewModel.accessibilityStatusLabel,
           systemImage: viewModel.accessibilityTrusted
             ? "checkmark.circle.fill"
             : "exclamationmark.triangle"
@@ -678,15 +676,13 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings-accessibility-status")
 
         if viewModel.showsAccessibilityRequest {
-          Button("Request Access") {
+          Button(viewModel.accessibilityActionLabel) {
             viewModel.requestAccessibility()
           }
           .accessibilityIdentifier("settings-prompt-accessibility")
         }
 
-        Text(
-          "macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to read the focused editable field. Approved corrections are copied for you to replace and submit manually."
-        )
+        Text(viewModel.accessibilitySetupGuidance)
         .font(.caption)
         .foregroundStyle(.secondary)
         Text(

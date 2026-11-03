@@ -97,6 +97,10 @@ final class SettingsViewModel: ObservableObject {
   private let codexOAuth: CodexOAuthService
   private let openAuthorizationURL: @MainActor (URL) -> Bool
   private let promptTarget: any PromptTargetServicing
+  private let independentTargetService: IndependentAccessibilityTargetService?
+  private var independentStatusTask: Task<Void, Never>?
+  private var independentStatusGeneration = UUID()
+  private var independentStatusSuspended = false
   private let hookManager: any HookInstallationManaging
   private let applyAppearance: @MainActor (AppearancePreference) -> Void
   private let updateShortcut: @MainActor (BexShortcut, KeyChord) throws -> Void
@@ -128,6 +132,7 @@ final class SettingsViewModel: ObservableObject {
     grammar: any GrammarServicing,
     codexOAuth: CodexOAuthService,
     promptTarget: any PromptTargetServicing = PromptTargetService(),
+    independentTargetService: IndependentAccessibilityTargetService? = nil,
     hookManager: any HookInstallationManaging = HookInstallationManager(),
     applyAppearance: @escaping @MainActor (AppearancePreference) -> Void,
     setupOrigin: SettingsSetupOrigin? = nil,
@@ -148,6 +153,7 @@ final class SettingsViewModel: ObservableObject {
     self.codexOAuth = codexOAuth
     self.openAuthorizationURL = openAuthorizationURL
     self.promptTarget = promptTarget
+    self.independentTargetService = independentTargetService
     self.hookManager = hookManager
     self.applyAppearance = applyAppearance
     self.setupOrigin = setupOrigin
@@ -229,8 +235,19 @@ final class SettingsViewModel: ObservableObject {
       + " Tone, Formality, Domain, and Additional notes."
   }
 
-  var showsAccessibilityRequest: Bool {
-    !accessibilityTrusted
+  var showsAccessibilityRequest: Bool { independentTargetService != nil || !accessibilityTrusted }
+  var accessibilityActionLabel: String { independentTargetService == nil ? "Request Access" : "Check Capture Service" }
+  var accessibilityStatusLabel: String {
+    if independentTargetService != nil {
+      return accessibilityTrusted ? "Independent capture service has access" : "Independent capture service not ready"
+    }
+    return accessibilityTrusted ? "Accessibility access is enabled" : "Accessibility access is not enabled"
+  }
+  var accessibilitySetupGuidance: String {
+    if independentTargetService != nil {
+      return "The independent Bex Accessibility app owns capture permission. Review its separate setup manually. Checking status does not register a service, request main-app Accessibility access, or switch capture providers."
+    }
+    return "macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to read the focused editable field. Approved corrections are copied for you to replace and submit manually."
   }
 
   func load() async {
@@ -777,7 +794,38 @@ final class SettingsViewModel: ObservableObject {
     }
   }
 
+  func cancelIndependentAccessibilityStatus() {
+    guard independentTargetService != nil else { return }
+    independentStatusSuspended = true
+    independentStatusGeneration = UUID()
+    independentStatusTask?.cancel()
+    independentStatusTask = nil
+    accessibilityTrusted = false
+    accessibilityStatusMessage = nil
+  }
+
+  private func refreshIndependentAccessibilityStatus() {
+    guard let helper = independentTargetService else { return }
+    cancelIndependentAccessibilityStatus()
+    independentStatusSuspended = false
+    accessibilityStatusMessage = "Checking the independent capture service…"
+    let generation = independentStatusGeneration
+    independentStatusTask = Task { @MainActor [weak self, helper] in
+      let trusted: Bool?
+      do { trusted = try await helper.accessibilityStatus() } catch { trusted = nil }
+      guard let self, !Task.isCancelled, self.independentStatusGeneration == generation else { return }
+      self.accessibilityTrusted = trusted == true
+      self.accessibilityStatusMessage = trusted == true
+        ? "The independent capture service reports Accessibility access. Invoke Fix & Send again to capture a draft."
+        : (trusted == false
+          ? "The independent service does not have Accessibility access. Review the Bex Accessibility app's setup."
+          : "The independent service is unavailable or not enabled. Check its separate setup, or enter a draft manually. No permission or capture-service fallback was attempted.")
+      self.independentStatusTask = nil
+    }
+  }
+
   func requestAccessibility() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     let trusted = promptTarget.requestAccessibilityTrust()
     accessibilityTrusted = trusted
     if trusted {
@@ -788,6 +836,7 @@ final class SettingsViewModel: ObservableObject {
   }
 
   func refreshAccessibilityState() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     let wasTrusted = accessibilityTrusted
     accessibilityTrusted = promptTarget.isAccessibilityTrusted
     if accessibilityTrusted, !wasTrusted {
@@ -801,6 +850,7 @@ final class SettingsViewModel: ObservableObject {
   }
 
   func testAccessibility() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     refreshAccessibilityState()
     promptGateError =
       accessibilityTrusted
@@ -1096,7 +1146,9 @@ final class SettingsViewModel: ObservableObject {
   }
 
   private func loadPromptGate() async {
-    accessibilityTrusted = promptTarget.isAccessibilityTrusted
+    if independentTargetService != nil {
+      if !independentStatusSuspended { refreshIndependentAccessibilityStatus() }
+    } else { accessibilityTrusted = promptTarget.isAccessibilityTrusted }
     if let manager = hookManager as? HookInstallationManager {
       for client in PromptClient.focusedPickerClients {
         hookConfigPaths[client] = await manager.configuredPath(for: client).path

@@ -13,6 +13,130 @@ private struct PromptGrammarCall: Equatable, Sendable {
 
 @MainActor
 final class PromptGateViewModelTests: XCTestCase {
+  func testInjectedHelperDeliversThroughExistingViewModelWithoutLegacyDelivery() async throws {
+    let client = CompositionAXClient()
+    let writer = CompositionCopyRecorder()
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: writer)
+    let fixture = try await Fixture(independentTargetService: helper)
+    let capture = try await helper.captureFrontmostTarget()
+    XCTAssertTrue(fixture.viewModel.begin(PromptGateSession(initialDraft: capture.draft,
+      target: capture.target, source: capture.source)))
+    await fixture.viewModel.waitForCurrentWork()
+    let corrected = try XCTUnwrap(fixture.viewModel.review?.corrected)
+    fixture.viewModel.performDelivery(.copyCorrection)
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(writer.values, [corrected])
+    XCTAssertTrue(fixture.target.deliveries.isEmpty)
+    XCTAssertEqual(fixture.viewModel.phase, .closed)
+    await helper.stop()
+  }
+
+  func testInjectedHelperHookUsesSameManualAuthorityAndKeepsAcknowledgementSemantics() async throws {
+    let client = CompositionAXClient()
+    let writer = CompositionCopyRecorder()
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: writer)
+    let fixture = try await Fixture(confirmsHookOutboundPayloads: false, independentTargetService: helper)
+    await fixture.hooks.setStatus(.active(lastSeen: Date()))
+    let request = HookReviewRequest(requestID: UUID(), client: .claudeCode,
+      prompt: "This are original.", sessionID: "session-1", cwd: "/tmp/project", helperPID: 123)
+    let target = try helper.target(for: request)
+    XCTAssertTrue(fixture.viewModel.begin(PromptGateSession(initialDraft: request.prompt,
+      target: target, knownClient: request.client, source: .hook(requestID: request.requestID))))
+    await fixture.viewModel.waitForCurrentWork()
+    let corrected = try XCTUnwrap(fixture.viewModel.review?.corrected)
+    fixture.viewModel.performDelivery(.copyCorrection)
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(writer.values, [corrected])
+    XCTAssertTrue(fixture.target.deliveries.isEmpty)
+    XCTAssertEqual(client.captureCount, 0)
+    let calls = await fixture.responder.recordedCalls()
+    XCTAssertEqual(calls.count, 1)
+    XCTAssertEqual(calls.first?.requestID, request.requestID)
+    XCTAssertEqual(calls.first?.outcome, .approved)
+    await helper.stop()
+  }
+
+  func testInjectedHelperRechecksInvalidationAfterAwaitedValidation() async throws {
+    let client = CompositionAXClient()
+    let writer = CompositionCopyRecorder()
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: writer)
+    let fixture = try await Fixture(independentTargetService: helper)
+    let capture = try await helper.captureFrontmostTarget()
+    XCTAssertTrue(fixture.viewModel.begin(PromptGateSession(initialDraft: capture.draft,
+      target: capture.target, source: capture.source)))
+    await fixture.viewModel.waitForCurrentWork()
+    client.pauseValidation = true
+    fixture.viewModel.performDelivery(.copyCorrection)
+    await waitForComposition { client.validationCount == 1 }
+    fixture.viewModel.invalidateIndependentSession()
+    client.resumeValidation()
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertTrue(writer.values.isEmpty)
+    XCTAssertTrue(client.consumptions.isEmpty)
+    XCTAssertTrue(fixture.target.deliveries.isEmpty)
+    XCTAssertEqual(fixture.viewModel.phase, .invalidated)
+    await helper.stop()
+  }
+
+  func testInjectedHelperUnavailableStatusNeverRequestsMainAppPermissionOrChangesDraft() async throws {
+    let client = CompositionAXClient()
+    client.failure = .unavailable
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: CompositionCopyRecorder())
+    let fixture = try await Fixture(accessibilityTrusted: true, independentTargetService: helper)
+    XCTAssertFalse(fixture.viewModel.isAccessibilityTrusted, "Legacy trust cannot stand in for helper trust")
+    let target = try helper.makeStandaloneTarget()
+    XCTAssertTrue(fixture.viewModel.begin(PromptGateSession(initialDraft: "My exact draft", target: target,
+      source: .standalone, usesDraftPersistence: false)))
+    await fixture.viewModel.waitForCurrentWork()
+    fixture.viewModel.requestAccessibility()
+    await waitForComposition { fixture.viewModel.accessibilityStatusMessage?.contains("unavailable") == true }
+    XCTAssertEqual(fixture.target.trustRequests, 0)
+    XCTAssertEqual(fixture.viewModel.draft, "My exact draft")
+    XCTAssertEqual(fixture.viewModel.accessibilityActionLabel, "Check Capture Service")
+    XCTAssertFalse(fixture.viewModel.isAccessibilityTrusted)
+    await helper.stop()
+  }
+
+  func testInjectedHelperLateStatusCannotPublishIntoClosedSession() async throws {
+    let client = CompositionAXClient()
+    client.pauseStatus = true
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: CompositionCopyRecorder())
+    let fixture = try await Fixture(independentTargetService: helper)
+    let target = try helper.makeStandaloneTarget()
+    XCTAssertTrue(fixture.viewModel.begin(PromptGateSession(initialDraft: "", target: target,
+      source: .standalone, usesDraftPersistence: false)))
+    await fixture.viewModel.waitForCurrentWork()
+    await waitForComposition { client.statusCount == 1 }
+    fixture.viewModel.cancel()
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertEqual(fixture.viewModel.phase, .closed)
+    client.resumeStatus()
+    for _ in 0..<30 { await Task.yield() }
+    XCTAssertFalse(fixture.viewModel.isAccessibilityTrusted)
+    XCTAssertNil(fixture.viewModel.accessibilityStatusMessage)
+    await helper.stop()
+  }
+
+  func testInjectedHelperDoesNotAcceptLegacyIssuedTargetAsManualFallback() async throws {
+    let client = CompositionAXClient()
+    let writer = CompositionCopyRecorder()
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: writer)
+    let fixture = try await Fixture(independentTargetService: helper)
+    XCTAssertTrue(fixture.viewModel.begin(fixture.capturedSession(text: "This are original.")))
+    await fixture.viewModel.waitForCurrentWork()
+    fixture.viewModel.performDelivery(.copyCorrection)
+    await fixture.viewModel.waitForCurrentWork()
+    XCTAssertTrue(writer.values.isEmpty)
+    XCTAssertTrue(fixture.target.deliveries.isEmpty)
+    XCTAssertNotNil(fixture.viewModel.errorMessage)
+    await helper.stop()
+  }
+
+  private func waitForComposition(_ predicate: () -> Bool) async {
+    for _ in 0..<1_000 { if predicate() { return }; await Task.yield() }
+    XCTFail("Synthetic helper operation did not reach the expected suspension")
+  }
+
   func testConsentMatrixUsesSourceAndDestinationScopedDisclosure() async throws {
     let captured = try await Fixture(acceptedDisclosure: true)
     XCTAssertTrue(
@@ -1317,7 +1441,8 @@ private final class StubPromptTarget: PromptTargetServicing {
     self.isAccessibilityTrusted = isAccessibilityTrusted
   }
 
-  func requestAccessibilityTrust() -> Bool { isAccessibilityTrusted }
+  var trustRequests = 0
+  func requestAccessibilityTrust() -> Bool { trustRequests += 1; return isAccessibilityTrusted }
   func makeStandaloneTarget() throws -> PromptTarget { fatalError("Not used") }
   func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws {
     if let validationError { throw validationError }
@@ -1531,7 +1656,8 @@ private final class Fixture {
     confirmsHookOutboundPayloads: Bool = true,
     providerSetUp: Bool = true,
     grammar: any PromptGrammarServicing = RecordingPromptGrammar(),
-    generalGrammar: any GrammarServicing = PromptGateGeneralGrammar()
+    generalGrammar: any GrammarServicing = PromptGateGeneralGrammar(),
+    independentTargetService: IndependentAccessibilityTargetService? = nil
   ) async throws {
     suite = "com.bex.tests.prompt-gate-vm.\(UUID().uuidString)"
     preferences = PreferencesStore(defaults: UserDefaults(suiteName: suite)!)
@@ -1569,6 +1695,7 @@ private final class Fixture {
       grammar: generalGrammar,
       data: data,
       targetService: target,
+      independentTargetService: independentTargetService,
       approvalStore: approvalStore,
       hookManager: hooks,
       hookResponder: responder,

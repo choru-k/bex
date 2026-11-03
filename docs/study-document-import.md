@@ -14,8 +14,11 @@ policy; it continues to support manual session-only excerpts.
 ## Workflow and attribution
 
 1. Select one local `.pdf` or `.epub` file. The file picker is disabled while a read
-   is outstanding. Cancelling requests abortion and suppresses results, but does
-   not release that admission slot until the underlying read actually settles.
+   or code-module load is outstanding. PDF checks its size, extension and five-byte
+   format marker before loading the app's bundled PDF parser on demand. The full
+   file is read only after that module loads and cancellation/deadline checks pass.
+   EPUB never requests the PDF module. Cancelling suppresses results but does not
+   release the admission slot until the underlying operation actually settles.
 2. Review the suggested title/author. PDF currently uses the visible filename
    without its extension as a suggestion; EPUB uses package title/creator metadata.
    Suggestions are bounded to 160 characters and editable before use.
@@ -63,9 +66,19 @@ especially for multi-column PDFs, tables, ligatures, and non-embedded/CJK fonts.
   non-XHTML spine content are outside this narrow supported subset. No XML/HTML
   is attached to the live DOM. Scripts/styles/media/foreign/explicitly hidden
   elements are ignored; CSS layout is not evaluated.
-- A 20-second deadline aborts asynchronous work and terminates the owned PDF
-  worker. The component retains its admission slot even if a file read ignores
-  abortion. Unmounting aborts and ignores all late output.
+- A 20-second deadline includes file/header reads, parser-module loading and
+  extraction. A timer aborts active asynchronous work and terminates an owned PDF
+  worker. Absolute monotonic-time checks at each stage also reject late work when
+  synchronous module evaluation delays the timer callback. No full-file read or
+  worker is admitted after an overdue/cancelled module load.
+- JavaScript module loading itself cannot be aborted. A stalled code chunk can
+  leave the picker busy or cancellation-pending until it settles. The component
+  retains its one admission slot instead of accepting repeated files or racing
+  away from an outstanding load. Unmounting invalidates all late output. This is
+  not a guarantee that all network activity or a file read drains within 20 seconds.
+- Chunk-load failures use fixed generic UI text, never raw URLs/stacks. A later
+  explicit attempt calls the loader again without an app-cached rejected promise.
+  The browser's own module cache may still require a page reload after a failure.
 
 These are **input, archive, output and admission limits**, not a hard process-memory
 or CPU sandbox. PDF.js can allocate internally before page/text limits are checked.
@@ -97,6 +110,22 @@ lock pins integrity. No install scripts or optional canvas binaries were needed
 for cloud verification. Optional canvas platform packages may appear in npm's
 lock graph but are not used by browser text extraction.
 
+## On-demand production bundle
+
+The PDF loader uses one static local dynamic-import target, not a CDN or a URL
+constructed from file content. PDF.js and its worker are absent from the initial
+browser script's static import graph and from HTML preloads. The PDF worker asset
+belongs only to the deferred extraction chunk. Loading code sends no document,
+query, filename, or file path in the module request.
+
+For the isolated change against local baseline `99a7313` (published source
+`50b1d3d`), actual Vite builds reduced initial JavaScript from **790,299 to 290,360
+bytes (63.26%)**. The PDF module is a separate 501,577-byte chunk, and the existing
+worker is 1,251,621 bytes. These are emitted uncompressed bytes and static graph
+evidence, not measured browser startup latency or a runtime network trace. The
+native three-resource output remains byte-for-byte identical to that baseline.
+The deferred parser still triggers Vite's 500 kB chunk-size warning.
+
 ## Cloud validation
 
 From `web/`:
@@ -107,14 +136,19 @@ BEX_NODE_HARNESS=/tmp/bex-native-node-harness node --experimental-strip-types --
 BEX_NODE_HARNESS=/tmp/bex-native-node-harness node tests/study-document-ui.node.cjs
 BEX_NODE_HARNESS=/tmp/bex-native-node-harness node tests/pdf-worker-lifecycle.node.cjs
 BEX_NODE_HARNESS=/tmp/bex-native-node-harness node tests/document-admission.node.cjs
+BEX_NODE_HARNESS=/tmp/bex-native-node-harness node tests/pdf-lazy-loading.node.cjs
 npm run typecheck
+npm exec -- vite build --manifest
+node tests/pdf-build-graph.mjs dist # optional second argument: exact baseline dist
 ```
 
 The parser suite uses a real generated synthetic PDF through the actual pinned
 Mozilla parser and actual detached XML parsing through JSDOM. No private books or
 account data are test fixtures. The UI/coordinator suites deliberately simulate
-workers, failed/ignored cancellation, delayed reads, and parser errors to inspect
-ownership and stale-result behavior. They do not prove browser worker startup.
+workers, failed/ignored cancellation, delayed reads/code-module loading, delayed
+timer delivery, retries, and parser errors to inspect ownership and stale-result
+behavior. The lazy-loading suite includes the real React importer and coordinator
+with only the PDF module boundary replaced by a controlled double. They do not prove browser worker startup.
 
 A standalone Vite production build of the importer was verified in cloud. Browser
 launch remains blocked by the environment, so no Chromium/WebKit, visual, file
