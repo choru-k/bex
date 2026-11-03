@@ -685,12 +685,12 @@ struct SettingsView: View {
         }
 
         Text(
-          "macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to capture the focused editable field and deliver a correction you approve."
+          "macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to read the focused editable field. Approved corrections are copied for you to replace and submit manually."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
         Text(
-          "Without Accessibility access, manual Fix & Send uses copy-only fallback: Bex copies the approved correction so you can paste it yourself. You can revoke the grant at any time in System Settings."
+          "With or without Accessibility access, Bex copies corrections for manual replacement. Without access, enter the original draft in Bex yourself. You can revoke the grant at any time in System Settings."
         )
         .font(.caption)
         .foregroundStyle(.secondary)

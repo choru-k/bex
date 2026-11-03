@@ -229,11 +229,7 @@ final class PromptGateViewModel: ObservableObject {
 
   var reviewPendingStatus: String {
     switch session?.target.kind {
-    case .capturedField:
-      return "Nothing has been sent."
-    case .composerPaste:
-      return "Nothing has been pasted."
-    case .copyOnly:
+    case .capturedField, .composerPaste, .copyOnly:
       return "Nothing has been copied."
     case .managedDraft:
       return "Nothing has been staged."
@@ -416,20 +412,12 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   var primaryDeliveryAction: PromptDeliveryAction? {
-    guard let target = session?.target else { return nil }
-    if session?.hookRequestID != nil {
-      return target.availableDeliveryActions.first
-    }
-    switch target.kind {
-    case .copyOnly:
-      return .copyCorrection
-    case .composerPaste:
-      return .pasteInDestination
-    case .capturedField:
-      return .pasteInDestination
-    case .managedDraft:
-      return .pasteInDestination
-    }
+    availableDeliveryActions.first
+  }
+
+  var deliveryShortcutHint: String {
+    guard let action = primaryDeliveryAction else { return "" }
+    return action == .copyCorrection ? "⌘⏎ copies correction" : "⌘⏎ stages correction"
   }
 
   var destinationLabel: String {
@@ -439,9 +427,8 @@ final class PromptGateViewModel: ObservableObject {
   var permissionGuidance: String {
     guard let session else { return "" }
     if session.hookRequestID != nil {
-      if isAccessibilityTrusted, session.target.kind == .composerPaste {
-        return
-          "This client hook supplied the prompt. Accessibility is used only to paste the approved correction; Bex will not press Return."
+      if session.target.kind == .managedDraft {
+        return "This client hook supplied the prompt without Accessibility. Approval stages the correction for explicit replay in the host."
       }
       return
         "This client hook supplied the prompt without using Accessibility. You can still review it; Bex will copy the approved correction for manual replacement."
@@ -453,10 +440,10 @@ final class PromptGateViewModel: ObservableObject {
     }
     if isAccessibilityTrusted {
       return
-        "Accessibility enables manual capture and replacement in other apps. If access was just granted, invoke Fix & Send again to capture the focused field."
+        "Accessibility enables reading the focused draft. Corrections are copied for manual replacement. If access was just granted, invoke Fix & Send again to capture the focused field."
     }
     return
-      "Accessibility is required only for manual capture and replacement. Without it, Fix & Send is copy-only. Grant access, then invoke Fix & Send again. Enabled client hooks can still supply prompts without this permission."
+      "Accessibility is required only to capture a focused draft. Without it, Fix & Send is copy-only. Grant access, then invoke Fix & Send again. Enabled client hooks can still supply prompts without this permission."
   }
 
   @discardableResult
@@ -699,7 +686,10 @@ final class PromptGateViewModel: ObservableObject {
     currentTask = Task { @MainActor [weak self] in
       guard let self else { return }
       var issuedReceipt: UUID?
+      var hookDeliveryMayHaveCommitted = false
       do {
+        // Reject stale, forged or consumed target capabilities before any host receipt.
+        try targetService.validateDelivery(to: session.target, action: action)
         if session.hookRequestID != nil {
           guard let client = session.knownClient else {
             throw PromptDeliveryFailure(
@@ -709,7 +699,9 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
-          let context = session.target.hookContext
+          guard let context = session.target.hookContext,
+            context.requestID == session.hookRequestID, context.client == client
+          else { throw BexError.stalePromptTarget }
           let status = await hookStatus(for: session)
           guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
             self.finishWork(workID)
@@ -724,22 +716,31 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
+          try Task.checkCancellation()
+          try targetService.validateDelivery(to: session.target, action: action)
           issuedReceipt = try await approvalStore.issue(
             client: client,
-            integrationID: context?.integrationID,
+            integrationID: context.integrationID,
             text: correction,
-            sessionID: context?.sessionID,
-            cwd: context?.cwd
+            sessionID: context.sessionID,
+            cwd: context.cwd
           )
           activeReceiptID = issuedReceipt
+          try Task.checkCancellation()
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+            throw CancellationError()
+          }
+          try targetService.validateDelivery(to: session.target, action: action)
           if let requestID = session.hookRequestID {
             do {
+              // From this point a timeout/cancellation cannot prove the host did nothing.
+              hookDeliveryMayHaveCommitted = true
               try await hookResponder.complete(
                 requestID: requestID,
                 outcome: .approved,
                 awaitAcknowledgement: true,
                 approvedPrompt: correction,
-                integrationID: context?.integrationID
+                integrationID: context.integrationID
               )
             } catch {
               throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
@@ -761,8 +762,8 @@ final class PromptGateViewModel: ObservableObject {
         announce(successAnnouncement(for: outcome, target: session.target))
         let deliveredTo = session.target.applicationName
         closeCurrentSession()
-        deliveredCallback(deliveredTo)
-      } catch is CancellationError {
+        if outcome == .submitted { deliveredCallback(deliveredTo) }
+      } catch is CancellationError where !hookDeliveryMayHaveCommitted {
         if let issuedReceipt {
           try? await approvalStore.revoke(id: issuedReceipt)
         }
@@ -785,9 +786,12 @@ final class PromptGateViewModel: ObservableObject {
           return
         }
         activeReceiptID = nil
-        let failure =
+        let reportedFailure =
           error as? PromptDeliveryFailure
           ?? PromptDeliveryFailure(effect: .none, underlyingError: error)
+        let failure = hookDeliveryMayHaveCommitted
+          ? PromptDeliveryFailure(effect: .unknown, underlyingError: reportedFailure.underlyingError)
+          : reportedFailure
         deliveryFailureEffect = failure.effect
         phase = .reviewing
         errorMessage = recoveryMessage(for: failure, action: action, target: session.target)
@@ -858,12 +862,13 @@ final class PromptGateViewModel: ObservableObject {
   func invalidateHookRequest(id: UUID) {
     guard session?.hookRequestID == id, phase != .closed else { return }
     retireCurrentTask()
+    if let session { targetService.discard(session.target) }
     let receiptID = activeReceiptID
     activeReceiptID = nil
     generation = UUID()
     phase = .invalidated
     errorMessage =
-      "This hook request is no longer active. The original prompt remained blocked; invoke the client action again."
+      "This hook request is no longer active. Check the client and Clipboard before starting another review; Bex will not repeat delivery."
     currentWorkID = nil
     currentTask = nil
     requestFocus(keyboard: .recoveryAction, accessibility: .statusHeading)
@@ -1112,29 +1117,23 @@ final class PromptGateViewModel: ObservableObject {
   var deliveryGuidanceIntroduction: String {
     guard let target = session?.target else { return "" }
     if target.kind == .capturedField {
-      return
-        "Bex will verify that the same \(target.applicationName) field still contains your original draft before replacing it."
+      return "Bex will recheck the captured draft before copying. Replace the intended draft in \(target.applicationName) and submit manually."
     }
     return target.guidance
   }
 
   func deliveryEffectDescription(for action: PromptDeliveryAction) -> String {
     guard let target = session?.target else { return "" }
+    guard target.availableDeliveryActions.contains(action) else {
+      return "Automatic paste and submission are unavailable. Copy and replace the draft manually."
+    }
     switch action {
     case .copyCorrection:
       return "Copies the correction to the Clipboard. Nothing is pasted or submitted."
     case .pasteInDestination:
-      switch target.kind {
-      case .capturedField:
-        return "Replaces the captured draft in \(target.applicationName) without sending."
-      case .managedDraft:
-        return "Stages the correction in \(target.applicationName) without sending."
-      case .composerPaste, .copyOnly:
-        return "Pastes the correction in \(target.applicationName). Bex will not press Return."
-      }
+      return "Stages the correction in \(target.applicationName) without sending."
     case .pasteAndSubmit:
-      return
-        "Replaces the captured draft, verifies the pasted text, then presses Return once in \(target.applicationName)."
+      return "Automatic submission is unavailable."
     }
   }
 
@@ -1715,8 +1714,11 @@ final class PromptGateViewModel: ObservableObject {
       return
         "\(target.applicationName) may already have submitted the correction. Check the destination before continuing; Bex will not retry."
     case .unknown:
+      if target.hookContext == nil {
+        return "Bex cannot determine whether the Clipboard changed. Nothing was pasted or submitted by Bex. Check the Clipboard before starting a new review; automatic retry is disabled."
+      }
       return
-        "Bex cannot determine how much reached \(target.applicationName). Check the destination and Clipboard before continuing; automatic retry is disabled."
+        "Bex cannot determine how much reached \(target.applicationName). Check the client and Clipboard before continuing; automatic retry is disabled."
     }
   }
 

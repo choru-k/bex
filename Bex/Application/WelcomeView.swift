@@ -27,7 +27,7 @@ struct WelcomeView: View {
         feature(
           title: "Fix & Send",
           detail:
-            "Capture or write a draft, confirm exactly what leaves your Mac, and choose how the correction is delivered."
+            "Capture or write a draft, confirm exactly what leaves your Mac, then copy the correction for manual replacement. Supported managed hooks can stage it for replay."
         )
         feature(
           title: "You stay in control",

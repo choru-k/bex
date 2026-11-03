@@ -1,90 +1,16 @@
-@preconcurrency import Network
 import Darwin
 import Foundation
 
-private final class PromptHTTPReader: @unchecked Sendable {
-  private let connection: NWConnection
-  private let maximumBytes: Int
-  private let completion: @Sendable (Result<(String, Data), Error>) -> Void
-  private var buffer = Data()
-  private var completed = false
-
-  init(
-    connection: NWConnection,
-    maximumBytes: Int,
-    completion: @escaping @Sendable (Result<(String, Data), Error>) -> Void
-  ) {
-    self.connection = connection
-    self.maximumBytes = maximumBytes
-    self.completion = completion
-  }
-
-  func start() {
-    receive()
-  }
-
-  private func receive() {
-    connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
-      [weak self] data, _, isComplete, error in
-      guard let self, !completed else { return }
-      if let data {
-        buffer.append(data)
-      }
-      if buffer.count > maximumBytes + 64 * 1024 {
-        finish(.failure(HookIPCError.messageTooLarge))
-        return
-      }
-      if let request = parseRequest() {
-        finish(.success(request))
-        return
-      }
-      if let error {
-        finish(.failure(error))
-      } else if isComplete {
-        finish(.failure(HookIPCError.invalidResponse))
-      } else {
-        receive()
-      }
-    }
-  }
-
-  private func parseRequest() -> (String, Data)? {
-    let separator = Data("\r\n\r\n".utf8)
-    guard let headerRange = buffer.range(of: separator) else { return nil }
-    let headerData = buffer[..<headerRange.lowerBound]
-    guard let header = String(data: headerData, encoding: .utf8) else { return nil }
-    let lines = header.components(separatedBy: "\r\n")
-    guard let requestLine = lines.first else { return nil }
-    let parts = requestLine.split(separator: " ")
-    guard parts.count >= 2, parts[0] == "POST" else { return nil }
-    let contentLength = lines.dropFirst().compactMap { line -> Int? in
-      let pair = line.split(separator: ":", maxSplits: 1)
-      guard pair.count == 2,
-        pair[0].trimmingCharacters(in: .whitespaces).lowercased() == "content-length"
-      else {
-        return nil
-      }
-      return Int(pair[1].trimmingCharacters(in: .whitespaces))
-    }.first ?? 0
-    guard contentLength <= maximumBytes else { return nil }
-    let bodyStart = headerRange.upperBound
-    guard buffer.count >= bodyStart + contentLength else { return nil }
-    return (String(parts[1]), buffer.subdata(in: bodyStart..<(bodyStart + contentLength)))
-  }
-
-  private func finish(_ result: Result<(String, Data), Error>) {
-    guard !completed else { return }
-    completed = true
-    completion(result)
-  }
-}
-
 actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
+  typealias TransportFactory = @Sendable (
+    @escaping @Sendable (UUID, PromptHTTPRequestParser.Request) async -> Void,
+    @escaping @Sendable (UUID) async -> Void,
+    @escaping @Sendable () -> Void
+  ) -> PromptGateHTTPTransport
   private struct Pending {
     let request: HookReviewRequest
-    let connection: NWConnection
     let connectionID: UUID
-    var waitingForAcknowledgment: Bool
+    var waitingForAcknowledgment = false
     var acknowledgmentToken: String?
     var approvedPrompt: String?
     var deliveryToken: String?
@@ -93,12 +19,21 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
   }
 
   private let rendezvousURL: URL
-  private let queue = DispatchQueue(label: "com.bex.desktop.prompt-gate-ipc")
   private let deadlineSeconds: TimeInterval
-  private var listener: NWListener?
+  private let makeTransport: TransportFactory
+  private let rendezvousStorage: (any PromptGateRendezvousStorage)?
+  private var transport: PromptGateHTTPTransport?
+  private var generation: UUID?
+  private var ready = false
+  private var stopping = false
+  private var stopWaiters: [CheckedContinuation<Void, Never>] = []
   private var authenticationToken = ""
   private var pending: Pending?
-  private var readers: [UUID: PromptHTTPReader] = [:]
+  // A disconnected request does not release an uncooperative application handler's
+  // slot. Bound handler work independently from connection/I/O ownership.
+  private var requestHandlerID: UUID?
+  private var invalidationHandlerID: UUID?
+  private var deferredInvalidation: Pending?
   private var onRequest: (@Sendable (HookReviewRequest) async -> Bool)?
   private var onInvalidation: (@Sendable (UUID) async -> Void)?
 
@@ -106,10 +41,16 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
     rendezvousURL: URL = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Bex/PromptGate", isDirectory: true)
       .appendingPathComponent(HookProtocolConstants.rendezvousFileName),
-    deadlineSeconds: TimeInterval = 3_500
+    deadlineSeconds: TimeInterval = 3_500,
+    makeTransport: @escaping TransportFactory = { request, close, termination in
+      PromptGateHTTPTransport(onRequest: request, onClose: close, onTermination: termination)
+    },
+    rendezvousStorage: (any PromptGateRendezvousStorage)? = nil
   ) {
     self.rendezvousURL = rendezvousURL
-    self.deadlineSeconds = deadlineSeconds
+    self.makeTransport = makeTransport
+    self.rendezvousStorage = rendezvousStorage
+    self.deadlineSeconds = deadlineSeconds.isFinite ? min(max(deadlineSeconds, 1), 3_500) : 3_500
   }
 
   func setHandlers(
@@ -121,69 +62,69 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
   }
 
   func start() async throws {
-    guard listener == nil else { return }
+    guard !stopping else { throw deliveryFailure }
+    if transport != nil {
+      guard ready else { throw deliveryFailure }
+      return
+    }
+    let lifetime = UUID()
+    generation = lifetime
     authenticationToken = Self.randomToken()
-    let listener = try NWListener(using: .tcp, on: .any)
-    listener.newConnectionHandler = { [weak self] connection in
-      Task { await self?.accept(connection) }
-    }
-    self.listener = listener
-
-    let port: UInt16
+    let service = makeTransport({ [weak self] id, request in
+      await self?.received(request, id: id, generation: lifetime)
+    }, { [weak self] id in
+      await self?.connectionClosed(id: id, generation: lifetime)
+    }, { [weak self] in
+      Task { await self?.transportTerminated(generation: lifetime) }
+    })
+    transport = service
     do {
-      port = try await withCheckedThrowingContinuation { continuation in
-        listener.stateUpdateHandler = { state in
-          switch state {
-          case .ready:
-            guard let port = listener.port?.rawValue, port != 0 else {
-              listener.stateUpdateHandler = nil
-              continuation.resume(
-                throwing: BexError.promptDeliveryFailed("Bex could not start Prompt Gate IPC.")
-              )
-              return
-            }
-            listener.stateUpdateHandler = nil
-            continuation.resume(returning: port)
-          case .failed(let error):
-            listener.stateUpdateHandler = nil
-            continuation.resume(throwing: error)
-          case .cancelled:
-            listener.stateUpdateHandler = nil
-            continuation.resume(
-              throwing: BexError.promptDeliveryFailed("Bex could not start Prompt Gate IPC.")
-            )
-          default:
-            break
-          }
-        }
-        listener.start(queue: queue)
-      }
+      let port = try await service.start()
+      guard generation == lifetime, !stopping else { throw deliveryFailure }
+      try writeRendezvous(port: port)
+      ready = true
     } catch {
-      listener.cancel()
-      self.listener = nil
-      throw BexError.promptDeliveryFailed("Bex could not start Prompt Gate IPC.")
+      // Stop/restart may have replaced the owner while start was suspended.
+      if generation == lifetime {
+        generation = nil
+        ready = false
+        authenticationToken = ""
+      }
+      await service.stop()
+      if transport === service { transport = nil }
+      throw deliveryFailure
     }
-    try writeRendezvous(port: port)
+  }
+
+  private func transportTerminated(generation: UUID) async {
+    guard self.generation == generation else { return }
+    await stop()
   }
 
   func stop() async {
-    if let pending {
-      pending.deadline?.cancel()
-      pending.acknowledgmentContinuation?.resume(
-        throwing: BexError.promptDeliveryFailed("Bex Prompt Gate stopped.")
-      )
-      await sendReviewResponse(.failed, token: nil, connection: pending.connection)
-      pending.connection.cancel()
-      await onInvalidation?(pending.request.requestID)
+    if stopping {
+      await withCheckedContinuation { stopWaiters.append($0) }
+      return
     }
+    stopping = true
+    let service = transport
+    let current = pending
+    let token = authenticationToken
+    generation = nil
+    ready = false
+    transport = nil
+    authenticationToken = ""
     pending = nil
-    for reader in readers.values {
-      _ = reader
-    }
-    readers.removeAll()
-    listener?.cancel()
-    listener = nil
-    try? FileManager.default.removeItem(at: rendezvousURL)
+    current?.deadline?.cancel()
+    current?.acknowledgmentContinuation?.resume(throwing: deliveryFailure)
+    removeOwnRendezvous(token: token)
+    // Close admission and drain all owned I/O before allowing a new listener.
+    await service?.stop()
+    if let current { await invalidate(current) }
+    stopping = false
+    let waiters = stopWaiters
+    stopWaiters.removeAll()
+    for waiter in waiters { waiter.resume() }
   }
 
   func complete(
@@ -193,304 +134,285 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
     approvedPrompt: String?,
     integrationID: String?
   ) async throws {
-    guard var current = pending, current.request.requestID == requestID else {
-      throw BexError.promptDeliveryFailed("The Prompt Gate helper disconnected.")
-    }
-    current.deadline?.cancel()
+    guard var current = pending, current.request.requestID == requestID,
+      !current.waitingForAcknowledgment, let service = transport
+    else { throw deliveryFailure }
+    let id = current.connectionID
 
     guard outcome == .approved, awaitAcknowledgement else {
+      current.deadline?.cancel()
       pending = nil
-      await sendReviewResponse(outcome, token: nil, connection: current.connection)
-      current.connection.cancel()
+      await sendReviewResponse(outcome, token: nil, id: id, service: service)
       return
     }
-
     if current.request.client == .ohMyPi {
-      guard
-        let approvedPrompt,
-        !approvedPrompt.isEmpty,
-        let integrationID,
-        integrationID == current.request.integrationID
-      else {
-        throw BexError.promptDeliveryFailed("The OMP approval identity is invalid.")
-      }
+      guard let approvedPrompt, !approvedPrompt.isEmpty,
+        let integrationID, integrationID == current.request.integrationID
+      else { throw BexError.promptDeliveryFailed("The OMP approval identity is invalid.") }
       current.approvedPrompt = approvedPrompt
       current.deliveryToken = Self.randomToken()
     }
     let acknowledgmentToken = Self.randomToken()
+    let response = reviewResponse(.approved, token: acknowledgmentToken, request: current.request,
+      approvedPrompt: current.approvedPrompt, deliveryToken: current.deliveryToken)
+    guard let response, response.count <= HookProtocolConstants.maximumMessageBytes else {
+      throw BexError.promptDeliveryFailed("The approved prompt is too large.")
+    }
+    current.deadline?.cancel()
+    current.deadline = nil
     current.waitingForAcknowledgment = true
     current.acknowledgmentToken = acknowledgmentToken
     pending = current
 
-    try await withCheckedThrowingContinuation {
-      (continuation: CheckedContinuation<Void, Error>) in
-      guard var pending = self.pending, pending.request.requestID == requestID else {
-        continuation.resume(throwing: BexError.promptDeliveryFailed("The Prompt Gate helper disconnected."))
-        return
+    // Every continuation and cleanup belongs to this connection, not merely a
+    // caller-controlled request UUID that might be reused in a later request.
+    defer {
+      // Covers cancellation before continuation installation too: the transport
+      // hold must never survive after its actor pending owner has been removed.
+      service.close(id)
+      if pending?.connectionID == id {
+        pending?.deadline?.cancel()
+        pending = nil
       }
-      pending.acknowledgmentContinuation = continuation
-      self.pending = pending
-      Task { [weak self] in
-        await self?.publishApproval(
-          requestID: requestID,
-          token: acknowledgmentToken
-        )
+    }
+    try await withTaskCancellationHandler {
+      try Task.checkCancellation()
+      try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        guard var owned = pending, owned.connectionID == id else {
+          continuation.resume(throwing: deliveryFailure); return
+        }
+        owned.acknowledgmentContinuation = continuation
+        pending = owned
+        Task { [weak self] in
+          await self?.publishApproval(id: id, response: response, service: service)
+        }
       }
+    } onCancel: {
+      Task { await self.cancelApproval(id: id) }
     }
 
-    let exitDeadline = Date().addingTimeInterval(2)
-    while Self.processIsAlive(current.request.helperPID), Date() < exitDeadline {
+    guard pending?.connectionID == id else { throw deliveryFailure }
+    let clock = ContinuousClock()
+    let exitDeadline = clock.now.advanced(by: .seconds(2))
+    while Self.processIsAlive(current.request.helperPID), clock.now < exitDeadline {
       try await Task.sleep(for: .milliseconds(25))
+      guard pending?.connectionID == id else { throw deliveryFailure }
     }
     guard !Self.processIsAlive(current.request.helperPID) else {
-      pending = nil
       throw BexError.promptDeliveryFailed("The Prompt Gate helper did not exit safely.")
     }
     try await Task.sleep(for: .milliseconds(150))
-    pending = nil
+    guard pending?.connectionID == id else { throw deliveryFailure }
   }
 
-  private func publishApproval(requestID: UUID, token: String) async {
-    guard let current = pending, current.request.requestID == requestID else { return }
-    await sendReviewResponse(
-      .approved,
-      token: token,
-      connection: current.connection,
-      request: current.request,
-      approvedPrompt: current.approvedPrompt,
-      deliveryToken: current.deliveryToken
-    )
-    current.connection.cancel()
-    Task { [weak self] in
-      try? await Task.sleep(for: .seconds(2))
-      await self?.acknowledgmentTimedOut(requestID: requestID)
-    }
-  }
-
-  private func accept(_ connection: NWConnection) {
-    let connectionID = UUID()
-    connection.stateUpdateHandler = { [weak self] state in
-      switch state {
-      case .failed, .cancelled:
-        Task { await self?.connectionClosed(id: connectionID) }
-      default:
-        break
-      }
-    }
-    connection.start(queue: queue)
-    let reader = PromptHTTPReader(
-      connection: connection,
-      maximumBytes: HookProtocolConstants.maximumMessageBytes
-    ) { [weak self] result in
-      Task { await self?.received(result, connection: connection, id: connectionID) }
-    }
-    readers[connectionID] = reader
-    reader.start()
-  }
-
-  private func received(
-    _ result: Result<(String, Data), Error>,
-    connection: NWConnection,
-    id: UUID
-  ) async {
-    readers.removeValue(forKey: id)
-    guard case .success(let request) = result else {
-      await sendHTTP(status: 400, body: Data(), connection: connection)
-      connection.cancel()
+  private func publishApproval(id: UUID, response: Data, service: PromptGateHTTPTransport) async {
+    guard pending?.connectionID == id, pending?.acknowledgmentContinuation != nil else { return }
+    guard await service.respond(id, status: 200, body: response) else {
+      cancelApproval(id: id)
       return
     }
-    switch request.0 {
-    case HookProtocolConstants.reviewPath:
-      await receiveReview(request.1, connection: connection, id: id)
-    case HookProtocolConstants.acknowledgmentPath:
-      await receiveAcknowledgment(request.1, connection: connection)
-    default:
-      await sendHTTP(status: 404, body: Data(), connection: connection)
-      connection.cancel()
-    }
-  }
-
-  private func receiveReview(_ data: Data, connection: NWConnection, id: UUID) async {
-    guard
-      let envelope = try? JSONDecoder().decode(HookReviewEnvelope.self, from: data),
-      envelope.version == HookProtocolConstants.version
-    else {
-      await sendHTTP(status: 400, body: Data(), connection: connection)
-      connection.cancel()
-      return
-    }
-    guard envelope.authenticationToken == authenticationToken else {
-      await sendHTTP(status: 401, body: Data(), connection: connection)
-      connection.cancel()
-      return
-    }
-    guard pending == nil, let onRequest else {
-      await sendReviewResponse(.failed, token: nil, connection: connection)
-      connection.cancel()
-      return
-    }
-
-    pending = Pending(
-      request: envelope.request,
-      connection: connection,
-      connectionID: id,
-      waitingForAcknowledgment: false,
-      acknowledgmentToken: nil,
-      approvedPrompt: nil,
-      deliveryToken: nil,
-      acknowledgmentContinuation: nil,
-      deadline: nil
-    )
-    guard await onRequest(envelope.request), var current = pending,
-      current.request.requestID == envelope.request.requestID
-    else {
-      pending = nil
-      await sendReviewResponse(.failed, token: nil, connection: connection)
-      connection.cancel()
-      return
-    }
-    let requestDeadlineSeconds = deadlineSeconds
+    guard var current = pending, current.connectionID == id,
+      current.acknowledgmentContinuation != nil else { return }
     current.deadline = Task { [weak self] in
-      do {
-        try await Task.sleep(for: .seconds(requestDeadlineSeconds))
-      } catch {
-        return
-      }
-      await self?.reviewTimedOut(requestID: envelope.request.requestID)
+      do { try await Task.sleep(for: .seconds(2)) } catch { return }
+      await self?.cancelApproval(id: id)
     }
     pending = current
   }
 
-  private func receiveAcknowledgment(_ data: Data, connection: NWConnection) async {
-    guard
-      let envelope = try? JSONDecoder().decode(HookAcknowledgmentEnvelope.self, from: data),
-      envelope.version == HookProtocolConstants.version,
-      envelope.authenticationToken == authenticationToken
-    else {
-      await sendHTTP(status: 401, body: Data(), connection: connection)
-      connection.cancel()
+  private func cancelApproval(id: UUID) {
+    guard let current = pending, current.connectionID == id else { return }
+    pending = nil
+    current.deadline?.cancel()
+    transport?.close(id)
+    current.acknowledgmentContinuation?.resume(throwing: deliveryFailure)
+  }
+
+  private func received(_ request: PromptHTTPRequestParser.Request, id: UUID, generation: UUID) async {
+    guard self.generation == generation, ready, let service = transport else { return }
+    switch request.path {
+    case HookProtocolConstants.reviewPath:
+      await receiveReview(request.body, id: id, service: service, generation: generation)
+    case HookProtocolConstants.acknowledgmentPath:
+      await receiveAcknowledgment(request.body, id: id, service: service, generation: generation)
+    default:
+      _ = await service.respond(id, status: 404, body: Data())
+    }
+  }
+
+  private func receiveReview(_ data: Data, id: UUID, service: PromptGateHTTPTransport,
+    generation: UUID) async {
+    guard let envelope = try? JSONDecoder().decode(HookReviewEnvelope.self, from: data),
+      envelope.version == HookProtocolConstants.version, envelope.request.helperPID > 0
+    else { _ = await service.respond(id, status: 400, body: Data()); return }
+    guard PromptGateAuthentication.matches(envelope.authenticationToken, expected: authenticationToken)
+    else { _ = await service.respond(id, status: 401, body: Data()); return }
+    guard pending == nil, requestHandlerID == nil, invalidationHandlerID == nil, let onRequest else {
+      await sendReviewResponse(.failed, token: nil, id: id, service: service); return
+    }
+
+    // Reserve the sole review before hopping to the transport or application handler.
+    requestHandlerID = id
+    pending = Pending(request: envelope.request, connectionID: id)
+    let held = await service.hold(id)
+    guard held, self.generation == generation, pending?.connectionID == id else {
+      if pending?.connectionID == id { pending = nil }
+      service.close(id)
+      await finishRequestHandler(id: id)
       return
     }
+    let seconds = deadlineSeconds
+    pending?.deadline = Task { [weak self] in
+      do { try await Task.sleep(for: .seconds(seconds)) } catch { return }
+      await self?.reviewTimedOut(id: id)
+    }
+    let accepted = await onRequest(envelope.request)
+    await finishRequestHandler(id: id)
+    guard self.generation == generation, pending?.connectionID == id else { return }
+    if !accepted, let current = pending {
+      pending = nil
+      current.deadline?.cancel()
+      current.acknowledgmentContinuation?.resume(throwing: deliveryFailure)
+      await sendReviewResponse(.failed, token: nil, id: id, service: service)
+    }
+  }
+
+  private func receiveAcknowledgment(_ data: Data, id: UUID, service: PromptGateHTTPTransport,
+    generation: UUID) async {
+    guard let envelope = try? JSONDecoder().decode(HookAcknowledgmentEnvelope.self, from: data),
+      envelope.version == HookProtocolConstants.version,
+      PromptGateAuthentication.matches(envelope.authenticationToken, expected: authenticationToken)
+    else { _ = await service.respond(id, status: 401, body: Data()); return }
     guard var current = pending, current.request.requestID == envelope.requestID else {
-      await sendHTTP(status: 409, body: Data(), connection: connection)
-      connection.cancel()
-      return
+      _ = await service.respond(id, status: 409, body: Data()); return
+    }
+    guard current.waitingForAcknowledgment, let token = current.acknowledgmentToken,
+      PromptGateAuthentication.matches(envelope.acknowledgmentToken, expected: token),
+      let continuation = current.acknowledgmentContinuation else {
+      _ = await service.respond(id, status: 403, body: Data()); return
     }
     if current.request.client == .ohMyPi {
-      guard
-        envelope.integrationID == current.request.integrationID,
-        envelope.deliveryToken == current.deliveryToken,
-        envelope.deliveryStatus == "delivered"
-      else {
-        await sendHTTP(status: 403, body: Data(), connection: connection)
-        connection.cancel()
-        return
-      }
-    }
-    guard
-      current.acknowledgmentToken == envelope.acknowledgmentToken,
-      let continuation = current.acknowledgmentContinuation
-    else {
-      await sendHTTP(status: 403, body: Data(), connection: connection)
-      connection.cancel()
-      return
-    }
-    current.acknowledgmentContinuation = nil
-    pending = current
-    await sendHTTP(status: 200, body: Data(), connection: connection)
-    connection.cancel()
-    continuation.resume()
-  }
-
-  private func connectionClosed(id: UUID) async {
-    readers.removeValue(forKey: id)
-    guard let current = pending,
-      current.connectionID == id,
-      !current.waitingForAcknowledgment
-    else {
-      return
+      guard let deliveryToken = current.deliveryToken, let suppliedToken = envelope.deliveryToken,
+        PromptGateAuthentication.matches(suppliedToken, expected: deliveryToken),
+        envelope.integrationID == current.request.integrationID, envelope.deliveryStatus == "delivered"
+      else { _ = await service.respond(id, status: 403, body: Data()); return }
     }
     current.deadline?.cancel()
-    pending = nil
-    await onInvalidation?(current.request.requestID)
-  }
-
-  private func reviewTimedOut(requestID: UUID) async {
-    guard let current = pending, current.request.requestID == requestID else { return }
-    pending = nil
-    await sendReviewResponse(.failed, token: nil, connection: current.connection)
-    current.connection.cancel()
-    await onInvalidation?(requestID)
-  }
-
-  private func acknowledgmentTimedOut(requestID: UUID) {
-    guard var current = pending,
-      current.request.requestID == requestID,
-      let continuation = current.acknowledgmentContinuation
-    else {
-      return
-    }
+    current.deadline = nil
+    current.acknowledgmentToken = nil
     current.acknowledgmentContinuation = nil
     pending = current
-    continuation.resume(
-      throwing: BexError.promptDeliveryFailed("The Prompt Gate helper did not acknowledge the block.")
-    )
-  }
-
-  private func sendReviewResponse(
-    _ outcome: HookReviewOutcome,
-    token: String?,
-    connection: NWConnection,
-    request: HookReviewRequest? = nil,
-    approvedPrompt: String? = nil,
-    deliveryToken: String? = nil
-  ) async {
-    let envelope = HookReviewResponseEnvelope(
-      version: HookProtocolConstants.version,
-      outcome: outcome,
-      acknowledgmentToken: token,
-      integrationID: request?.integrationID,
-      approvedPrompt: approvedPrompt,
-      deliveryToken: deliveryToken
-    )
-    let body = (try? JSONEncoder().encode(envelope)) ?? Data()
-    await sendHTTP(status: 200, body: body, connection: connection)
-  }
-
-  private func sendHTTP(status: Int, body: Data, connection: NWConnection) async {
-    let reason = status == 200 ? "OK" : status == 403 ? "Forbidden" : "Bad Request"
-    var data = Data(
-      "HTTP/1.1 \(status) \(reason)\r\nContent-Type: application/json\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n".utf8
-    )
-    data.append(body)
-    await withCheckedContinuation { continuation in
-      connection.send(content: data, completion: .contentProcessed { _ in continuation.resume() })
+    // Claim the single-use ack before suspension. A concurrent stop must not turn
+    // a cancelled delivery into a successful approval on this continuation's return.
+    let sent = await service.respond(id, status: 200, body: Data())
+    if sent, self.generation == generation, pending?.connectionID == current.connectionID {
+      continuation.resume()
+    } else {
+      continuation.resume(throwing: deliveryFailure)
     }
+  }
+
+  private func connectionClosed(id: UUID, generation: UUID) async {
+    guard self.generation == generation, let current = pending,
+      current.connectionID == id, !current.waitingForAcknowledgment else { return }
+    pending = nil
+    current.deadline?.cancel()
+    await invalidate(current)
+  }
+
+  private func reviewTimedOut(id: UUID) async {
+    guard let current = pending, current.connectionID == id, !current.waitingForAcknowledgment else { return }
+    pending = nil
+    // Reserve invalidation before sending: no newer review may overlap this callback.
+    invalidationHandlerID = id
+    let deferred = requestHandlerID == id
+    if deferred { deferredInvalidation = current }
+    if let service = transport { await sendReviewResponse(.failed, token: nil, id: id, service: service) }
+    if !deferred {
+      await onInvalidation?(current.request.requestID)
+      if invalidationHandlerID == id { invalidationHandlerID = nil }
+    }
+  }
+
+  private func invalidate(_ current: Pending) async {
+    guard invalidationHandlerID == nil else { return }
+    invalidationHandlerID = current.connectionID
+    if requestHandlerID == current.connectionID {
+      // The handler may create UI after an await. Its final effect must precede
+      // invalidation, and no new review may enter until both have returned.
+      deferredInvalidation = current
+      return
+    }
+    await onInvalidation?(current.request.requestID)
+    if invalidationHandlerID == current.connectionID { invalidationHandlerID = nil }
+  }
+
+  private func finishRequestHandler(id: UUID) async {
+    if requestHandlerID == id { requestHandlerID = nil }
+    guard let retired = deferredInvalidation, retired.connectionID == id else { return }
+    deferredInvalidation = nil
+    await onInvalidation?(retired.request.requestID)
+    if invalidationHandlerID == id { invalidationHandlerID = nil }
+  }
+
+  private var deliveryFailure: BexError {
+    .promptDeliveryFailed("The Prompt Gate helper disconnected or did not acknowledge the block.")
+  }
+
+  private func reviewResponse(_ outcome: HookReviewOutcome, token: String?,
+    request: HookReviewRequest? = nil, approvedPrompt: String? = nil, deliveryToken: String? = nil) -> Data? {
+    try? JSONEncoder().encode(HookReviewResponseEnvelope(version: HookProtocolConstants.version,
+      outcome: outcome, acknowledgmentToken: token, integrationID: request?.integrationID,
+      approvedPrompt: approvedPrompt, deliveryToken: deliveryToken))
+  }
+
+  private func sendReviewResponse(_ outcome: HookReviewOutcome, token: String?, id: UUID,
+    service: PromptGateHTTPTransport) async {
+    _ = await service.respond(id, status: 200, body: reviewResponse(outcome, token: token) ?? Data())
   }
 
   private func writeRendezvous(port: UInt16) throws {
+    let value = HookRendezvous(version: HookProtocolConstants.version, port: port,
+      authenticationToken: authenticationToken, serverPID: ProcessInfo.processInfo.processIdentifier,
+      createdAt: Date())
+    if let rendezvousStorage { try rendezvousStorage.publish(value); return }
     let directory = rendezvousURL.deletingLastPathComponent()
-    try FileManager.default.createDirectory(
-      at: directory,
-      withIntermediateDirectories: true,
-      attributes: [.posixPermissions: 0o700]
-    )
-    chmod(directory.path, 0o700)
-    let value = HookRendezvous(
-      version: HookProtocolConstants.version,
-      port: port,
-      authenticationToken: authenticationToken,
-      serverPID: ProcessInfo.processInfo.processIdentifier,
-      createdAt: Date()
-    )
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+      attributes: [.posixPermissions: 0o700])
+    guard chmod(directory.path, 0o700) == 0 else { throw deliveryFailure }
     let data = try JSONEncoder().encode(value)
     let temporary = directory.appendingPathComponent(".rendezvous-\(UUID().uuidString).tmp")
+    defer { try? FileManager.default.removeItem(at: temporary) }
     try data.write(to: temporary, options: .withoutOverwriting)
-    chmod(temporary.path, 0o600)
-    if rename(temporary.path, rendezvousURL.path) != 0 {
-      try? FileManager.default.removeItem(at: temporary)
-      throw BexError.promptDeliveryFailed("Bex could not publish Prompt Gate IPC.")
+    guard chmod(temporary.path, 0o600) == 0, rename(temporary.path, rendezvousURL.path) == 0 else {
+      throw deliveryFailure
     }
+  }
+
+  private func removeOwnRendezvous(token: String) {
+    if let rendezvousStorage { rendezvousStorage.remove(ifTokenMatches: token); return }
+    guard !token.isEmpty, let handle = try? FileHandle(forReadingFrom: rendezvousURL) else { return }
+    defer { try? handle.close() }
+    guard let data = try? handle.read(upToCount: 4_097), data.count <= 4_096,
+      let value = try? JSONDecoder().decode(HookRendezvous.self, from: data),
+      value.serverPID == ProcessInfo.processInfo.processIdentifier,
+      PromptGateAuthentication.matches(value.authenticationToken, expected: token) else { return }
+    try? FileManager.default.removeItem(at: rendezvousURL)
+  }
+
+  /// Internal diagnostics for socket-free synthetic ownership tests.
+  struct Snapshot: Sendable {
+    let ready: Bool
+    let stopping: Bool
+    let hasTransport: Bool
+    let pendingConnectionID: UUID?
+    let requestHandlerActive: Bool
+    let invalidationActive: Bool
+  }
+  func snapshot() -> Snapshot {
+    Snapshot(ready: ready, stopping: stopping, hasTransport: transport != nil,
+      pendingConnectionID: pending?.connectionID, requestHandlerActive: requestHandlerID != nil,
+      invalidationActive: invalidationHandlerID != nil)
   }
 
   private static func randomToken() -> String {
@@ -499,6 +421,14 @@ actor PromptGateIPCServer: PromptGateIPCServicing, HookReviewResponding {
   }
 
   private static func processIsAlive(_ processID: Int32) -> Bool {
-    kill(processID, 0) == 0 || errno == EPERM
+    guard processID > 0 else { return false }
+    return kill(processID, 0) == 0 || errno == EPERM
   }
+}
+
+/// Test storage can keep synthetic rendezvous values in memory. The default path
+/// still publishes the same v1 file with private directory/file permissions.
+protocol PromptGateRendezvousStorage: Sendable {
+  func publish(_ value: HookRendezvous) throws
+  func remove(ifTokenMatches token: String)
 }

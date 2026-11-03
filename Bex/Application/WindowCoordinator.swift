@@ -122,6 +122,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ = showPromptGate(session: newSession)
         return
       }
+      if let pendingPromptGateSession { services.promptTarget.discard(pendingPromptGateSession.target) }
       pendingPromptGateSession = newSession
       promptGateViewModel.cancel()
     } catch {
@@ -314,13 +315,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     draft: String = "",
     usesDraftPersistence: Bool = true
   ) {
+    let target: PromptTarget
+    do {
+      target = try services.promptTarget.makeStandaloneTarget()
+    } catch {
+      NSAlert(error: error).runModal()
+      return
+    }
     let session = PromptGateSession(
       initialDraft: draft,
-      target: PromptTarget(
-        kind: .copyOnly,
-        applicationName: "Bex",
-        guidance: "Fix & Send will copy the approved correction for use wherever you need it."
-      ),
+      target: target,
       source: .standalone,
       usesDraftPersistence: usesDraftPersistence
     )
@@ -330,10 +334,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       return
     }
     guard confirmFixAndSendReplacement() else {
+      services.promptTarget.discard(session.target)
       promptGatePanelController?.show()
       return
     }
     mainWindowController?.close()
+    if let pendingPromptGateSession { services.promptTarget.discard(pendingPromptGateSession.target) }
     pendingPromptGateSession = session
     promptGateViewModel.cancel()
     if promptGateViewModel.showsDiscardConfirmation {
@@ -507,8 +513,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           promptGatePanelController?.accommodate(phase)
         }
     }
-    guard let promptGateViewModel else { return false }
+    guard let promptGateViewModel else {
+      services.promptTarget.discard(session.target)
+      return false
+    }
     let began = promptGateViewModel.begin(session)
+    if !began { services.promptTarget.discard(session.target) }
     promptGatePanelController?.show()
     return began
   }

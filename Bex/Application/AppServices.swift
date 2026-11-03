@@ -91,8 +91,7 @@ final class AppServices {
       promptGrammar: grammar,
       pasteboard: pasteboard,
       promptTarget: PromptTargetService(
-        pasteboardWriter: pasteboard,
-        pasteboardTransaction: pasteboard
+        pasteboardWriter: pasteboard
       ),
       approvalStore: PromptApprovalStore(),
       hookManager: HookInstallationManager(),

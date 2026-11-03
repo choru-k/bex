@@ -24,9 +24,11 @@ The window wrapper does not duplicate or bypass any of those decisions.
 
 The sole `WindowCoordinator.showPackagedCorrection()` hook is inside literal
 `#if false`. There is no action in a menu, shortcut, URL route, environment switch,
-preference or compiler condition that reaches it. No Xcode resource-copy phase,
-packaged assets, signing step or installation action is added. The offline resource
-packager is unchanged and still refuses application destinations. Enabling a future
+preference or compiler condition that reaches it. The separate
+[resource build phase](native-build-input-integration.md) is disabled by default,
+is unrun, and cannot open this host. No packaged assets, signing step or installation
+action is added. The offline resource packager is unchanged and still refuses
+application destinations. Enabling a future
 entry requires a separately reviewed source change after all native security,
 resource-copy/provenance, UI and runtime gates have been validated and authorized.
 

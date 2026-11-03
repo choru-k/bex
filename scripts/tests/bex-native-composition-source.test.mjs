@@ -32,7 +32,9 @@ test('only composition open hook is a literal disabled branch with no runtime sw
     assert.doesNotMatch(source, /\.requestOpen\(/);
   }
   assert.doesNotMatch(owner + session, /ProcessInfo|UserDefaults|NotificationCenter|CommandLine|URL\(string:/);
-  assert.doesNotMatch(project, /BEX_PACKAGED|BexWebUI|native-resource-manifest|bex-package-native-resources/);
+  assert.doesNotMatch(project, /BEX_PACKAGED/);
+  assert.equal((project.match(/BEX_EMBED_NATIVE_WEB_RESOURCES = NO;/g) ?? []).length, 2);
+  assert.doesNotMatch(project, /BEX_EMBED_NATIVE_WEB_RESOURCES = YES;/);
 });
 
 test('concrete session delegates trust and account admission to the existing host', () => {

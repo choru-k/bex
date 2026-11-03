@@ -216,7 +216,7 @@ final class SettingsNavigationTests: XCTestCase {
     XCTAssertTrue(viewModel.showsAccessibilityRequest)
     XCTAssertEqual(
       viewModel.accessibilityStatusMessage,
-      "Accessibility was revoked. Fix & Send will use copy-only fallback for manual capture."
+      "Accessibility was revoked. Enter your draft in Fix & Send; approved corrections are still copied for manual replacement."
     )
 
     fixture.target.isAccessibilityTrusted = true
@@ -580,6 +580,10 @@ private final class SettingsPromptTargetStub: PromptTargetServicing {
     return isAccessibilityTrusted
   }
 
+  func makeStandaloneTarget() throws -> PromptTarget { fatalError("Not used") }
+  func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws {
+    guard target.availableDeliveryActions.contains(action) else { throw BexError.stalePromptTarget }
+  }
   func captureFrontmostTarget() throws -> PromptCapture { fatalError("Not used") }
   func target(for hookRequest: HookReviewRequest) throws -> PromptTarget { fatalError("Not used") }
 

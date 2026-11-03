@@ -132,7 +132,7 @@ final class UITestScenarioContractTests: XCTestCase {
 
     XCTAssertEqual(
       UITestScenario.deliveryFailureEffect.configuration.target.deliveryFailureEffect,
-      .pastedNotSubmitted
+      .copied
     )
     let dirtyEditor = UITestScenario.dirtyEditorResume.configuration
     XCTAssertTrue(dirtyEditor.preservesStoredState)
@@ -246,10 +246,16 @@ final class UITestScenarioContractTests: XCTestCase {
     XCTAssertFalse(denied.requestAccessibilityTrust())
     let deniedTarget = try denied.captureFrontmostTarget().target
     XCTAssertEqual(deniedTarget.kind, .copyOnly)
+    do {
+      _ = try await denied.deliver("Must not submit", to: deniedTarget, pressReturn: true)
+      XCTFail("Automatic Return must be unavailable")
+    } catch {
+      XCTAssertFalse(FileManager.default.fileExists(atPath: copyURL.path))
+    }
     let deniedOutcome = try await denied.deliver(
       "Copy-only correction",
       to: deniedTarget,
-      pressReturn: true
+      action: .copyCorrection
     )
     XCTAssertEqual(deniedOutcome, .copied)
     XCTAssertEqual(
@@ -278,15 +284,16 @@ final class UITestScenarioContractTests: XCTestCase {
       _ = try await targetService.deliver("Corrected text", to: target, pressReturn: false)
       XCTFail("Expected the deterministic delivery failure")
     } catch let failure as PromptDeliveryFailure {
-      XCTAssertEqual(failure.effect, .pastedNotSubmitted)
+      XCTAssertEqual(failure.effect, .copied)
     }
-    XCTAssertEqual(try String(contentsOf: sinkURL, encoding: .utf8), "Corrected text")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: sinkURL.path))
+    XCTAssertEqual(try String(contentsOf: copyURL, encoding: .utf8), "Corrected text")
     XCTAssertEqual(
       try JSONDecoder().decode(
         [UITestDeliveryEvent].self,
         from: Data(contentsOf: eventsURL)
       ),
-      [UITestDeliveryEvent(sequence: 1, effect: .pastedNotSubmitted)]
+      [UITestDeliveryEvent(sequence: 1, effect: .copied)]
     )
   }
 }

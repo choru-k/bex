@@ -125,49 +125,49 @@ struct PromptTarget: Identifiable, Codable, Equatable, Sendable {
     self.hookContext = hookContext
   }
 
-  var supportsAutomaticSubmit: Bool { kind == .capturedField }
+  /// Swift String equality normalizes Unicode. Delivery capabilities also bind the
+  /// original byte spelling of all displayed and host-context strings.
+  func matchesDeliveryIdentity(_ other: PromptTarget) -> Bool {
+    self == other
+      && applicationName.utf8.elementsEqual(other.applicationName.utf8)
+      && guidance.utf8.elementsEqual(other.guidance.utf8)
+      && Self.sameBytes(bundleID, other.bundleID)
+      && Self.sameBytes(hookContext?.sessionID, other.hookContext?.sessionID)
+      && Self.sameBytes(hookContext?.cwd, other.hookContext?.cwd)
+      && Self.sameBytes(hookContext?.integrationID, other.hookContext?.integrationID)
+  }
+
+  private static func sameBytes(_ lhs: String?, _ rhs: String?) -> Bool {
+    switch (lhs, rhs) {
+    case (.none, .none): true
+    case (.some(let left), .some(let right)): left.utf8.elementsEqual(right.utf8)
+    default: false
+    }
+  }
+
+  var supportsAutomaticSubmit: Bool { false }
 }
 
 extension PromptTarget {
   var availableDeliveryActions: [PromptDeliveryAction] {
     switch kind {
-    case .copyOnly:
+    case .copyOnly, .composerPaste, .capturedField:
       [.copyCorrection]
-    case .composerPaste:
-      hookContext == nil ? [.copyCorrection, .pasteInDestination] : [.pasteInDestination]
-    case .capturedField:
-      [.pasteInDestination, .pasteAndSubmit]
     case .managedDraft:
       [.pasteInDestination]
     }
   }
 
   func label(for action: PromptDeliveryAction) -> String {
+    guard availableDeliveryActions.contains(action) else { return "Unavailable" }
     if kind == .managedDraft {
       return "Stage in \(applicationName)"
     }
-    if kind == .capturedField {
-      return switch action {
-      case .copyCorrection:
-        "Copy Correction"
-      case .pasteInDestination:
-        "Replace Draft in \(applicationName)"
-      case .pasteAndSubmit:
-        "Replace & Press Return in \(applicationName)"
-      }
-    }
-    return switch action {
-    case .copyCorrection:
-      "Copy Correction"
-    case .pasteInDestination:
-      "Paste in \(applicationName)"
-    case .pasteAndSubmit:
-      "Paste & Send in \(applicationName)"
-    }
+    return "Copy Correction"
   }
 
   var destinationLabel: String {
-    kind == .copyOnly ? "Clipboard" : applicationName
+    kind == .managedDraft ? applicationName : "Clipboard"
   }
 }
 

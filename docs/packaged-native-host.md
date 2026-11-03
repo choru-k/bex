@@ -66,7 +66,8 @@ browser and WKWebView development lab remain fixture-only.
    The [offline resource audit](native-resource-audit.md) checks the exact native
    HTML/CSP and hashed three-file staging inventory. It does not establish JavaScript
    semantics, signing, provenance, race-free filesystems or WebKit enforcement.
-   No resource-copy build phase is added here; absent assets fail closed.
+   A separate [opt-in resource phase](native-build-input-integration.md) is now
+   authored but disabled by default and unrun; absent assets still fail closed.
 4. Compile and validate the integrated cooperative account/settings barrier and
    all store/OAuth mutation paths. The implementation uses one process-wide gate
    across backing domains, not one gate per factory or suite/service pair. Mutation

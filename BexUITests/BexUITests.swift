@@ -27,10 +27,11 @@ final class BexUITests: XCTestCase {
 
   func testMissingCredentialShowsSetupAndNavigatesToSettings() {
     continueAfterFailure = false
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate(missingCredential: true)
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate(missingCredential: true)
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -47,12 +48,13 @@ final class BexUITests: XCTestCase {
 
   func testFixAndSendReviewSavesHistory() {
     continueAfterFailure = false
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate(
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate(
       scenario: "configured-provider"
     )
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -64,7 +66,7 @@ final class BexUITests: XCTestCase {
     XCTAssertTrue(writingStyle.waitForExistence(timeout: 3))
     XCTAssertTrue(accessibilityText(of: writingStyle).contains("Product Writing"))
     XCTAssertTrue(app.descendants(matching: .any)["prompt-gate-diff-summary"].exists)
-    app.buttons["prompt-gate-delivery-pasteInDestination"].click()
+    app.buttons["prompt-gate-delivery-copyCorrection"].click()
     XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
 
     openHub()
@@ -89,10 +91,11 @@ final class BexUITests: XCTestCase {
 
   func testPromptGateDisclosureReviewEditCancelAndReopen() throws {
     continueAfterFailure = false
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate()
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate()
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -120,7 +123,7 @@ final class BexUITests: XCTestCase {
       accessibilityText(
         of: app.descendants(matching: .any)["prompt-gate-review-pending-status"]
       ),
-      "Nothing has been sent."
+      "Nothing has been copied."
     )
     // Re-baselined to the current card: one collapsed Details disclosure carries the
     // original message and the grammar notes (the separate original/AI-note disclosures
@@ -201,12 +204,13 @@ final class BexUITests: XCTestCase {
     app.buttons["prompt-gate-cancel"].click()
   }
 
-  func testPromptGateSendsOnlyApprovedCorrectionOnce() throws {
+  func testPromptGateCopiesOnlyApprovedCorrectionOnce() throws {
     continueAfterFailure = false
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate()
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate()
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -219,24 +223,28 @@ final class BexUITests: XCTestCase {
     XCTAssertEqual(corrected.value as? String, expected)
     XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
 
-    let send = app.buttons["prompt-gate-delivery-pasteAndSubmit"]
+    XCTAssertFalse(app.buttons["prompt-gate-delivery-pasteAndSubmit"].exists)
+    XCTAssertFalse(app.buttons["prompt-gate-delivery-pasteInDestination"].exists)
+    let send = app.buttons["prompt-gate-delivery-copyCorrection"]
     XCTAssertTrue(send.isEnabled)
     send.click()
     XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
-    XCTAssertEqual(try String(contentsOf: targetSink, encoding: .utf8), expected)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
+    XCTAssertEqual(try String(contentsOf: copySink, encoding: .utf8), expected)
     XCTAssertFalse(app.buttons["prompt-gate-delivery-pasteAndSubmit"].exists)
     XCTAssertEqual(
       try readDeliveryEvents(at: deliveryEventsSink),
-      [RecordedDeliveryEvent(sequence: 1, effect: "submitted")]
+      [RecordedDeliveryEvent(sequence: 1, effect: "copied")]
     )
   }
 
-  func testPromptGateCommandReturnReplacesWithoutSending() throws {
+  func testPromptGateCommandReturnCopiesWithoutChangingTarget() throws {
     continueAfterFailure = false
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate()
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate()
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -246,23 +254,25 @@ final class BexUITests: XCTestCase {
     corrected.typeKey(.return, modifierFlags: .command)
 
     XCTAssertTrue(corrected.waitForNonExistence(timeout: 3))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
     XCTAssertEqual(
-      try String(contentsOf: targetSink, encoding: .utf8),
+      try String(contentsOf: copySink, encoding: .utf8),
       "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
     )
     XCTAssertEqual(
       try readDeliveryEvents(at: deliveryEventsSink),
-      [RecordedDeliveryEvent(sequence: 1, effect: "pastedNotSubmitted")]
+      [RecordedDeliveryEvent(sequence: 1, effect: "copied")]
     )
   }
 
   func testPromptGateNoChangeKeepsFinalMessagePrimary() throws {
     continueAfterFailure = false
     let source = "Already correct."
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate(source: source)
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate(source: source)
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -288,10 +298,11 @@ final class BexUITests: XCTestCase {
     let expected =
       "I have the file "
       + (1...30).map { "line \($0): detail with wrapping text" }.joined(separator: "\n")
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate(source: source)
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate(source: source)
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -326,15 +337,16 @@ final class BexUITests: XCTestCase {
       app.descendants(matching: .any)["prompt-gate-original"].waitForExistence(timeout: 3)
     )
     XCTAssertTrue(app.buttons["prompt-gate-back"].isHittable)
-    XCTAssertTrue(app.buttons["prompt-gate-delivery-pasteInDestination"].isHittable)
+    XCTAssertTrue(app.buttons["prompt-gate-delivery-copyCorrection"].isHittable)
   }
 
   func testPromptGatePartialDeliveryExplainsEffectWithoutRetry() throws {
     continueAfterFailure = false
-    let (app, targetSink, deliveryEventsSink) = launchPromptGate(deliveryError: true)
+    let (app, targetSink, copySink, deliveryEventsSink) = launchPromptGate(deliveryError: true)
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -345,18 +357,19 @@ final class BexUITests: XCTestCase {
     let corrected = awaitPromptCorrection(in: app)
     let expected = "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
     XCTAssertEqual(corrected.value as? String, expected)
-    app.buttons["prompt-gate-delivery-pasteAndSubmit"].click()
+    app.buttons["prompt-gate-delivery-copyCorrection"].click()
 
     let error = app.descendants(matching: .any)["prompt-gate-error"]
     XCTAssertTrue(error.waitForExistence(timeout: 3))
-    XCTAssertTrue(((error.value as? String) ?? error.label).contains("already in UI Test Target"))
+    XCTAssertTrue(((error.value as? String) ?? error.label).contains("on the Clipboard"))
     XCTAssertTrue(corrected.exists)
     XCTAssertEqual(app.textViews["prompt-gate-corrected"].value as? String, expected)
-    XCTAssertEqual(try? String(contentsOf: targetSink, encoding: .utf8), expected)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
+    XCTAssertEqual(try? String(contentsOf: copySink, encoding: .utf8), expected)
     XCTAssertTrue(app.buttons["prompt-gate-delivery-done"].exists)
     XCTAssertEqual(
       try readDeliveryEvents(at: deliveryEventsSink),
-      [RecordedDeliveryEvent(sequence: 1, effect: "pastedNotSubmitted")]
+      [RecordedDeliveryEvent(sequence: 1, effect: "copied")]
     )
   }
 
@@ -538,22 +551,26 @@ final class BexUITests: XCTestCase {
     XCTAssertEqual(input.value as? String, "")
   }
 
-  func testPromptDeliveryInFlightGateReleasesOneSubmittedEvent() throws {
+  func testPromptDeliveryInFlightGateReleasesOneCopiedEvent() throws {
     continueAfterFailure = false
     let targetSink = FileManager.default.temporaryDirectory
       .appendingPathComponent("BexUITestGatedTarget-\(UUID().uuidString).txt")
+    let copySink = FileManager.default.temporaryDirectory
+      .appendingPathComponent("BexUITestGatedCopy-\(UUID().uuidString).txt")
     let deliveryEventsSink = FileManager.default.temporaryDirectory
       .appendingPathComponent("BexUITestGatedEvents-\(UUID().uuidString).json")
     let app = launchScenario(
       "prompt-delivery-in-flight",
       environment: [
         "BEX_UI_TEST_PROMPT_TARGET_PATH": targetSink.path,
+        "BEX_UI_TEST_PASTEBOARD_PATH": copySink.path,
         "BEX_UI_TEST_PROMPT_DELIVERY_EVENTS_PATH": deliveryEventsSink.path,
       ]
     )
     defer {
       app.terminate()
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
 
@@ -561,16 +578,17 @@ final class BexUITests: XCTestCase {
     app.buttons["prompt-gate-confirm-outbound"].click()
     let expected = "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
     _ = awaitPromptCorrection(in: app, expected: expected)
-    app.buttons["prompt-gate-delivery-pasteAndSubmit"].click()
+    app.buttons["prompt-gate-delivery-copyCorrection"].click()
     XCTAssertTrue(app.staticTexts["Delivering…"].waitForExistence(timeout: 3))
     XCTAssertFalse(FileManager.default.fileExists(atPath: deliveryEventsSink.path))
 
     postUITestingCommand("com.bex.desktop.ui-testing.release-delivery")
     XCTAssertTrue(app.staticTexts["Delivering…"].waitForNonExistence(timeout: 5))
-    XCTAssertEqual(try String(contentsOf: targetSink, encoding: .utf8), expected)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: targetSink.path))
+    XCTAssertEqual(try String(contentsOf: copySink, encoding: .utf8), expected)
     XCTAssertEqual(
       try readDeliveryEvents(at: deliveryEventsSink),
-      [RecordedDeliveryEvent(sequence: 1, effect: "submitted")]
+      [RecordedDeliveryEvent(sequence: 1, effect: "copied")]
     )
   }
 
@@ -783,6 +801,8 @@ final class BexUITests: XCTestCase {
     app.launchArguments = ["--ui-testing"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
     app.launchEnvironment["BEX_UI_TEST_REAL_TARGET"] = "1"
+    let copySink = FileManager.default.temporaryDirectory.appendingPathComponent("BexAXCopy-\(UUID().uuidString).txt")
+    app.launchEnvironment["BEX_UI_TEST_PASTEBOARD_PATH"] = copySink.path
     app.launch()
     Thread.sleep(forTimeInterval: 1)
 
@@ -798,6 +818,7 @@ final class BexUITests: XCTestCase {
       target.terminate()
       app.terminate()
       try? FileManager.default.removeItem(at: documentURL)
+      try? FileManager.default.removeItem(at: copySink)
     }
     XCTAssertTrue(target.wait(for: .runningForeground, timeout: 5))
     target.activate()
@@ -822,16 +843,12 @@ final class BexUITests: XCTestCase {
     }
     app.buttons["prompt-gate-confirm-outbound"].click()
     XCTAssertEqual(awaitPromptCorrection(in: app).value as? String, expected)
-    app.buttons["prompt-gate-delivery-pasteInDestination"].click()
+    app.buttons["prompt-gate-delivery-copyCorrection"].click()
 
-    let replaced = NSPredicate(format: "value == %@", expected)
-    XCTAssertEqual(
-      XCTWaiter.wait(
-        for: [XCTNSPredicateExpectation(predicate: replaced, object: editor)],
-        timeout: 5
-      ),
-      .completed
-    )
+    XCTAssertTrue(app.textViews["prompt-gate-corrected"].waitForNonExistence(timeout: 5))
+    XCTAssertEqual(editor.value as? String, source)
+    XCTAssertEqual(try String(contentsOf: documentURL, encoding: .utf8), source)
+    XCTAssertEqual(try String(contentsOf: copySink, encoding: .utf8), expected)
   }
 
   private func setOMPProfile(_ profile: String, in app: XCUIApplication) {
@@ -873,9 +890,10 @@ final class BexUITests: XCTestCase {
     }
 
     // Fix & Send correction review with its delivery footer.
-    let (promptGateApp, targetSink, deliveryEventsSink) = launchPromptGate()
+    let (promptGateApp, targetSink, copySink, deliveryEventsSink) = launchPromptGate()
     defer {
       try? FileManager.default.removeItem(at: targetSink)
+      try? FileManager.default.removeItem(at: copySink)
       try? FileManager.default.removeItem(at: deliveryEventsSink)
     }
     XCTAssertTrue(
@@ -933,7 +951,7 @@ final class BexUITests: XCTestCase {
     scenario: String? = nil,
     source: String =
       "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
-  ) -> (XCUIApplication, URL, URL) {
+  ) -> (XCUIApplication, URL, URL, URL) {
     let targetSink = FileManager.default.temporaryDirectory
       .appendingPathComponent("BexUITestPromptTarget-\(UUID().uuidString).txt")
     let copySink = FileManager.default.temporaryDirectory
@@ -962,7 +980,7 @@ final class BexUITests: XCTestCase {
       app.launchEnvironment["BEX_UI_TEST_SCENARIO"] = "delivery-failure-effect"
     }
     app.launch()
-    return (app, targetSink, deliveryEventsSink)
+    return (app, targetSink, copySink, deliveryEventsSink)
   }
 
   private func awaitPromptCorrection(

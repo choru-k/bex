@@ -2,8 +2,9 @@
 
 This command prepares an **inactive review artifact**, not Bex.app. It does not
 build, install dependencies, invoke Xcode, sign, install, activate or execute any
-resource. No Xcode resource-copy phase, application-resource destination or
-runtime entry point is added. Native runtime verification remains Mac-last and
+resource. This command adds no Xcode resource-copy phase, application-resource destination
+or runtime entry point. A separate [opt-in build integration](native-build-input-integration.md)
+now exists as unrun source and is disabled by default. Native runtime verification remains Mac-last and
 separately authorized.
 
 ## Explicit workflow

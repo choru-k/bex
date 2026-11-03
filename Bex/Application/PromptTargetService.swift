@@ -1,13 +1,14 @@
 import AppKit
 import ApplicationServices
-import Carbon.HIToolbox
 import Foundation
 
 @MainActor
 protocol PromptTargetServicing: AnyObject {
   var isAccessibilityTrusted: Bool { get }
   @discardableResult func requestAccessibilityTrust() -> Bool
+  func makeStandaloneTarget() throws -> PromptTarget
   func captureFrontmostTarget() throws -> PromptCapture
+  func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws
   func target(for hookRequest: HookReviewRequest) throws -> PromptTarget
   func deliver(
     _ correctedText: String,
@@ -34,13 +35,7 @@ extension PromptTargetServicing {
 
     switch action {
     case .copyCorrection:
-      let clipboardTarget = PromptTarget(
-        kind: .copyOnly,
-        applicationName: target.applicationName,
-        guidance: target.guidance,
-        hookContext: target.hookContext
-      )
-      return try await deliver(correctedText, to: clipboardTarget, pressReturn: false)
+      return try await deliver(correctedText, to: target, pressReturn: false)
     case .pasteInDestination:
       return try await deliver(correctedText, to: target, pressReturn: false)
     case .pasteAndSubmit:
@@ -53,14 +48,20 @@ struct PromptApplicationSnapshot: Equatable, Sendable {
   let processID: Int32
   let bundleID: String?
   let name: String
+  let launchDate: Date?
+
+  init(processID: Int32, bundleID: String?, name: String, launchDate: Date? = nil) {
+    self.processID = processID
+    self.bundleID = bundleID
+    self.name = name
+    self.launchDate = launchDate
+  }
 }
 
 @MainActor
 protocol PromptApplicationServicing: AnyObject {
   func frontmostApplication(excluding processID: Int32) -> PromptApplicationSnapshot?
   func application(processID: Int32) -> PromptApplicationSnapshot?
-  @discardableResult func activate(processID: Int32) -> Bool
-  func isFrontmost(processID: Int32) -> Bool
 }
 
 @MainActor
@@ -83,20 +84,12 @@ final class SystemPromptApplicationService: PromptApplicationServicing {
     return snapshot(application)
   }
 
-  func activate(processID: Int32) -> Bool {
-    NSRunningApplication(processIdentifier: processID)?
-      .activate(options: [.activateIgnoringOtherApps]) == true
-  }
-
-  func isFrontmost(processID: Int32) -> Bool {
-    NSWorkspace.shared.frontmostApplication?.processIdentifier == processID
-  }
-
   private func snapshot(_ application: NSRunningApplication) -> PromptApplicationSnapshot {
     PromptApplicationSnapshot(
       processID: application.processIdentifier,
       bundleID: application.bundleIdentifier,
-      name: application.localizedName ?? application.bundleIdentifier ?? "Application"
+      name: application.localizedName ?? application.bundleIdentifier ?? "Application",
+      launchDate: application.launchDate
     )
   }
 }
@@ -107,13 +100,11 @@ protocol PromptAccessibilityServicing: AnyObject {
   @discardableResult func requestTrust() -> Bool
   func focusedElement(processID: Int32) throws -> AXUIElement
   func role(of element: AXUIElement) throws -> String
-  func subrole(of element: AXUIElement) -> String?
+  func subrole(of element: AXUIElement) throws -> String?
   func isEnabled(_ element: AXUIElement) throws -> Bool
   func isValueSettable(_ element: AXUIElement) throws -> Bool
   func stringValue(of element: AXUIElement) throws -> String
   func isSameElement(_ lhs: AXUIElement, _ rhs: AXUIElement) -> Bool
-  func focus(_ element: AXUIElement) throws
-  func selectAll(_ element: AXUIElement, utf16Length: Int) throws
 }
 
 @MainActor
@@ -134,19 +125,25 @@ final class SystemPromptAccessibilityService: PromptAccessibilityServicing {
         kAXFocusedUIElementAttribute as CFString,
         &value
       ) == .success,
-      let element = value as! AXUIElement?
+      let value, CFGetTypeID(value) == AXUIElementGetTypeID()
     else {
       throw BexError.unsupportedPromptTarget
     }
-    return element
+    return value as! AXUIElement
   }
 
   func role(of element: AXUIElement) throws -> String {
     try stringAttribute(kAXRoleAttribute, of: element)
   }
 
-  func subrole(of element: AXUIElement) -> String? {
-    try? stringAttribute(kAXSubroleAttribute, of: element)
+  func subrole(of element: AXUIElement) throws -> String? {
+    var value: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value)
+    if result == .attributeUnsupported || result == .noValue { return nil }
+    guard result == .success, let subrole = value as? String else {
+      throw BexError.unsupportedPromptTarget
+    }
+    return subrole
   }
 
   func isEnabled(_ element: AXUIElement) throws -> Bool {
@@ -191,31 +188,6 @@ final class SystemPromptAccessibilityService: PromptAccessibilityServicing {
     CFEqual(lhs, rhs)
   }
 
-  func focus(_ element: AXUIElement) throws {
-    guard
-      AXUIElementSetAttributeValue(
-        element,
-        kAXFocusedAttribute as CFString,
-        kCFBooleanTrue
-      ) == .success
-    else {
-      throw BexError.promptDeliveryFailed("Bex could not focus the original prompt field.")
-    }
-  }
-
-  func selectAll(_ element: AXUIElement, utf16Length: Int) throws {
-    var range = CFRange(location: 0, length: utf16Length)
-    guard let value = AXValueCreate(.cfRange, &range),
-      AXUIElementSetAttributeValue(
-        element,
-        kAXSelectedTextRangeAttribute as CFString,
-        value
-      ) == .success
-    else {
-      throw BexError.promptDeliveryFailed("Bex could not select the original prompt.")
-    }
-  }
-
   private func stringAttribute(_ attribute: String, of element: AXUIElement) throws -> String {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
@@ -227,92 +199,46 @@ final class SystemPromptAccessibilityService: PromptAccessibilityServicing {
   }
 }
 
-@MainActor
-protocol PromptKeyEventPosting: AnyObject {
-  @discardableResult func postPaste() -> Bool
-  @discardableResult func postReturn() -> Bool
-}
-
-@MainActor
-final class SystemPromptKeyEventPoster: PromptKeyEventPosting {
-  func postPaste() -> Bool {
-    postKey(code: CGKeyCode(kVK_ANSI_V), flags: .maskCommand)
-  }
-
-  func postReturn() -> Bool {
-    postKey(code: CGKeyCode(kVK_Return), flags: [])
-  }
-
-  private func postKey(code: CGKeyCode, flags: CGEventFlags) -> Bool {
-    guard let source = CGEventSource(stateID: .combinedSessionState),
-      let down = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: true),
-      let up = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: false)
-    else {
-      return false
-    }
-    down.flags = flags
-    up.flags = flags
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
-    return true
-  }
-}
-
-@MainActor
-protocol PromptTargetTiming: AnyObject {
-  var now: Date { get }
-  func sleep(milliseconds: UInt64) async throws
-}
-
-@MainActor
-final class SystemPromptTargetTiming: PromptTargetTiming {
-  var now: Date { Date() }
-
-  func sleep(milliseconds: UInt64) async throws {
-    try await Task.sleep(for: .milliseconds(milliseconds))
-  }
-}
-
+/// Generic Accessibility exposes observations, not a transactional compare-and-replace
+/// or submit primitive. Keep this adapter read-only. Delivery is an explicit clipboard
+/// copy; the user chooses the destination, replaces the draft and submits manually.
 @MainActor
 final class PromptTargetService: PromptTargetServicing {
   private struct CapturedField {
     let element: AXUIElement
-    let processID: Int32
-    let bundleID: String?
+    let application: PromptApplicationSnapshot
     let role: String
     let original: String
   }
 
+  private struct IssuedTarget {
+    let target: PromptTarget
+    let captured: CapturedField?
+    let expiresAt: Date
+  }
+
   private let applications: any PromptApplicationServicing
   private let accessibility: any PromptAccessibilityServicing
-  private let events: any PromptKeyEventPosting
-  private let timing: any PromptTargetTiming
   private let pasteboardWriter: any PasteboardWriting
-  private let pasteboardTransaction: any PasteboardTransacting
-  private let orderOutPanel: @MainActor () -> Void
   private let ownProcessID: Int32
-  private var capturedFields: [UUID: CapturedField] = [:]
+  private let now: @MainActor () -> Date
+  private let maximumPendingTargets: Int
+  private var issuedTargets: [UUID: IssuedTarget] = [:]
 
   init(
     applications: any PromptApplicationServicing = SystemPromptApplicationService(),
     accessibility: any PromptAccessibilityServicing = SystemPromptAccessibilityService(),
-    events: any PromptKeyEventPosting = SystemPromptKeyEventPoster(),
-    timing: any PromptTargetTiming = SystemPromptTargetTiming(),
     pasteboardWriter: any PasteboardWriting = SystemPasteboard(),
-    pasteboardTransaction: any PasteboardTransacting = SystemPasteboard(),
     ownProcessID: Int32 = ProcessInfo.processInfo.processIdentifier,
-    orderOutPanel: @escaping @MainActor () -> Void = {
-      NSApp.keyWindow?.orderOut(nil)
-    }
+    maximumPendingTargets: Int = 64,
+    now: @escaping @MainActor () -> Date = { Date() }
   ) {
     self.applications = applications
     self.accessibility = accessibility
-    self.events = events
-    self.timing = timing
     self.pasteboardWriter = pasteboardWriter
-    self.pasteboardTransaction = pasteboardTransaction
     self.ownProcessID = ownProcessID
-    self.orderOutPanel = orderOutPanel
+    self.maximumPendingTargets = max(1, maximumPendingTargets)
+    self.now = now
   }
 
   var isAccessibilityTrusted: Bool { accessibility.isTrusted }
@@ -321,59 +247,54 @@ final class PromptTargetService: PromptTargetServicing {
     accessibility.requestTrust()
   }
 
+  func makeStandaloneTarget() throws -> PromptTarget {
+    try issue(PromptTarget(
+      kind: .copyOnly,
+      applicationName: "Bex",
+      guidance: "Fix & Send will copy the approved correction for use wherever you need it."
+    ))
+  }
+
   func captureFrontmostTarget() throws -> PromptCapture {
-    guard let application = applications.frontmostApplication(excluding: ownProcessID) else {
-      throw BexError.unsupportedPromptTarget
-    }
+    guard let application = applications.frontmostApplication(excluding: ownProcessID),
+      application.processID > 0, application.processID != ownProcessID
+    else { throw BexError.unsupportedPromptTarget }
 
     guard accessibility.isTrusted else {
-      let target = PromptTarget(
-        kind: .copyOnly,
-        processID: nil,
-        bundleID: application.bundleID,
-        applicationName: application.name,
-        guidance:
-          "Without Accessibility, Fix & Send cannot capture or replace another app. Enter text here; Bex will copy the approved correction."
+      return try standaloneCapture(for: application, guidance:
+        "Without Accessibility, Fix & Send cannot capture another app. Enter text here; Bex will copy the approved correction."
       )
-      return PromptCapture(draft: "", target: target, source: .standalone)
     }
-
+    // PID/bundle alone can be recycled. An unidentifiable process is manual-entry only.
+    guard application.launchDate != nil, let bundleID = application.bundleID, !bundleID.isEmpty else {
+      return try standaloneCapture(for: application)
+    }
     let element = try accessibility.focusedElement(processID: application.processID)
     let role = try accessibility.role(of: element)
-    let secureSubrole = accessibility.subrole(of: element)
-    if secureSubrole == kAXSecureTextFieldSubrole as String {
+    guard try accessibility.subrole(of: element) != kAXSecureTextFieldSubrole as String else {
       throw BexError.unsupportedPromptTarget
     }
-
-    let isSupportedRole = role == kAXTextFieldRole as String || role == kAXTextAreaRole as String
-    guard isSupportedRole else {
-      return standaloneCapture(for: application)
-    }
-    let enabled = try accessibility.isEnabled(element)
-    let settable = try accessibility.isValueSettable(element)
-    guard enabled, settable else {
-      return standaloneCapture(for: application)
-    }
+    guard role == kAXTextFieldRole as String || role == kAXTextAreaRole as String,
+      try accessibility.isEnabled(element), try accessibility.isValueSettable(element)
+    else { return try standaloneCapture(for: application) }
     let value = try accessibility.stringValue(of: element)
     guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-      return standaloneCapture(for: application)
+      return try standaloneCapture(for: application)
     }
-
-    let target = PromptTarget(
+    let captured = CapturedField(element: element, application: application, role: role, original: value)
+    // Re-read identity, focus, security role and exact bytes before exposing the capture.
+    // This detects observed drift, not ABA edits or an atomic external revision.
+    try revalidate(captured)
+    guard applications.frontmostApplication(excluding: ownProcessID) == application else {
+      throw BexError.stalePromptTarget
+    }
+    let target = try issue(PromptTarget(
       kind: .capturedField,
       processID: application.processID,
       bundleID: application.bundleID,
       applicationName: application.name,
-      guidance:
-        "Bex captured this exact field and can paste the correction back into \(application.name)."
-    )
-    capturedFields[target.id] = CapturedField(
-      element: element,
-      processID: application.processID,
-      bundleID: application.bundleID,
-      role: role,
-      original: value
-    )
+      guidance: "Bex captured this draft from \(application.name). Copy the correction, then replace the intended draft and submit manually."
+    ), captured: captured)
     return PromptCapture(draft: value, target: target, source: .capturedField)
   }
 
@@ -387,38 +308,38 @@ final class PromptTargetService: PromptTargetServicing {
       integrationID: hookRequest.integrationID
     )
     if hookRequest.client == .ohMyPi {
-      return PromptTarget(
+      return try issue(PromptTarget(
         kind: .managedDraft,
         applicationName: "Oh My Pi",
-        guidance:
-          "Oh My Pi is holding the original prompt. Approval stages this exact correction in its editor for explicit replay.",
+        guidance: "Oh My Pi is holding the original prompt. Approval stages this exact correction in its editor for explicit replay.",
         hookContext: context
-      )
+      ))
     }
-    guard let sourcePID = hookRequest.sourcePID,
-      sourcePID != ownProcessID,
-      let application = applications.application(processID: sourcePID),
-      let expectedBundleID = hookRequest.sourceBundleID,
-      application.bundleID == expectedBundleID
-    else {
-      return PromptTarget(
-        kind: .copyOnly,
-        applicationName: "Prompt client",
-        guidance:
-          "This hook supplied the prompt without Accessibility. Bex will copy the approved correction; replace the client draft manually.",
-        hookContext: context
-      )
-    }
-    return PromptTarget(
-      kind: accessibility.isTrusted ? .composerPaste : .copyOnly,
-      processID: accessibility.isTrusted ? application.processID : nil,
-      bundleID: application.bundleID,
-      applicationName: application.name,
-      guidance: accessibility.isTrusted
-        ? "This hook supplied the prompt. Bex will paste the approved correction into \(application.name) without pressing Return."
-        : "This hook supplied the prompt without Accessibility. Bex will copy the approved correction for manual replacement.",
+    // Hook source PID/bundle do not authenticate a focused field. Never translate
+    // hook acknowledgement into a global paste or Return keystroke.
+    return try issue(PromptTarget(
+      kind: .copyOnly,
+      applicationName: hookRequest.client.displayName,
+      guidance: "This hook supplied the prompt. Bex will copy the approved correction; replace the client draft and submit manually.",
       hookContext: context
-    )
+    ))
+  }
+
+  func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws {
+    guard target.availableDeliveryActions.contains(action) else {
+      throw PromptDeliveryFailure(effect: .none, underlyingError:
+        BexError.promptDeliveryFailed("Only the displayed Copy or host-managed Stage action is available.")
+      )
+    }
+    guard let issued = issuedTargets[target.id], issued.expiresAt > now() else {
+      issuedTargets.removeValue(forKey: target.id)
+      // Unknown may mean already consumed; never advertise a full retry as safe.
+      throw PromptDeliveryFailure(effect: .unknown, underlyingError:
+        BexError.promptDeliveryFailed("This review is no longer available. Check the Clipboard and destination, then start a new review if needed.")
+      )
+    }
+    guard issued.target.matchesDeliveryIdentity(target) else { throw BexError.stalePromptTarget }
+    if let captured = issued.captured { try revalidate(captured) }
   }
 
   func deliver(
@@ -428,25 +349,26 @@ final class PromptTargetService: PromptTargetServicing {
   ) async throws -> PromptDeliveryOutcome {
     do {
       try Task.checkCancellation()
-      switch target.kind {
-      case .copyOnly:
-        do {
-          try pasteboardWriter.write(correctedText)
-        } catch {
-          throw PromptDeliveryFailure(effect: .none, underlyingError: error)
-        }
-        return .copied
-      case .composerPaste:
-        return try await deliverToComposer(correctedText, target: target)
-      case .capturedField:
-        return try await deliverToCapturedField(
-          correctedText,
-          target: target,
-          pressReturn: pressReturn
-        )
-      case .managedDraft:
-        return .staged
+      guard !pressReturn else {
+        throw BexError.promptDeliveryFailed("Automatic submission is unavailable. Copy the correction and submit it manually.")
       }
+      guard !correctedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        throw BexError.emptyInput
+      }
+      let action: PromptDeliveryAction = target.kind == .managedDraft ? .pasteInDestination : .copyCorrection
+      try validateDelivery(to: target, action: action)
+      try Task.checkCancellation()
+      // No suspension between validation, consumption and the one allowed side effect.
+      // Unknown IDs always fail, so no permanent tombstones or retained prompts are needed.
+      issuedTargets.removeValue(forKey: target.id)
+      if target.kind == .managedDraft { return .staged }
+      do {
+        try pasteboardWriter.write(correctedText)
+      } catch {
+        // A write may have cleared or changed the clipboard before reporting failure.
+        throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
+      }
+      return .copied
     } catch let failure as PromptDeliveryFailure {
       throw failure
     } catch let cancellation as CancellationError {
@@ -457,139 +379,47 @@ final class PromptTargetService: PromptTargetServicing {
   }
 
   func discard(_ target: PromptTarget) {
-    capturedFields.removeValue(forKey: target.id)
+    issuedTargets.removeValue(forKey: target.id)
   }
 
-  private func standaloneCapture(for application: PromptApplicationSnapshot) -> PromptCapture {
-    let target = PromptTarget(
+  private func issue(_ target: PromptTarget, captured: CapturedField? = nil) throws -> PromptTarget {
+    let date = now()
+    issuedTargets = issuedTargets.filter { $0.value.expiresAt > date }
+    guard issuedTargets.count < maximumPendingTargets else {
+      throw BexError.promptDeliveryFailed("Close an existing review before starting another.")
+    }
+    issuedTargets[target.id] = IssuedTarget(
+      target: target, captured: captured, expiresAt: date.addingTimeInterval(3600)
+    )
+    return target
+  }
+
+  private func standaloneCapture(
+    for application: PromptApplicationSnapshot,
+    guidance: String? = nil
+  ) throws -> PromptCapture {
+    let target = try issue(PromptTarget(
       kind: .copyOnly,
-      processID: nil,
       bundleID: application.bundleID,
       applicationName: application.name,
-      guidance:
-        "Bex did not find an editable field in \(application.name). Enter text here; Bex will copy the approved correction."
-    )
+      guidance: guidance ?? "Bex did not capture a supported field in \(application.name). Enter text here; Bex will copy the approved correction."
+    ))
     return PromptCapture(draft: "", target: target, source: .standalone)
   }
 
-  private func deliverToComposer(
-    _ correctedText: String,
-    target: PromptTarget
-  ) async throws -> PromptDeliveryOutcome {
-    var effect = PromptDeliveryEffect.none
-    do {
-      guard accessibility.isTrusted, let processID = target.processID else {
-        throw BexError.accessibilityPermissionRequired
-      }
-      orderOutPanel()
-      guard applications.activate(processID: processID) else {
-        throw BexError.promptDeliveryFailed("Bex could not activate the prompt target.")
-      }
-      try await waitUntilFrontmost(processID: processID)
-      try Task.checkCancellation()
-      effect = .unknown
-      try pasteboardWriter.write(correctedText)
-      effect = .copied
-      guard events.postPaste() else {
-        throw BexError.promptDeliveryFailed("Bex could not paste the correction.")
-      }
-      return .pasted
-    } catch let cancellation as CancellationError where effect == .none {
-      throw cancellation
-    } catch {
-      throw PromptDeliveryFailure(effect: effect, underlyingError: error)
-    }
-  }
-
-  private func deliverToCapturedField(
-    _ correctedText: String,
-    target: PromptTarget,
-    pressReturn: Bool
-  ) async throws -> PromptDeliveryOutcome {
-    var effect = PromptDeliveryEffect.none
-    do {
-      guard accessibility.isTrusted, let captured = capturedFields[target.id] else {
-        throw BexError.stalePromptTarget
-      }
-      try revalidate(captured)
-      orderOutPanel()
-      guard applications.activate(processID: captured.processID) else {
-        throw BexError.promptDeliveryFailed("Bex could not activate the original prompt target.")
-      }
-      try await waitUntilFrontmost(processID: captured.processID)
-      try Task.checkCancellation()
-      try revalidate(captured)
-      try accessibility.focus(captured.element)
-      try accessibility.selectAll(captured.element, utf16Length: captured.original.utf16.count)
-      try revalidate(captured)
-
-      let restoration: PasteboardRestoration
-      do {
-        restoration = try pasteboardTransaction.stage(correctedText)
-      } catch {
-        throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
-      }
-      defer { restoration.restore() }
-      guard events.postPaste() else {
-        throw BexError.promptDeliveryFailed("Bex could not paste the correction.")
-      }
-      effect = .unknown
-      try await waitForValue(correctedText, in: captured.element)
-      effect = .pastedNotSubmitted
-      if pressReturn {
-        try Task.checkCancellation()
-        guard events.postReturn() else {
-          throw BexError.promptDeliveryFailed("Bex could not submit the correction.")
-        }
-        return .submitted
-      }
-      return .pasted
-    } catch let failure as PromptDeliveryFailure {
-      throw failure
-    } catch let cancellation as CancellationError where effect == .none {
-      throw cancellation
-    } catch {
-      throw PromptDeliveryFailure(effect: effect, underlyingError: error)
-    }
-  }
-
   private func revalidate(_ captured: CapturedField) throws {
-    guard let application = applications.application(processID: captured.processID),
-      application.bundleID == captured.bundleID
-    else {
-      throw BexError.stalePromptTarget
-    }
-    let focused = try accessibility.focusedElement(processID: captured.processID)
+    guard accessibility.isTrusted,
+      let application = applications.application(processID: captured.application.processID),
+      application.processID == captured.application.processID,
+      application.bundleID == captured.application.bundleID,
+      application.launchDate == captured.application.launchDate
+    else { throw BexError.stalePromptTarget }
+    let focused = try accessibility.focusedElement(processID: application.processID)
     guard accessibility.isSameElement(focused, captured.element),
       try accessibility.role(of: focused) == captured.role,
-      try accessibility.isEnabled(focused),
-      try accessibility.isValueSettable(focused),
-      try accessibility.stringValue(of: focused) == captured.original
-    else {
-      throw BexError.stalePromptTarget
-    }
-  }
-
-  private func waitUntilFrontmost(processID: Int32) async throws {
-    let deadline = timing.now.addingTimeInterval(1)
-    while !applications.isFrontmost(processID: processID), timing.now < deadline {
-      try Task.checkCancellation()
-      try await timing.sleep(milliseconds: 25)
-    }
-    guard applications.isFrontmost(processID: processID) else {
-      throw BexError.promptDeliveryFailed("The original prompt target did not become active.")
-    }
-  }
-
-  private func waitForValue(_ expected: String, in element: AXUIElement) async throws {
-    let deadline = timing.now.addingTimeInterval(0.5)
-    while timing.now < deadline {
-      try Task.checkCancellation()
-      if try accessibility.stringValue(of: element) == expected {
-        return
-      }
-      try await timing.sleep(milliseconds: 10)
-    }
-    throw BexError.promptDeliveryFailed("Bex could not verify the pasted correction.")
+      try accessibility.subrole(of: focused) != kAXSecureTextFieldSubrole as String,
+      try accessibility.isEnabled(focused), try accessibility.isValueSettable(focused),
+      try accessibility.stringValue(of: focused).utf8.elementsEqual(captured.original.utf8)
+    else { throw BexError.stalePromptTarget }
   }
 }

@@ -3,8 +3,9 @@
 **Native status: UNCOMPILED / UNRUN.** `NativePackagedResourceValidator` is actual
 fail-closed Swift candidate source used by `PackagedCorrectionHost.make`, before
 content-rule compilation, WKWebView configuration, construction or document load.
-This change neither activates that host nor adds a resource-copy phase. Missing
-resources still fail closed. The default browser/development app behavior is
+This validator does not activate the host. A separate, disabled-by-default
+[resource build phase](native-build-input-integration.md) is now authored but
+unrun. Missing resources still fail closed. The default browser/development app behavior is
 unchanged. No native build/test, app launch, device operation, credentials,
 provider transmission or socket operation is part of this work.
 

@@ -103,7 +103,7 @@
         configuration.launchDestination = .promptGate
       case .deliveryFailureEffect:
         configuration.target.source = "this are a test"
-        configuration.target.deliveryFailureEffect = .pastedNotSubmitted
+        configuration.target.deliveryFailureEffect = .copied
         configuration.launchDestination = .promptGate
       case .dirtyEditorResume:
         configuration.preservesStoredState = true
@@ -668,6 +668,14 @@
       return requestedAccessibilityTrust
     }
 
+    func makeStandaloneTarget() throws -> PromptTarget {
+      PromptTarget(kind: .copyOnly, applicationName: "Bex", guidance: "Copy for manual replacement.")
+    }
+
+    func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws {
+      guard target.availableDeliveryActions.contains(action) else { throw BexError.stalePromptTarget }
+    }
+
     func captureFrontmostTarget() throws -> PromptCapture {
       guard !isUnsupported else {
         throw BexError.unsupportedPromptTarget
@@ -685,7 +693,7 @@
         applicationName: "UI Test Target",
         guidance: kind == .copyOnly
           ? "No editable field was captured. Bex will copy the approved correction."
-          : "Bex will replace this exact field after approval."
+          : "Bex will copy the correction for manual replacement."
       )
       return PromptCapture(
         draft: kind == .capturedField ? source : "",
@@ -703,7 +711,9 @@
           requestID: hookRequest.requestID,
           sessionID: hookRequest.sessionID,
           cwd: hookRequest.cwd,
-          helperPID: hookRequest.helperPID
+          helperPID: hookRequest.helperPID,
+          client: hookRequest.client,
+          integrationID: hookRequest.integrationID
         )
       )
     }
@@ -714,6 +724,7 @@
       pressReturn: Bool
     ) async throws -> PromptDeliveryOutcome {
       await deliveryGate?.wait()
+      guard !pressReturn else { throw BexError.stalePromptTarget }
       if let effect = deliveryFailureEffect {
         if effect == .copied {
           try pasteboard.write(correctedText)
@@ -728,12 +739,11 @@
       }
 
       let outcome: PromptDeliveryOutcome
-      if target.kind == .copyOnly {
+      if target.kind == .managedDraft {
+        outcome = .staged
+      } else {
         try pasteboard.write(correctedText)
         outcome = .copied
-      } else {
-        try correctedText.write(to: sinkURL, atomically: true, encoding: .utf8)
-        outcome = pressReturn ? .submitted : .pasted
       }
       try recordDelivery(effect: outcome.effect)
       return outcome
@@ -1056,7 +1066,7 @@
       let pasteboard = UITestingPasteboard(path: configuration.pasteboardPath)
       let promptTarget: any PromptTargetServicing =
         configuration.target.usesRealTarget
-        ? PromptTargetService()
+        ? PromptTargetService(pasteboardWriter: pasteboard)
         : UITestingPromptTargetService(
           configuration: configuration.target,
           pasteboard: pasteboard

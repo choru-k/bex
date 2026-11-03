@@ -796,7 +796,7 @@ final class SettingsViewModel: ObservableObject {
       promptGateError = nil
     } else if !accessibilityTrusted, wasTrusted {
       accessibilityStatusMessage =
-        "Accessibility was revoked. Fix & Send will use copy-only fallback for manual capture."
+        "Accessibility was revoked. Enter your draft in Fix & Send; approved corrections are still copied for manual replacement."
     }
   }
 
