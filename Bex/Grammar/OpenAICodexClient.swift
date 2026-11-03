@@ -155,9 +155,11 @@ actor OpenAICodexClient: LLMProviderClient {
   }
 
   private func validSession() async throws -> CodexSession {
-    guard let session = try await keychain.codexSession() else {
+    guard let snapshot = try await keychain.codexSessionSnapshot() else {
       throw BexError.missingSetup(.openAICodex)
     }
+    let session = snapshot.session
+    try Task.checkCancellation()
     if session.expiresAt.timeIntervalSinceNow > 30 {
       return session
     }
@@ -166,7 +168,16 @@ actor OpenAICodexClient: LLMProviderClient {
       transport: transport,
       timeout: timeout
     )
-    try await keychain.saveCodexSession(refreshed)
+    try Task.checkCancellation()
+    // The network call never owns the mutation gate. The shared store compares both
+    // the authentication generation and the exact session version at the final commit.
+    // Do not retry using a replacement account or return the stale refreshed credential.
+    guard try await keychain.saveCodexSession(refreshed, ifCurrent: snapshot.token) else {
+      throw BexError.cancellation
+    }
+    try Task.checkCancellation()
+    // Native Codex remains unsupported: a native request refreshing itself could wait
+    // for its own host to drain when this conditional mutation closes admission.
     return refreshed
   }
 }

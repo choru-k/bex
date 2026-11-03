@@ -2,9 +2,10 @@
 
 `NativeProviderTransport` is wired only into the unactivated
 `PackagedCorrectionHost`. No composition root constructs that host. No app resource
-copy/build phase, account mutation barrier, provider activation, or live-provider
-test is added. Existing `URLSessionTransport`, `GrammarService`, provider clients,
-and production composition remain unchanged.
+copy/build phase, provider activation, or live-provider test is added by the
+transport. The separate cooperative account barrier is described below. Existing `URLSessionTransport`, `GrammarService`, the four supported API-key/Ollama
+clients and app composition remain unchanged. Codex refresh changes are covered by
+the separate [account barrier](account-mutation-barrier.md).
 
 ## Isolation and recipient binding
 
@@ -89,10 +90,12 @@ billing may continue after local cancellation.
 
 ## Limits and activation gates
 
-The existing account/settings mutation barrier remains unimplemented. The rebuilt
-factory still references mutable stores, so revoke admission and await the host's
-`closeAndWait()` **before** changing account, keys, provider, model or endpoint.
-Session isolation is not immutable credential binding or request consent.
+The [cooperative account/settings barrier](account-mutation-barrier.md) now routes
+Bex-owned store writes through admission revocation and complete registered-host
+drain before commit. It is authored but uncompiled/unrun, and does not cover
+external store writes or existing non-native GrammarService lifetimes. The factory
+still references mutable stores; session isolation alone is not immutable
+credential binding or request consent.
 
 The transport retains the 60-second resource timeout and introduces no retry loop
 or model discovery flow. Existing consent, native UI, WebKit and packaging

@@ -1,5 +1,8 @@
 # Structured native provider adapter (unactivated)
 
+**Native status: UNCOMPILED / UNRUN.** Candidate source is not native execution
+evidence.
+
 The later [packaged host candidate](packaged-native-host.md) supplies concrete
 consent/host/renderer wiring without installing it in the app. Its native UI,
 WebKit controls and resource packaging remain unverified activation gates.
@@ -16,13 +19,21 @@ its request-specific consent succeeds. Prompt validation/masking and cancellatio
 checks run before client creation. The test seam supplies the real production
 `LLMProviderClient` protocol, not a parallel provider abstraction.
 
-## Mandatory account lifetime gate, not implemented here
+## Cooperative account lifetime gate
 
 The factory captures mutable credential stores, not an immutable account. For API
-key providers it snapshots the current key only when invoked. Before installation,
-the host must prevent account/provider/settings mutation until it has revoked
-admission and awaited `coordinator.closeAndWait()`. All mutation paths must obey
-that barrier, including sign-out. The consent UI must identify the actual immutable
+key providers it snapshots the current key only when invoked. The inactive packaged
+host now reserves an epoch before taking native configuration, atomically registers
+its lifetime before loading, and participates in the process-wide store-mutation
+barrier. Mutation revokes admission and waits for both coordinator work and complete
+provider-session termination. A closed host stays registered while either drain is
+pending. This integrated Swift implementation is uncompiled and unrun in cloud;
+all mutation paths and native lifecycle behavior still require validation before
+activation. The guarantee covers cooperative Bex-owned writers, not external
+Keychain/preferences changes or upstream credential revocation. Only registered
+packaged-native lifetimes are drained. Existing `GrammarService` tasks are not
+registered, so legacy in-flight requests and keys already copied into legacy clients
+are not fully revoked by this change. The consent UI must identify the actual immutable
 `OutboundDestination.disclosureTarget` (including any external Ollama endpoint),
 model, exact input and full study source. A frozen label is not account binding.
 

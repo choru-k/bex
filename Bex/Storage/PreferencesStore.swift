@@ -17,12 +17,14 @@ extension OutboundConfirmationContext {
     hasAcceptedDisclosure: Bool,
     confirmsHookOutboundPayloads: Bool = false
   ) -> Bool {
-    guard hasAcceptedDisclosure else { return true }
-    switch self {
-    case .standaloneFixAndSend, .manualCapturedField:
-      return false
-    case .hook:
-      return confirmsHookOutboundPayloads
+    return backing.withLock {
+      guard hasAcceptedDisclosure else { return true }
+      switch self {
+      case .standaloneFixAndSend, .manualCapturedField:
+        return false
+      case .hook:
+        return confirmsHookOutboundPayloads
+      }
     }
   }
 }
@@ -92,15 +94,21 @@ actor PreferencesStore {
     .gemini: ["gemini-3-pro-preview"],
   ]
 
-  private let defaults: UserDefaults
+  private let backing: PreferencesBacking
+  private let coordinator = AccountMutationCoordinator.shared
+  private var defaults: UserDefaults { backing.defaults }
 
   static let currentOutboundDisclosureVersion = 1
 
   init(defaults: UserDefaults = .standard) {
-    self.defaults = defaults
-    Self.migrateLegacyRetentionPreferences(in: defaults)
+    self.backing = PreferencesBacking(defaults: defaults)
+    // Retention-only legacy cleanup is not an account/configuration change.
+    // It shares the synchronous backing lock and never waits for host drain.
+    backing.withLock { Self.migrateLegacyRetentionPreferences(in: defaults) }
   }
 
+  // A single-key, MainActor-only startup read. All cooperative appearance
+  // writes also commit synchronously on MainActor; no multi-key snapshot here.
   @MainActor
   static func standardAppearance() -> AppearancePreference {
     guard
@@ -113,177 +121,301 @@ actor PreferencesStore {
   }
 
   func selectedProvider() -> LLMProvider {
-    guard
-      let rawValue = defaults.string(forKey: Key.selectedProvider),
-      let provider = LLMProvider(rawValue: rawValue)
-    else {
-      return .openAI
+    return backing.withLock {
+      guard
+        let rawValue = defaults.string(forKey: Key.selectedProvider),
+        let provider = LLMProvider(rawValue: rawValue)
+      else {
+        return .openAI
+      }
+      return provider
     }
-    return provider
   }
 
-  func setSelectedProvider(_ provider: LLMProvider) {
-    defaults.set(provider.rawValue, forKey: Key.selectedProvider)
+  func setSelectedProvider(_ provider: LLMProvider) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(provider.rawValue, forKey: Key.selectedProvider)
+      }
+    }
   }
 
   func selectedModel(for provider: LLMProvider) -> String {
-    let key = Key.selectedModel(for: provider)
-    guard let model = defaults.string(forKey: key), !model.isEmpty else {
-      return provider.defaultModel
+    return backing.withLock {
+      let key = Key.selectedModel(for: provider)
+      guard let model = defaults.string(forKey: key), !model.isEmpty else {
+        return provider.defaultModel
+      }
+      if Self.retiredModels[provider]?.contains(model) == true {
+        return provider.defaultModel
+      }
+      return model
     }
-    if Self.retiredModels[provider]?.contains(model) == true {
-      defaults.set(provider.defaultModel, forKey: key)
-      return provider.defaultModel
-    }
-    return model
   }
 
-  func setSelectedModel(_ model: String, for provider: LLMProvider) {
-    defaults.set(model, forKey: Key.selectedModel(for: provider))
+  func setSelectedModel(_ model: String, for provider: LLMProvider) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(model, forKey: Key.selectedModel(for: provider))
+      }
+    }
   }
 
   func selectedEffort(for provider: LLMProvider) -> ReasoningEffort {
-    let key = Key.selectedEffort(for: provider)
-    guard
-      let rawValue = defaults.string(forKey: key),
-      let effort = ReasoningEffort(rawValue: rawValue)
-    else {
-      return provider.defaultEffort
+    return backing.withLock {
+      let key = Key.selectedEffort(for: provider)
+      guard
+        let rawValue = defaults.string(forKey: key),
+        let effort = ReasoningEffort(rawValue: rawValue)
+      else {
+        return provider.defaultEffort
+      }
+      return effort
     }
-    return effort
   }
 
-  func setSelectedEffort(_ effort: ReasoningEffort, for provider: LLMProvider) {
-    defaults.set(effort.rawValue, forKey: Key.selectedEffort(for: provider))
+  func setSelectedEffort(_ effort: ReasoningEffort, for provider: LLMProvider) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(effort.rawValue, forKey: Key.selectedEffort(for: provider))
+      }
+    }
   }
 
   func ollamaURL() -> String {
-    defaults.string(forKey: Key.ollamaURL) ?? "http://localhost:11434"
+    return backing.withLock {
+      defaults.string(forKey: Key.ollamaURL) ?? "http://localhost:11434"
+    }
   }
 
-  func setOllamaURL(_ url: String) {
-    defaults.set(url, forKey: Key.ollamaURL)
+  func setOllamaURL(_ url: String) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(url, forKey: Key.ollamaURL)
+      }
+    }
   }
 
   /// The model override set for one job, or `nil` when it inherits.
   ///
   /// `.correction` is the base and has no override of its own — it *is* `selectedModel`.
   func modelOverride(for job: ModelJob, provider: LLMProvider) -> String? {
-    guard job != .correction else { return nil }
-    let value = defaults.string(forKey: Key.modelOverride(for: job, provider: provider))
-    guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-    return value
+    return backing.withLock {
+      guard job != .correction else { return nil }
+      let value = defaults.string(forKey: Key.modelOverride(for: job, provider: provider))
+      guard let value, !value.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+      return value
+    }
   }
 
   /// Passing `nil` clears the override, so the job goes back to following Correction.
-  func setModelOverride(_ model: String?, for job: ModelJob, provider: LLMProvider) {
-    guard job != .correction else {
-      // The correction model is the provider's selected model; there is nothing above it to
-      // override, and writing a second copy would let the two disagree.
-      if let model { setSelectedModel(model, for: provider) }
-      return
-    }
-    let key = Key.modelOverride(for: job, provider: provider)
-    if let model, !model.trimmingCharacters(in: .whitespaces).isEmpty {
-      defaults.set(model, forKey: key)
-    } else {
-      defaults.removeObject(forKey: key)
+  func setModelOverride(_ model: String?, for job: ModelJob, provider: LLMProvider) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        guard job != .correction else {
+          // The correction model is the provider's selected model; there is nothing above it to
+          // override, and writing a second copy would let the two disagree.
+          if let model { defaults.set(model, forKey: Key.selectedModel(for: provider)) }
+          return
+        }
+        let key = Key.modelOverride(for: job, provider: provider)
+        if let model, !model.trimmingCharacters(in: .whitespaces).isEmpty {
+          defaults.set(model, forKey: key)
+        } else {
+          defaults.removeObject(forKey: key)
+        }
+      }
     }
   }
 
   func model(for job: ModelJob, provider: LLMProvider) -> String {
-    modelOverride(for: job, provider: provider) ?? selectedModel(for: provider)
+    return backing.withLock {
+      modelOverride(for: job, provider: provider) ?? selectedModel(for: provider)
+    }
   }
 
   /// Where a given job's request goes. Defaults to `.correction` so every existing call site
   /// keeps its current behaviour without naming a job.
   func outboundDestination(for job: ModelJob = .correction) throws -> OutboundDestination {
-    let provider = selectedProvider()
-    return try OutboundDestination(
-      provider: provider,
-      model: model(for: job, provider: provider),
-      ollamaEndpoint: provider == .ollama ? ollamaURL() : nil
-    )
+    return try backing.withLock {
+      let provider = selectedProvider()
+      return try OutboundDestination(
+        provider: provider,
+        model: model(for: job, provider: provider),
+        ollamaEndpoint: provider == .ollama ? ollamaURL() : nil
+      )
+    }
+  }
+
+  /// Coherent under the synchronous backing lock. Reserve admission before this
+  /// read and validate that epoch after awaiting it and after host construction.
+  func nativeCorrectionConfiguration() throws -> (
+    destination: OutboundDestination, effort: ReasoningEffort
+  ) {
+    return try backing.withLock {
+      let destination = try outboundDestination()
+      return (destination, selectedEffort(for: destination.provider))
+    }
+  }
+
+  /// Explicit persistence migration, never invoked by a read. Re-read inside
+  /// the transaction so a newer user selection cannot be overwritten.
+  func migrateRetiredModels() async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        for (provider, retired) in Self.retiredModels {
+          let key = Key.selectedModel(for: provider)
+          if let model = defaults.string(forKey: key), retired.contains(model) {
+            defaults.set(provider.defaultModel, forKey: key)
+          }
+        }
+      }
+    }
   }
 
   func appearance() -> AppearancePreference {
-    guard
-      let rawValue = defaults.string(forKey: Key.appearance),
-      let appearance = AppearancePreference(rawValue: rawValue)
-    else {
-      return .system
+    return backing.withLock {
+      guard
+        let rawValue = defaults.string(forKey: Key.appearance),
+        let appearance = AppearancePreference(rawValue: rawValue)
+      else {
+        return .system
+      }
+      return appearance
     }
-    return appearance
   }
 
-  func setAppearance(_ appearance: AppearancePreference) {
-    defaults.set(appearance.rawValue, forKey: Key.appearance)
+  func setAppearance(_ appearance: AppearancePreference) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(appearance.rawValue, forKey: Key.appearance)
+      }
+    }
   }
 
   func activeProfileID() -> UUID? {
-    uuid(forKey: Key.activeProfileID)
+    return backing.withLock {
+      uuid(forKey: Key.activeProfileID)
+    }
   }
 
-  func setActiveProfileID(_ id: UUID?) {
-    setUUID(id, forKey: Key.activeProfileID)
+  func setActiveProfileID(_ id: UUID?) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        Self.setUUID(id, forKey: Key.activeProfileID, in: defaults)
+      }
+    }
   }
 
   func defaultProfileID() -> UUID? {
-    uuid(forKey: Key.defaultProfileID)
-  }
-
-  func setDefaultProfileID(_ id: UUID?) {
-    setUUID(id, forKey: Key.defaultProfileID)
-  }
-
-  func profileDeleted(id: UUID) {
-    if activeProfileID() == id {
-      defaults.removeObject(forKey: Key.activeProfileID)
+    return backing.withLock {
+      uuid(forKey: Key.defaultProfileID)
     }
-    if defaultProfileID() == id {
-      defaults.removeObject(forKey: Key.defaultProfileID)
+  }
+
+  func setDefaultProfileID(_ id: UUID?) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        Self.setUUID(id, forKey: Key.defaultProfileID, in: defaults)
+      }
+    }
+  }
+
+  func profileDeleted(id: UUID) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        if defaults.string(forKey: Key.activeProfileID).flatMap(UUID.init(uuidString:)) == id {
+          defaults.removeObject(forKey: Key.activeProfileID)
+        }
+        if defaults.string(forKey: Key.defaultProfileID).flatMap(UUID.init(uuidString:)) == id {
+          defaults.removeObject(forKey: Key.defaultProfileID)
+        }
+      }
     }
   }
 
   func savedDraft() -> String {
-    guard draftRetentionChoice() == .enabled else { return "" }
-    return defaults.string(forKey: Key.savedDraft) ?? ""
+    return backing.withLock {
+      guard draftRetentionChoice() == .enabled else { return "" }
+      return defaults.string(forKey: Key.savedDraft) ?? ""
+    }
   }
 
-  func setSavedDraft(_ draft: String) {
-    guard draftRetentionChoice() == .enabled else { return }
-    defaults.set(draft, forKey: Key.savedDraft)
+  func setSavedDraft(_ draft: String) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        guard defaults.string(forKey: Key.draftRetentionChoice) == RetentionChoice.enabled.rawValue else { return }
+        defaults.set(draft, forKey: Key.savedDraft)
+      }
+    }
   }
 
-  func deleteSavedDraft() {
-    defaults.removeObject(forKey: Key.savedDraft)
+  func deleteSavedDraft() async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.removeObject(forKey: Key.savedDraft)
+      }
+    }
   }
 
   func draftRetentionChoice() -> RetentionChoice {
-    retentionChoice(forKey: Key.draftRetentionChoice)
+    return backing.withLock {
+      retentionChoice(forKey: Key.draftRetentionChoice)
+    }
   }
 
-  func setDraftRetentionChoice(_ choice: RetentionChoice) {
-    defaults.set(choice.rawValue, forKey: Key.draftRetentionChoice)
+  func setDraftRetentionChoice(_ choice: RetentionChoice) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(choice.rawValue, forKey: Key.draftRetentionChoice)
+      }
+    }
   }
 
   func historyRetentionChoice() -> RetentionChoice {
-    retentionChoice(forKey: Key.historyRetentionChoice)
+    return backing.withLock {
+      retentionChoice(forKey: Key.historyRetentionChoice)
+    }
   }
 
-  func setHistoryRetentionChoice(_ choice: RetentionChoice) {
-    defaults.set(choice.rawValue, forKey: Key.historyRetentionChoice)
+  func setHistoryRetentionChoice(_ choice: RetentionChoice) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(choice.rawValue, forKey: Key.historyRetentionChoice)
+      }
+    }
   }
 
   func confirmsHookOutboundPayloads() -> Bool {
-    guard defaults.object(forKey: Key.confirmsHookOutboundPayloads) != nil else {
-      return false
+    return backing.withLock {
+      guard defaults.object(forKey: Key.confirmsHookOutboundPayloads) != nil else {
+        return false
+      }
+      return defaults.bool(forKey: Key.confirmsHookOutboundPayloads)
     }
-    return defaults.bool(forKey: Key.confirmsHookOutboundPayloads)
   }
 
-  func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
-    defaults.set(confirms, forKey: Key.confirmsHookOutboundPayloads)
+  func setConfirmsHookOutboundPayloads(_ confirms: Bool) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(confirms, forKey: Key.confirmsHookOutboundPayloads)
+      }
+    }
   }
 
   /// Whether OpenAI Codex requests ask for the priority ("Fast") service tier.
@@ -297,29 +429,45 @@ actor PreferencesStore {
   /// Note the `object(forKey:)` guard rather than a bare `bool(forKey:)`: without it an
   /// unset key reads as `false`, which would silently mean OFF for everyone.
   func codexPriorityTier() -> Bool {
-    guard defaults.object(forKey: Key.codexPriorityTier) != nil else {
-      return true
+    return backing.withLock {
+      guard defaults.object(forKey: Key.codexPriorityTier) != nil else {
+        return true
+      }
+      return defaults.bool(forKey: Key.codexPriorityTier)
     }
-    return defaults.bool(forKey: Key.codexPriorityTier)
   }
 
-  func setCodexPriorityTier(_ enabled: Bool) {
-    defaults.set(enabled, forKey: Key.codexPriorityTier)
+  func setCodexPriorityTier(_ enabled: Bool) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(enabled, forKey: Key.codexPriorityTier)
+      }
+    }
   }
 
   func outboundDisclosureVersion(for destination: OutboundDestination) -> Int {
-    defaults.integer(forKey: Key.outboundDisclosureVersion(for: destination))
+    return backing.withLock {
+      defaults.integer(forKey: Key.outboundDisclosureVersion(for: destination))
+    }
   }
 
-  func acceptCurrentOutboundDisclosure(for destination: OutboundDestination) {
-    defaults.set(
-      Self.currentOutboundDisclosureVersion,
-      forKey: Key.outboundDisclosureVersion(for: destination)
-    )
+  func acceptCurrentOutboundDisclosure(for destination: OutboundDestination) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(
+          Self.currentOutboundDisclosureVersion,
+          forKey: Key.outboundDisclosureVersion(for: destination)
+        )
+      }
+    }
   }
 
   func hasAcceptedCurrentOutboundDisclosure(for destination: OutboundDestination) -> Bool {
-    outboundDisclosureVersion(for: destination) >= Self.currentOutboundDisclosureVersion
+    return backing.withLock {
+      outboundDisclosureVersion(for: destination) >= Self.currentOutboundDisclosureVersion
+    }
   }
 
   /// Withdraws the standing approval for one destination.
@@ -328,8 +476,13 @@ actor PreferencesStore {
   /// cannot be taken back is not really a choice. Revoking stops the background agent
   /// immediately (it is gated on this) and puts the interactive flows back to asking per
   /// payload.
-  func revokeOutboundDisclosure(for destination: OutboundDestination) {
-    defaults.removeObject(forKey: Key.outboundDisclosureVersion(for: destination))
+  func revokeOutboundDisclosure(for destination: OutboundDestination) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.removeObject(forKey: Key.outboundDisclosureVersion(for: destination))
+      }
+    }
   }
 
   /// Whether the hourly agent runs at all.
@@ -337,36 +490,57 @@ actor PreferencesStore {
   /// Defaults to on because this work already ran before it had a switch — defaulting it off
   /// would silently stop pattern grouping and the writer profile for anyone updating.
   func backgroundAgentEnabled() -> Bool {
-    defaults.object(forKey: Key.backgroundAgentEnabled) as? Bool ?? true
+    return backing.withLock {
+      defaults.object(forKey: Key.backgroundAgentEnabled) as? Bool ?? true
+    }
   }
 
-  func setBackgroundAgentEnabled(_ enabled: Bool) {
-    defaults.set(enabled, forKey: Key.backgroundAgentEnabled)
+  func setBackgroundAgentEnabled(_ enabled: Bool) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(enabled, forKey: Key.backgroundAgentEnabled)
+      }
+    }
   }
 
   /// What the last hourly pass actually did, so "it runs in the background" is inspectable
   /// rather than a claim.
   func lastBackgroundRun() -> BackgroundRunSummary? {
-    guard let date = defaults.object(forKey: Key.lastBackgroundRunAt) as? Date else { return nil }
-    return BackgroundRunSummary(
-      finishedAt: date,
-      correctionsRead: defaults.integer(forKey: Key.lastBackgroundRunCorrections),
-      cardsGrouped: defaults.integer(forKey: Key.lastBackgroundRunGrouped)
-    )
+    return backing.withLock {
+      guard let date = defaults.object(forKey: Key.lastBackgroundRunAt) as? Date else { return nil }
+      return BackgroundRunSummary(
+        finishedAt: date,
+        correctionsRead: defaults.integer(forKey: Key.lastBackgroundRunCorrections),
+        cardsGrouped: defaults.integer(forKey: Key.lastBackgroundRunGrouped)
+      )
+    }
   }
 
-  func setLastBackgroundRun(_ summary: BackgroundRunSummary) {
-    defaults.set(summary.finishedAt, forKey: Key.lastBackgroundRunAt)
-    defaults.set(summary.correctionsRead, forKey: Key.lastBackgroundRunCorrections)
-    defaults.set(summary.cardsGrouped, forKey: Key.lastBackgroundRunGrouped)
+  func setLastBackgroundRun(_ summary: BackgroundRunSummary) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(summary.finishedAt, forKey: Key.lastBackgroundRunAt)
+        defaults.set(summary.correctionsRead, forKey: Key.lastBackgroundRunCorrections)
+        defaults.set(summary.cardsGrouped, forKey: Key.lastBackgroundRunGrouped)
+      }
+    }
   }
 
   func fixAndSendKeyChord() -> KeyChord {
-    keyChord(forKey: Key.fixAndSendKeyChord, fallback: .defaultFixAndSend)
+    return backing.withLock {
+      keyChord(forKey: Key.fixAndSendKeyChord, fallback: .defaultFixAndSend)
+    }
   }
 
-  func setFixAndSendKeyChord(_ chord: KeyChord) {
-    setKeyChord(chord, forKey: Key.fixAndSendKeyChord)
+  func setFixAndSendKeyChord(_ chord: KeyChord) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        Self.setKeyChord(chord, forKey: Key.fixAndSendKeyChord, in: defaults)
+      }
+    }
   }
 
   private static func migrateLegacyRetentionPreferences(in defaults: UserDefaults) {
@@ -392,24 +566,40 @@ actor PreferencesStore {
   }
 
   func welcomeCompletedVersion() -> Int {
-    defaults.integer(forKey: Key.welcomeCompletedVersion)
+    return backing.withLock {
+      defaults.integer(forKey: Key.welcomeCompletedVersion)
+    }
   }
 
-  func setWelcomeCompletedVersion(_ version: Int) {
-    defaults.set(version, forKey: Key.welcomeCompletedVersion)
+  func setWelcomeCompletedVersion(_ version: Int) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(version, forKey: Key.welcomeCompletedVersion)
+      }
+    }
   }
 
   /// When the Learning window was last opened — `nil` before it has ever been viewed.
   /// Drives the menu-bar badge count (`LearningBadge`); the app sets this to `Date()`
   /// only when the window actually opens (`WindowCoordinator.showLearning`).
   func lastLearningViewedAt() -> Date? {
-    defaults.object(forKey: Key.lastLearningViewedAt) as? Date
+    return backing.withLock {
+      defaults.object(forKey: Key.lastLearningViewedAt) as? Date
+    }
   }
 
-  func setLastLearningViewedAt(_ date: Date) {
-    defaults.set(date, forKey: Key.lastLearningViewedAt)
+  func setLastLearningViewedAt(_ date: Date) async {
+    await coordinator.withMutation { [backing] in
+      return backing.withLock {
+        let defaults = backing.defaults
+        defaults.set(date, forKey: Key.lastLearningViewedAt)
+      }
+    }
   }
 
+  // Read helpers below are called only from the locked public getters. Static
+  // write helpers are called only inside a locked synchronous mutation closure.
   private func keyChord(forKey key: String, fallback: KeyChord) -> KeyChord {
     guard
       let data = defaults.data(forKey: key),
@@ -420,7 +610,7 @@ actor PreferencesStore {
     return chord
   }
 
-  private func setKeyChord(_ chord: KeyChord, forKey key: String) {
+  private nonisolated static func setKeyChord(_ chord: KeyChord, forKey key: String, in defaults: UserDefaults) {
     guard let data = try? JSONEncoder().encode(chord) else { return }
     defaults.set(data, forKey: key)
   }
@@ -439,11 +629,29 @@ actor PreferencesStore {
     defaults.string(forKey: key).flatMap(UUID.init(uuidString:))
   }
 
-  private func setUUID(_ id: UUID?, forKey key: String) {
+  private nonisolated static func setUUID(_ id: UUID?, forKey key: String, in defaults: UserDefaults) {
     if let id {
       defaults.set(id.uuidString, forKey: key)
     } else {
       defaults.removeObject(forKey: key)
     }
+  }
+}
+
+/// An immutable UserDefaults reference plus a process-global recursive lock.
+/// Foundation's per-call thread safety is insufficient for multi-key snapshots.
+/// Every store read/commit holds this lock only synchronously, NEVER while a
+/// mutation waits for host drain. Recursion permits model/outbound getters to
+/// compose; the global scope covers different wrappers for the same suite.
+private final class PreferencesBacking: @unchecked Sendable {
+  private static let lock = NSRecursiveLock()
+  let defaults: UserDefaults
+
+  init(defaults: UserDefaults) { self.defaults = defaults }
+
+  func withLock<T>(_ body: () throws -> T) rethrows -> T {
+    Self.lock.lock()
+    defer { Self.lock.unlock() }
+    return try body()
   }
 }

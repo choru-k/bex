@@ -1,13 +1,21 @@
 # Packaged native host candidate: inactive
 
+**Native status: UNCOMPILED / UNRUN.** The wiring below describes candidate source,
+not verified native behavior.
+
 This follow-up implements concrete host/consent/renderer wiring, but does not open a
 window, install a handler in the existing app, or package resources into Bex.app.
 No composition root calls `PackagedCorrectionHost.make`. The default browser and
 WKWebView development lab remain fixture-only.
 
-## Implemented wiring
+## Candidate source wiring
 
-- `PackagedCorrectionHost` accepts native-owned factory/destination/effort values.
+- `PackagedCorrectionHost.make(window:factory:)` accepts no caller-supplied destination
+  or effort. It reserves an epoch in the process-wide account mutation coordinator
+  before reading one native preferences snapshot. It revalidates after the snapshot
+  read and asynchronous content-rule compilation. Registration validates the same
+  epoch atomically, with no suspension before document loading. A stale construction
+  cannot load a document or join a replacement account's lifetime.
   It rebuilds the factory with its own [isolated provider transport](native-provider-transport.md),
   ignoring any caller-supplied transport. This remains inactive and uncompiled;
   the existing app's transport/factory wiring does not change.
@@ -21,6 +29,11 @@ WKWebView development lab remain fixture-only.
   this candidate. Navigation/failure/process termination/window close revoke work
   and message delivery. `closeAndWait()` is required before replacing the lifetime.
   It awaits both coordinator work and provider-session task completion/invalidation.
+  A shared drain task survives close-waiter cancellation. The process-wide barrier
+  retains the lifetime after close, including when the view owner is dropped, until
+  both drains finish. Closing cannot unregister still-running work. Construction
+  also observes window closure before either asynchronous step and rejects a window
+  closed during that work.
 - `NativeCorrectionConsentPresenter` shows full native destination/model and all
   text/source/options as read-only plain text, with a bounded scrolling viewport.
   Cancel is the default. Its FIFO has at most four admitted requests; queued work
@@ -45,17 +58,40 @@ WKWebView development lab remain fixture-only.
    HTML/CSP and hashed three-file staging inventory. It does not establish JavaScript
    semantics, signing, provenance, race-free filesystems or WebKit enforcement.
    No resource-copy build phase is added here; absent assets fail closed.
-4. Implement the account/settings mutation barrier across every mutation path:
-   revoke admission and await `closeAndWait()` BEFORE changing credentials, account,
-   model or endpoint. Capturing a factory/destination does not implement this lock.
-   OpenAI Codex remains rejected because dynamic account refresh is not pinned.
+4. Compile and validate the integrated cooperative account/settings barrier and
+   all store/OAuth mutation paths. The implementation uses one process-wide gate
+   across backing domains, not one gate per factory or suite/service pair. Mutation
+   closes admission and synchronously revokes admitted hosts, then awaits complete
+   termination before committing. A non-cooperative drain keeps mutation blocked;
+   cancellation or a timeout must never substitute for termination. This protects
+   cooperative Bex-owned store writes only. External processes, direct UserDefaults
+   edits and external Keychain writers are outside this guarantee. It cannot retract
+   bytes already sent or revoke an upstream API key. Only registered packaged-native
+   lifetimes participate in revocation and drain. Existing `GrammarService` jobs are
+   not registered; this change does not promise to stop their in-flight requests or
+   revoke keys already copied into legacy clients. OpenAI Codex stays rejected;
+   its dynamic refresh needs a separate lifetime/deadlock design.
 5. Obtain appropriate authorization before any app execution, platform side effect,
    permission change or live-provider transmission. This slice performs none.
 
 ## Evidence boundaries
 
 Cloud Node tests execute the exact injected endpoint JavaScript and fake endpoint
-renderer flows. Cloud TypeScript and web builds check web source only. These do not
+renderer flows. Two source-regression checks inspect reservation/snapshot/register/
+load ordering and the lifetime's drain-before-removal wiring. They do not execute
+Swift and are not concurrency or lifecycle proofs.
+
+`PackagedCorrectionHostLifetimeTests` contains seven synthetic XCTest cases for
+manual close racing mutation, sequential coordinator/transport termination,
+synchronous mutation revocation, cancelled close waiters, stale and already-closed
+construction, duplicate registration, and lifetime retention after its owner drops.
+They exercise the exact lifetime helper used by the host with fake drains, without
+creating AppKit/WebKit objects or accessing Keychain, preferences or the network.
+These Swift tests are authored but have **not been compiled or run** in cloud.
+Actual construction failure/window-close races and WebKit cleanup still require
+native runtime validation.
+
+Cloud TypeScript and web builds check web source only. These do not
 compile AppKit/WebKit or establish native security enforcement. AppKit test sources
 are authored but unrun and are application-hosted; running them may launch Bex.
 No native build or test is requested by this document. Earlier exact-commit package

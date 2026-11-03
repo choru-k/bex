@@ -3,9 +3,9 @@ import WebKit
 import NativeBridgeCore
 
 /// UNACTIVATED candidate: no composition root constructs this type. No build phase
-/// currently packages BexWebUI. Account/key/model/endpoint mutation MUST await
-/// closeAndWait() before mutating stores or creating another host. Production does
-/// not yet implement that barrier; this is an activation blocker, not an account lock.
+/// currently packages BexWebUI. Admission and every cooperative Bex-owned account /
+/// destination write share AccountMutationCoordinator. This does not coordinate
+/// external Keychain / preferences writers or establish native runtime validation.
 @MainActor
 final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   enum HostError: Error { case missingPackagedUI, unsupportedProvider, invalidDocument }
@@ -15,6 +15,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   private let presenter: NativeCorrectionConsentPresenter
   private let providerTransport: NativeProviderTransport
   private var coordinator: NativeCorrectionCoordinator?
+  private var lifetime: PackagedCorrectionHostLifetime?
   private var allowedInitialNavigation = false
   private var committed = false
   private var closed = false
@@ -29,11 +30,23 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     }
   }
 
-  /// No arbitrary URL/bundle/development-server initializer is exposed.
-  static func make(window: NSWindow, factory: ProviderClientFactory,
-                   destination: OutboundDestination, effort: ReasoningEffort) async throws
+  /// No arbitrary URL/bundle/development-server or caller-supplied configuration
+  /// initializer is exposed. A previous destination/effort value cannot be paired
+  /// with newly read credentials: configuration is captured after reserving admission.
+  static func make(window: NSWindow, factory: ProviderClientFactory) async throws
     -> PackagedCorrectionHost {
-    guard destination.provider != .openAICodex else { throw HostError.unsupportedProvider }
+    let barrier = AccountMutationCoordinator.shared
+    let reservation = try barrier.reserveAdmission()
+    let construction = ConstructionObservation(window: window)
+    defer { construction.stopObserving() }
+    try Task.checkCancellation()
+    let snapshot = try await factory.preferences.nativeCorrectionConfiguration()
+    try barrier.validateAdmission(reservation)
+    try construction.checkOpen()
+    try Task.checkCancellation()
+    guard snapshot.destination.provider != .openAICodex else {
+      throw HostError.unsupportedProvider
+    }
     guard let resources = Bundle.main.resourceURL else { throw HostError.missingPackagedUI }
     let root = resources.appendingPathComponent("BexWebUI", isDirectory: true)
     let document = root.appendingPathComponent("native.html", isDirectory: false)
@@ -45,6 +58,8 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     let rules = try await WKContentRuleListStore.default().compileContentRuleList(
       forIdentifier: "BexPackagedCorrectionNoNetwork-v1",
       encodedContentRuleList: Self.networkRules)
+    try barrier.validateAdmission(reservation)
+    try construction.checkOpen()
     try Task.checkCancellation()
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .nonPersistent()
@@ -55,16 +70,45 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     let relay = MessageRelay()
     config.userContentController.add(relay, name: handlerName)
     let host = try PackagedCorrectionHost(window: window, factory: factory,
-      destination: destination, effort: effort, document: document, configuration: config)
-    relay.owner = host
-    host.webView.navigationDelegate = host
-    host.webView.loadFileURL(document, allowingReadAccessTo: root)
-    return host
+      destination: snapshot.destination, effort: snapshot.effort, document: document,
+      configuration: config, barrier: barrier)
+    do {
+      try Task.checkCancellation()
+      try construction.checkOpen()
+      // registerHost revalidates the same epoch atomically with insertion. No
+      // suspension occurs between registration, relay installation and document load.
+      guard let lifetime = host.lifetime else { throw HostError.invalidDocument }
+      try lifetime.register(reservation: reservation)
+      relay.owner = host
+      host.webView.navigationDelegate = host
+      host.webView.loadFileURL(document, allowingReadAccessTo: root)
+      return host
+    } catch {
+      // A rejected candidate never loads or receives bridge messages. Still drain
+      // the resources it constructed; cancellation does not skip that cleanup.
+      await host.closeAndWait()
+      throw error
+    }
+  }
+
+  // Observe the window before either construction await. A window closed during
+  // rule compilation must not acquire a newly loaded, orphaned host afterward.
+  @MainActor private final class ConstructionObservation: NSObject {
+    private var closed = false
+    init(window: NSWindow) {
+      super.init()
+      NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
+        name: NSWindow.willCloseNotification, object: window)
+    }
+    @objc private func windowWillClose(_ notification: Notification) { closed = true }
+    func checkOpen() throws { if closed { throw CancellationError() } }
+    func stopObserving() { NotificationCenter.default.removeObserver(self) }
   }
 
   private init(window: NSWindow, factory: ProviderClientFactory,
                destination: OutboundDestination, effort: ReasoningEffort,
-               document: URL, configuration: WKWebViewConfiguration) throws {
+               document: URL, configuration: WKWebViewConfiguration,
+               barrier: AccountMutationCoordinator) throws {
     documentURL = document
     webView = WKWebView(frame: .zero, configuration: configuration)
     presenter = try NativeCorrectionConsentPresenter(window: window,
@@ -73,14 +117,25 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     providerTransport = try NativeProviderTransport(destination: destination)
     super.init()
     // Never pass the caller's potentially shared/custom transport into this host.
-    // Stores remain mutable: closeAndWait BEFORE account/settings mutation is still
-    // a mandatory activation gate, separate from session/recipient isolation.
+    // The stores stay readable during drain. Their cooperative writes cannot commit
+    // until this registered lifetime has fully terminated.
     let isolatedFactory = ProviderClientFactory(preferences: factory.preferences,
       keychain: factory.keychain, transport: providerTransport)
     let provider = NativeStructuredCorrectionProvider(factory: isolatedFactory,
       destination: destination, effort: effort)
-    coordinator = try NativeCorrectionCoordinator(providerName: destination.provider.displayName,
+    let coordinator = try NativeCorrectionCoordinator(providerName: destination.provider.displayName,
       consent: presenter, provider: provider, emit: { [weak self] json in self?.emit(json) })
+    self.coordinator = coordinator
+    lifetime = PackagedCorrectionHostLifetime(barrier: barrier,
+      revoke: { [weak self, coordinator, providerTransport, presenter] in
+        self?.revokeDocument()
+        coordinator.close()
+        providerTransport.close()
+        presenter.close()
+      }, drain: { [coordinator, providerTransport] in
+        await coordinator.closeAndWait()
+        await providerTransport.closeAndWait()
+      })
     NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
       name: NSWindow.willCloseNotification, object: window)
   }
@@ -114,24 +169,27 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   @objc private func windowWillClose(_ notification: Notification) { close() }
 
   /// Synchronous revocation, NOT proof that provider/UI work has terminated.
-  func close() {
+  /// This starts one owned drain even if the caller does not await closeAndWait().
+  func close() { lifetime?.close() }
+
+  private func revokeDocument() {
     guard !closed else { return }
     closed = true
     NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: nil)
     committed = false
-    coordinator?.close()
-    providerTransport.close()
-    presenter.close()
     webView.stopLoading()
     webView.configuration.userContentController.removeScriptMessageHandler(forName: Self.handlerName)
   }
 
-  /// Required before account/provider/destination replacement. Do not mutate stores
-  /// first: ProviderClientFactory captures stores, not immutable credential identity.
-  func closeAndWait() async {
-    close()
-    await coordinator?.closeAndWait()
-    await providerTransport.closeAndWait()
+  /// All callers join the same full drain. The barrier registration survives close
+  /// and caller cancellation until coordinator AND provider-session termination.
+  func closeAndWait() async { await lifetime?.closeAndWait() }
+
+  deinit {
+    // The registered lifetime owns coordinator/transport cleanup independently of
+    // the view owner. A concurrent mutation can still see and await it before this
+    // scheduled close runs; dropping a host cannot silently unregister running work.
+    if let lifetime { Task { @MainActor in lifetime.close() } }
   }
 
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
@@ -206,4 +264,55 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     }});
   })();
   """#
+}
+
+/// The exact lifetime owner used by PackagedCorrectionHost. Kept independent of
+/// AppKit construction so synthetic tests can hold each drain stage explicitly.
+/// The coordinator retains this object until both stages have really returned.
+@MainActor
+final class PackagedCorrectionHostLifetime {
+  private let barrier: AccountMutationCoordinator
+  private var registration: UUID?
+  private var revokeWork: (@MainActor @Sendable () -> Void)?
+  private var drainWork: (@MainActor @Sendable () async -> Void)?
+  private var drainTask: Task<Void, Never>?
+  private(set) var isClosed = false
+
+  init(barrier: AccountMutationCoordinator,
+       revoke: @escaping @MainActor @Sendable () -> Void,
+       drain: @escaping @MainActor @Sendable () async -> Void) {
+    self.barrier = barrier
+    revokeWork = revoke
+    drainWork = drain
+  }
+
+  func register(reservation: AccountMutationCoordinator.AdmissionReservation) throws {
+    guard !isClosed, registration == nil else { throw CancellationError() }
+    registration = try barrier.registerHost(reservation: reservation,
+      revoke: { [self] in close() }, drain: { [self] in await closeAndWait() })
+  }
+
+  func close() {
+    guard !isClosed else { return }
+    isClosed = true
+    revokeWork?()
+    revokeWork = nil
+    // Unstructured ownership is deliberate: cancellation of a close waiter or a
+    // mutation waiter must not cancel the cleanup or mark still-running work done.
+    let drain = drainWork
+    drainTask = Task { @MainActor [self] in
+      await drain?()
+      drainWork = nil
+      if let registration {
+        barrier.removeHost(registration)
+        self.registration = nil
+      }
+      drainTask = nil
+    }
+  }
+
+  func closeAndWait() async {
+    close()
+    await drainTask?.value
+  }
 }

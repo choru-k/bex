@@ -55,3 +55,37 @@ test('listener storage is bounded', () => {
   for(let i=0;i<16;i++) f.endpoint.subscribe(() => {});
   assert.throws(() => f.endpoint.subscribe(() => {}));
 });
+
+// Source-regression checks only. They do not execute Swift or establish that
+// MainActor, cancellation, WebKit, or the native mutation barrier work at runtime.
+test('host captures settings only after reservation and registers before loading', () => {
+  const make = swift.slice(swift.indexOf('  static func make('), swift.indexOf('  private init(window:'));
+  assert.match(make, /make\(window: NSWindow, factory: ProviderClientFactory\)/);
+  assert.doesNotMatch(make.slice(0, make.indexOf('-> PackagedCorrectionHost')), /destination:|effort:/);
+  const reserve = make.indexOf('barrier.reserveAdmission()');
+  const snapshot = make.indexOf('await factory.preferences.nativeCorrectionConfiguration()');
+  const firstValidate = make.indexOf('barrier.validateAdmission(reservation)', snapshot);
+  const compile = make.indexOf('await WKContentRuleListStore');
+  const lastValidate = make.indexOf('barrier.validateAdmission(reservation)', compile);
+  const register = make.indexOf('lifetime.register(reservation: reservation)');
+  const load = make.indexOf('host.webView.loadFileURL');
+  assert.ok(0 <= reserve && reserve < snapshot && snapshot < firstValidate);
+  assert.ok(firstValidate < compile && compile < lastValidate && lastValidate < register && register < load);
+  assert.doesNotMatch(make.slice(register, load), /\bawait\b/);
+  assert.match(make.slice(load), /catch\s*\{[\s\S]*await host.closeAndWait\(\)/);
+});
+
+test('host lifetime retains registration through complete coordinator and transport drain', () => {
+  const setup = swift.slice(swift.indexOf('lifetime = PackagedCorrectionHostLifetime('),
+    swift.indexOf('  private func exactDocument('));
+  assert.match(setup, /coordinator\.close\(\)/);
+  assert.match(setup, /providerTransport\.close\(\)/);
+  assert.match(setup, /presenter\.close\(\)/);
+  assert.ok(setup.indexOf('await coordinator.closeAndWait()') < setup.indexOf('await providerTransport.closeAndWait()'));
+  const lifetime = swift.slice(swift.indexOf('final class PackagedCorrectionHostLifetime'));
+  assert.match(lifetime, /guard !isClosed, registration == nil/);
+  const drain = lifetime.indexOf('await drain?()');
+  const remove = lifetime.indexOf('barrier.removeHost(registration)');
+  assert.ok(drain >= 0 && drain < remove);
+  assert.equal((swift.match(/barrier\.removeHost\(/g) ?? []).length, 1);
+});

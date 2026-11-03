@@ -7,6 +7,10 @@ actor CodexLoopbackListener {
   private let queue = DispatchQueue(label: "com.bex.desktop.codex-loopback")
 
   private var listener: NWListener?
+  // Each listener belongs to one login attempt and is never restarted after stop.
+  // Terminal state must precede resuming continuations or cancelling Network objects.
+  private var isStopped = false
+  private var hasStarted = false
   private var startContinuation: CheckedContinuation<Void, any Error>?
   private var callbackContinuation: CheckedContinuation<URL, any Error>?
   private var callbackURL: URL?
@@ -18,11 +22,16 @@ actor CodexLoopbackListener {
   }
 
   func start() async throws {
-    guard listener == nil else { return }
+    guard !isStopped, !Task.isCancelled else { throw BexError.cancellation }
+    guard !hasStarted else {
+      throw BexError.oauthFailure("OpenAI Codex callback listener was already started.")
+    }
+    hasStarted = true
     let listener: NWListener
     do {
       listener = try NWListener(using: .tcp, on: port)
     } catch {
+      isStopped = true
       throw BexError.connectionFailure("OpenAI Codex callback port 1455 is unavailable.")
     }
     self.listener = listener
@@ -33,25 +42,39 @@ actor CodexLoopbackListener {
       Task { await self?.handle(state: state) }
     }
 
-    try await withCheckedThrowingContinuation { continuation in
-      startContinuation = continuation
-      listener.start(queue: queue)
+    try await withTaskCancellationHandler {
+      guard !isStopped, !Task.isCancelled else { throw BexError.cancellation }
+      try await withCheckedThrowingContinuation { continuation in
+        startContinuation = continuation
+        listener.start(queue: queue)
+      }
+    } onCancel: {
+      Task { await self.stop() }
     }
   }
 
   func waitForCallback() async throws -> URL {
-    if let callbackURL { return callbackURL }
-    return try await withCheckedThrowingContinuation { continuation in
-      callbackContinuation = continuation
-      timeoutTask = Task { [weak self, timeoutNanoseconds] in
-        try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-        guard !Task.isCancelled else { return }
-        await self?.timeOut()
+    return try await withTaskCancellationHandler {
+      guard !isStopped, !Task.isCancelled else { throw BexError.cancellation }
+      if let callbackURL { return callbackURL }
+      guard callbackContinuation == nil else {
+        throw BexError.oauthFailure("OpenAI Codex callback already has a waiter.")
       }
+      return try await withCheckedThrowingContinuation { continuation in
+        callbackContinuation = continuation
+        timeoutTask = Task { [weak self, timeoutNanoseconds] in
+          try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+          guard !Task.isCancelled else { return }
+          await self?.timeOut()
+        }
+      }
+    } onCancel: {
+      Task { await self.stop() }
     }
   }
 
   func stop() {
+    isStopped = true
     timeoutTask?.cancel()
     timeoutTask = nil
     listener?.cancel()
@@ -63,6 +86,7 @@ actor CodexLoopbackListener {
   }
 
   private func handle(state: NWListener.State) {
+    guard !isStopped else { return }
     switch state {
     case .ready:
       startContinuation?.resume()
@@ -74,30 +98,35 @@ actor CodexLoopbackListener {
     case .failed:
       failStart()
     case .cancelled:
-      startContinuation?.resume(throwing: BexError.cancellation)
-      startContinuation = nil
+      // A successfully captured callback may still have a waiter queued behind us.
+      // Otherwise an unexpected listener cancellation terminates every pending wait.
+      if callbackURL == nil { stop() }
     default:
       break
     }
   }
 
   private func failStart() {
-    startContinuation?.resume(
-      throwing: BexError.connectionFailure(
-        "OpenAI Codex callback port 1455 is unavailable."
-      )
-    )
+    isStopped = true
+    let error = BexError.connectionFailure("OpenAI Codex callback port 1455 is unavailable.")
+    startContinuation?.resume(throwing: error)
     startContinuation = nil
+    callbackContinuation?.resume(throwing: error)
+    callbackContinuation = nil
+    timeoutTask?.cancel()
+    timeoutTask = nil
     listener?.cancel()
     listener = nil
   }
 
   private func accept(_ connection: NWConnection) {
+    guard !isStopped else { connection.cancel(); return }
     connection.start(queue: queue)
     receive(on: connection, accumulated: Data())
   }
 
   private func receive(on connection: NWConnection, accumulated: Data) {
+    guard !isStopped else { connection.cancel(); return }
     connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) {
       [weak self] data, _, isComplete, error in
       var request = accumulated
@@ -112,6 +141,7 @@ actor CodexLoopbackListener {
   }
 
   private func handleRequest(_ data: Data, connection: NWConnection) {
+    guard !isStopped else { connection.cancel(); return }
     guard let request = String(data: data, encoding: .utf8),
       let firstLine = request.components(separatedBy: "\r\n").first
     else {
@@ -155,8 +185,10 @@ actor CodexLoopbackListener {
   }
 
   private func finish(with url: URL) {
-    guard callbackURL == nil else { return }
+    guard !isStopped, callbackURL == nil else { return }
     callbackURL = url
+    startContinuation?.resume()
+    startContinuation = nil
     timeoutTask?.cancel()
     timeoutTask = nil
     listener?.cancel()
@@ -166,6 +198,9 @@ actor CodexLoopbackListener {
   }
 
   private func timeOut() {
+    isStopped = true
+    startContinuation?.resume(throwing: BexError.timeout)
+    startContinuation = nil
     listener?.cancel()
     listener = nil
     callbackContinuation?.resume(throwing: BexError.timeout)

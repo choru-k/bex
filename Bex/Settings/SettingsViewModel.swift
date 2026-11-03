@@ -95,6 +95,7 @@ final class SettingsViewModel: ObservableObject {
   private let keychain: KeychainStore
   private let grammar: any GrammarServicing
   private let codexOAuth: CodexOAuthService
+  private let openAuthorizationURL: @MainActor (URL) -> Bool
   private let promptTarget: any PromptTargetServicing
   private let hookManager: any HookInstallationManaging
   private let applyAppearance: @MainActor (AppearancePreference) -> Void
@@ -106,7 +107,13 @@ final class SettingsViewModel: ObservableObject {
 
   private var modelTask: Task<Void, Never>?
   private var ollamaTask: Task<Void, Never>?
-  private var oauthTask: Task<Void, Never>?
+  private var oauthTasks: [UUID: Task<Void, Never>] = [:]
+  private var oauthDisconnectTask: Task<Void, Never>?
+  private var oauthDisconnectOperationID: UUID?
+  private var manualCompletionOperationID: UUID?
+  private var oauthOperationID = UUID()
+  private var oauthCompletedOperationID: UUID?
+  private var oauthFlow: CodexOAuthFlow?
   private var promptTask: Task<Void, Never>?
   private var preferenceTask: Task<Void, Never>?
   private var clearHistoryTask: Task<Void, Never>?
@@ -130,12 +137,16 @@ final class SettingsViewModel: ObservableObject {
     onDeleteSavedDraft: @escaping @MainActor () async throws -> Void = {},
     onClearHistory: @escaping @MainActor () async throws -> Void = {},
     onSetupRoute: @escaping @MainActor (SettingsRouteIntent) -> Void = { _ in },
-    onRunBackgroundAgent: @escaping @MainActor () -> Void = {}
+    onRunBackgroundAgent: @escaping @MainActor () -> Void = {},
+    openAuthorizationURL: @escaping @MainActor (URL) -> Bool = {
+      NSWorkspace.shared.open($0)
+    }
   ) {
     self.preferences = preferences
     self.keychain = keychain
     self.grammar = grammar
     self.codexOAuth = codexOAuth
+    self.openAuthorizationURL = openAuthorizationURL
     self.promptTarget = promptTarget
     self.hookManager = hookManager
     self.applyAppearance = applyAppearance
@@ -465,25 +476,42 @@ final class SettingsViewModel: ObservableObject {
   }
 
   func connectCodex() {
-    oauthTask?.cancel()
+    let operationID = UUID()
+    oauthOperationID = operationID
+    manualCompletionOperationID = nil
+    oauthFlow = nil
+    cancelOAuthTasks()
     oauthInProgress = true
     manualCallbackRequired = false
     callbackURL = ""
     userVisibleError = nil
     codexStatus = "Starting secure login…"
+    let pendingDisconnect = oauthDisconnectTask
 
-    oauthTask = Task { [weak self] in
+    oauthTasks[operationID] = Task { [weak self] in
       guard let self else { return }
+      defer { oauthTasks.removeValue(forKey: operationID) }
+      // A requested sign-out must reach its store commit before a newer login starts.
+      // It is never cancelled merely because its UI result was superseded.
+      await pendingDisconnect?.value
+      guard isCurrentOAuthOperation(operationID) else { return }
       do {
         let flow = try await codexOAuth.begin()
-        guard !Task.isCancelled else { return }
-        guard NSWorkspace.shared.open(flow.authorizationURL) else {
-          await codexOAuth.cancel()
+        guard isCurrentOAuthOperation(operationID) else {
+          await codexOAuth.cancel(flow: flow)
+          return
+        }
+        oauthFlow = flow
+        guard openAuthorizationURL(flow.authorizationURL) else {
+          await codexOAuth.cancel(flow: flow)
           throw BexError.oauthFailure("Bex could not open the OpenAI login page.")
         }
         if flow.loopbackAvailable {
           codexStatus = "Waiting for OpenAI callback…"
           let session = try await codexOAuth.waitForLoopbackCompletion()
+          guard isCurrentOAuthOperation(operationID) else { return }
+          oauthFlow = nil
+          oauthCompletedOperationID = operationID
           applyConnected(session)
         } else {
           oauthInProgress = false
@@ -491,8 +519,15 @@ final class SettingsViewModel: ObservableObject {
           codexStatus = "Callback port unavailable. Paste the complete callback URL."
         }
       } catch {
+        guard isCurrentOAuthOperation(operationID), oauthCompletedOperationID != operationID else {
+          return
+        }
+        if error as? CodexOAuthCompletionError == .alreadyInProgress { return }
+        if (error is CancellationError || error as? BexError == .cancellation),
+          manualCompletionOperationID != nil
+        { return }
         oauthInProgress = false
-        if error as? BexError != .cancellation {
+        if !(error is CancellationError), error as? BexError != .cancellation {
           userVisibleError = error.localizedDescription
           codexStatus = "Not connected"
         }
@@ -501,24 +536,50 @@ final class SettingsViewModel: ObservableObject {
   }
 
   func completeManualCallback() {
+    guard manualCompletionOperationID == nil else { return }
     let callback = callbackURL
     guard !callback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
       userVisibleError = "Paste the complete OpenAI Codex callback URL."
       return
     }
+    guard oauthFlow != nil else {
+      userVisibleError = "Start OpenAI Codex login again."
+      return
+    }
+    // Manual and loopback are two routes for one logical login. Keep its UI
+    // generation, even if loopback has already claimed the code exchange.
+    let operationID = oauthOperationID
+    let taskID = UUID()
+    manualCompletionOperationID = taskID
     oauthInProgress = true
     userVisibleError = nil
-    oauthTask?.cancel()
-    oauthTask = Task { [weak self] in
+    // Do not cancel the loopback Task: it owns this same login. Manual completion
+    // claims the flow and stops its listener, ending the waiter naturally. Keep both
+    // Tasks tracked until their continuations finish; older UI callbacks are ignored.
+    oauthTasks[taskID] = Task { [weak self] in
       guard let self else { return }
+      defer {
+        oauthTasks.removeValue(forKey: taskID)
+        if manualCompletionOperationID == taskID { manualCompletionOperationID = nil }
+      }
+      guard isCurrentOAuthOperation(operationID), oauthCompletedOperationID != operationID else {
+        return
+      }
       do {
         let session = try await codexOAuth.completeManual(callbackURL: callback)
+        guard isCurrentOAuthOperation(operationID) else { return }
+        oauthFlow = nil
+        oauthCompletedOperationID = operationID
         applyConnected(session)
         callbackURL = ""
         manualCallbackRequired = false
       } catch {
+        guard isCurrentOAuthOperation(operationID), oauthCompletedOperationID != operationID else {
+          return
+        }
+        if error as? CodexOAuthCompletionError == .alreadyInProgress { return }
         oauthInProgress = false
-        if error as? BexError != .cancellation {
+        if !(error is CancellationError), error as? BexError != .cancellation {
           userVisibleError = error.localizedDescription
         }
       }
@@ -526,11 +587,21 @@ final class SettingsViewModel: ObservableObject {
   }
 
   func disconnectCodex() {
-    oauthTask?.cancel()
-    Task { [weak self] in
+    let operationID = UUID()
+    oauthOperationID = operationID
+    manualCompletionOperationID = nil
+    oauthFlow = nil
+    cancelOAuthTasks()
+    oauthInProgress = true
+    codexStatus = "Disconnecting…"
+    let previousDisconnect = oauthDisconnectTask
+    oauthDisconnectOperationID = operationID
+    oauthDisconnectTask = Task { [weak self] in
       guard let self else { return }
+      await previousDisconnect?.value
       do {
         try await codexOAuth.disconnect()
+        guard oauthOperationID == operationID else { return }
         codexConnected = false
         codexExpiry = nil
         codexStatus = "Not connected"
@@ -539,9 +610,19 @@ final class SettingsViewModel: ObservableObject {
         callbackURL = ""
         userVisibleError = nil
       } catch {
+        guard oauthOperationID == operationID else { return }
+        oauthInProgress = false
         userVisibleError = error.localizedDescription
       }
     }
+  }
+
+  private func isCurrentOAuthOperation(_ operationID: UUID) -> Bool {
+    oauthOperationID == operationID && !Task.isCancelled
+  }
+
+  private func cancelOAuthTasks() {
+    for task in oauthTasks.values { task.cancel() }
   }
 
   func setConfirmsHookOutboundPayloads(_ confirms: Bool) {
@@ -1060,17 +1141,37 @@ final class SettingsViewModel: ObservableObject {
   func close() {
     modelTask?.cancel()
     ollamaTask?.cancel()
-    oauthTask?.cancel()
+    let operationID = UUID()
+    let flow = oauthFlow
+    oauthOperationID = operationID
+    manualCompletionOperationID = nil
+    oauthFlow = nil
+    cancelOAuthTasks()
+    oauthInProgress = false
+    manualCallbackRequired = false
+    callbackURL = ""
+    codexStatus = codexConnected ? "Connected" : "Not connected"
     promptTask?.cancel()
-    Task { [codexOAuth] in
-      await codexOAuth.cancel()
+    if let flow {
+      oauthTasks[operationID] = Task { [weak self, codexOAuth] in
+        await codexOAuth.cancel(flow: flow)
+        _ = self?.oauthTasks.removeValue(forKey: operationID)
+      }
     }
   }
 
   func waitForCurrentWork() async {
     await modelTask?.value
     await ollamaTask?.value
-    await oauthTask?.value
+    while true {
+      let disconnectID = oauthDisconnectOperationID
+      await oauthDisconnectTask?.value
+      while !oauthTasks.isEmpty {
+        let pending = Array(oauthTasks.values)
+        for task in pending { await task.value }
+      }
+      if disconnectID == oauthDisconnectOperationID { break }
+    }
     await promptTask?.value
     await preferenceTask?.value
     await clearHistoryTask?.value
@@ -1144,8 +1245,14 @@ final class SettingsViewModel: ObservableObject {
   }
 
   private func refreshCodexState() async {
+    guard !oauthInProgress, oauthFlow == nil else { return }
+    let operationID = oauthOperationID
+    await oauthDisconnectTask?.value
+    guard oauthOperationID == operationID, !oauthInProgress, oauthFlow == nil else { return }
     do {
-      if let session = try await keychain.codexSession() {
+      let session = try await keychain.codexSession()
+      guard oauthOperationID == operationID, !oauthInProgress, oauthFlow == nil else { return }
+      if let session {
         applyConnected(session)
       } else {
         codexConnected = false
@@ -1153,6 +1260,7 @@ final class SettingsViewModel: ObservableObject {
         codexStatus = "Not connected"
       }
     } catch {
+      guard oauthOperationID == operationID, !oauthInProgress, oauthFlow == nil else { return }
       codexConnected = false
       codexExpiry = nil
       codexStatus = "Not connected"

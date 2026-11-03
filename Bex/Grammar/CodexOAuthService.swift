@@ -9,6 +9,20 @@ struct CodexOAuthFlow: Equatable, Sendable {
   let loopbackAvailable: Bool
 }
 
+/// The production listener uses Network.framework. Tests inject a synthetic listener so
+/// lifecycle races can be exercised without opening a socket or contacting a provider.
+protocol CodexOAuthListening: Sendable {
+  func start() async throws
+  func waitForCallback() async throws -> URL
+  func stop() async
+}
+
+extension CodexLoopbackListener: CodexOAuthListening {}
+
+enum CodexOAuthCompletionError: Error, Equatable, Sendable {
+  case alreadyInProgress
+}
+
 actor CodexOAuthService {
   static let clientID = "app_EMoamEEZ73f0CkXaXp7hrann"
   static let authorizeURL = URL(string: "https://auth.openai.com/oauth/authorize")!
@@ -17,88 +31,227 @@ actor CodexOAuthService {
   static let scope = "openid profile email offline_access"
   static let accountClaimKey = "https://api.openai.com/auth"
 
+  private struct LoginAttempt {
+    let id: UUID
+    let token: KeychainStore.CodexOperationToken
+    var flow: CodexOAuthFlow
+    let listener: (any CodexOAuthListening)?
+    var isCompleting = false
+  }
+
   private let keychain: KeychainStore
   private let transport: any HTTPTransport
   private let timeout: TimeInterval
-  private var activeFlow: CodexOAuthFlow?
-  private var listener: CodexLoopbackListener?
+  private let makeListener: @Sendable () -> any CodexOAuthListening
+  // Set before the first suspension, including while the shared login token is pending.
+  private var currentAttemptID: UUID?
+  private var activeAttempt: LoginAttempt?
 
-  init(keychain: KeychainStore, transport: any HTTPTransport, timeout: TimeInterval = 30) {
+  init(
+    keychain: KeychainStore,
+    transport: any HTTPTransport,
+    timeout: TimeInterval = 30,
+    makeListener: @escaping @Sendable () -> any CodexOAuthListening = {
+      CodexLoopbackListener()
+    }
+  ) {
     self.keychain = keychain
     self.transport = transport
     self.timeout = timeout
+    self.makeListener = makeListener
   }
 
   func begin() async throws -> CodexOAuthFlow {
-    if let listener {
-      await listener.stop()
-    }
-    let listener = CodexLoopbackListener()
-    let baseFlow = try Self.makeFlow(loopbackAvailable: false)
+    let previousListener = activeAttempt?.listener
+    let id = UUID()
+    currentAttemptID = id
+    activeAttempt = nil
+    // New login intent invalidates older login AND refresh work across service/store
+    // instances before listener startup or network exchange. It holds no mutation gate.
+    let token = await keychain.beginCodexLogin()
+    await previousListener?.stop()
     do {
-      try await listener.start()
-      let flow = CodexOAuthFlow(
-        authorizationURL: baseFlow.authorizationURL,
-        state: baseFlow.state,
-        verifier: baseFlow.verifier,
-        loopbackAvailable: true
-      )
-      self.listener = listener
-      activeFlow = flow
-      return flow
-    } catch BexError.cancellation {
-      throw BexError.cancellation
+      try requireCurrentAttempt(id)
+      let baseFlow = try Self.makeFlow(loopbackAvailable: false)
+      let listener = makeListener()
+      activeAttempt = LoginAttempt(id: id, token: token, flow: baseFlow, listener: listener)
+      return try await withTaskCancellationHandler {
+        do {
+          try await listener.start()
+        } catch {
+          try requireCurrentAttempt(id)
+          if error is CancellationError || (error as? BexError) == .cancellation {
+            throw BexError.cancellation
+          }
+          // A busy callback port still supports the existing manual-paste flow.
+          await listener.stop()
+          try requireCurrentAttempt(id)
+          activeAttempt = LoginAttempt(id: id, token: token, flow: baseFlow, listener: nil)
+          return baseFlow
+        }
+        try requireCurrentAttempt(id)
+        let flow = CodexOAuthFlow(
+          authorizationURL: baseFlow.authorizationURL,
+          state: baseFlow.state,
+          verifier: baseFlow.verifier,
+          loopbackAvailable: true
+        )
+        activeAttempt?.flow = flow
+        return flow
+      } onCancel: {
+        Task { await self.cancelAttempt(id) }
+      }
     } catch {
-      self.listener = nil
-      activeFlow = baseFlow
-      return baseFlow
+      await cancelAttempt(id)
+      // begin may have been superseded before it could install its local attempt.
+      // Conditional invalidation must never cancel a newer service instance's login.
+      _ = await keychain.cancelCodexLogin(token)
+      throw error
     }
   }
 
   func waitForLoopbackCompletion() async throws -> CodexSession {
-    guard let activeFlow, activeFlow.loopbackAvailable, let listener else {
+    guard let attempt = activeAttempt, attempt.flow.loopbackAvailable,
+      let listener = attempt.listener
+    else {
       throw BexError.oauthFailure("OpenAI Codex callback is not listening.")
     }
-    let callbackURL = try await listener.waitForCallback()
-    let session = try await complete(flow: activeFlow, callbackURL: callbackURL)
-    try await keychain.saveCodexSession(session)
-    self.activeFlow = nil
-    self.listener = nil
-    return session
+    return try await withTaskCancellationHandler {
+      let callbackURL = try await listener.waitForCallback()
+      return try await finish(attemptID: attempt.id, callbackURL: callbackURL)
+    } onCancel: {
+      Task { await self.cancelAttempt(attempt.id) }
+    }
   }
 
   func completeManual(callbackURL: String) async throws -> CodexSession {
-    guard let activeFlow else {
+    guard let attempt = activeAttempt else {
       throw BexError.oauthFailure("Start OpenAI Codex login again.")
     }
     guard let url = URL(string: callbackURL.trimmingCharacters(in: .whitespacesAndNewlines)) else {
       throw BexError.oauthFailure("Paste the complete OpenAI Codex callback URL.")
     }
-    let session = try await complete(flow: activeFlow, callbackURL: url)
-    try await keychain.saveCodexSession(session)
-    self.activeFlow = nil
-    self.listener = nil
-    return session
+    return try await withTaskCancellationHandler {
+      try await finish(attemptID: attempt.id, callbackURL: url, stopListenerBeforeExchange: true)
+    } onCancel: {
+      Task { await self.cancelAttempt(attempt.id) }
+    }
   }
 
   func cancel() async {
-    await listener?.stop()
-    listener = nil
-    activeFlow = nil
+    guard let id = currentAttemptID else { return }
+    await cancelAttempt(id)
+  }
+
+  /// A delayed UI cleanup must not cancel a newer login on this service.
+  func cancel(flow: CodexOAuthFlow) async {
+    guard let attempt = activeAttempt, attempt.flow.state == flow.state else { return }
+    await cancelAttempt(attempt.id)
   }
 
   func disconnect() async throws {
-    await cancel()
-    try await keychain.deleteCodexSession()
+    let listener = activeAttempt?.listener
+    // Clear before the first await. A new begin while deletion drains must not be
+    // cleared by this disconnect's eventual listener cleanup.
+    currentAttemptID = nil
+    activeAttempt = nil
+    do {
+      try await keychain.deleteCodexSession()
+    } catch {
+      await listener?.stop()
+      throw error
+    }
+    await listener?.stop()
   }
 
+  private func requireCurrentAttempt(_ id: UUID) throws {
+    guard currentAttemptID == id, !Task.isCancelled else {
+      throw BexError.cancellation
+    }
+  }
+
+  private func cancelAttempt(_ id: UUID) async {
+    guard currentAttemptID == id else { return }
+    let attempt = activeAttempt
+    currentAttemptID = nil
+    activeAttempt = nil
+    if let attempt {
+      _ = await keychain.cancelCodexLogin(attempt.token)
+      await attempt.listener?.stop()
+    }
+  }
+
+  private func finish(
+    attemptID id: UUID,
+    callbackURL: URL,
+    stopListenerBeforeExchange: Bool = false
+  ) async throws -> CodexSession {
+    try requireCurrentAttempt(id)
+    guard let attempt = activeAttempt, attempt.id == id else {
+      throw BexError.cancellation
+    }
+    guard !attempt.isCompleting else { throw CodexOAuthCompletionError.alreadyInProgress }
+    // Waiting for loopback does not claim completion: manual paste must still work.
+    // Claim only once a callback arrives so the two routes cannot exchange it twice.
+    activeAttempt?.isCompleting = true
+    var attemptedCommit = false
+    do {
+      // Validate before ending the loopback waiter so malformed manual paste leaves
+      // the valid loopback route intact and can be retried without a new login.
+      let code = try Self.authorizationCode(flow: attempt.flow, callbackURL: callbackURL)
+      if stopListenerBeforeExchange {
+        // Manual handover ends the loopback waiter without cancelling its Task (which
+        // would invalidate this same login). The captured listener cannot be newer.
+        await attempt.listener?.stop()
+        try requireCurrentAttempt(id)
+      }
+      let session = try await exchangeAuthorizationCode(code: code, verifier: attempt.flow.verifier)
+      try requireCurrentAttempt(id)
+      // Stop the captured listener before the final commit, outside the mutation
+      // gate. A disconnect in any service/store while shutdown suspends invalidates
+      // this token, so it cannot persist or report a superseded login afterward.
+      if !stopListenerBeforeExchange {
+        await attempt.listener?.stop()
+        try requireCurrentAttempt(id)
+      }
+      attemptedCommit = true
+      guard try await keychain.saveCodexSession(session, ifCurrent: attempt.token) else {
+        await cancelAttempt(id)
+        throw BexError.cancellation
+      }
+      try requireCurrentAttempt(id)
+      currentAttemptID = nil
+      activeAttempt = nil
+      return session
+    } catch {
+      if attemptedCommit || Task.isCancelled || (error as? BexError) == .cancellation {
+        await cancelAttempt(id)
+      } else if currentAttemptID == id {
+        // Preserve the existing retryable manual flow after malformed/network errors.
+        activeAttempt?.isCompleting = false
+      }
+      throw error
+    }
+  }
+
+  /// Exchange-only helper. Persisting a login must go through finish's shared-store CAS.
   func complete(flow: CodexOAuthFlow, callbackURL: URL) async throws -> CodexSession {
+    let code = try Self.authorizationCode(flow: flow, callbackURL: callbackURL)
+    return try await exchangeAuthorizationCode(code: code, verifier: flow.verifier)
+  }
+
+  private static func authorizationCode(flow: CodexOAuthFlow, callbackURL: URL) throws -> String {
     guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
       throw BexError.oauthFailure("Paste the complete OpenAI Codex callback URL.")
     }
-    let query = Dictionary(
-      uniqueKeysWithValues: (components.queryItems ?? []).map { ($0.name, $0.value ?? "") }
-    )
+    // The callback is untrusted. Duplicate keys must fail closed rather than trap in
+    // Dictionary(uniqueKeysWithValues:) or let different parsers choose different values.
+    var query: [String: String] = [:]
+    for item in components.queryItems ?? [] {
+      guard query.updateValue(item.value ?? "", forKey: item.name) == nil else {
+        throw BexError.oauthFailure("OpenAI Codex callback contains duplicate parameters.")
+      }
+    }
     if query["error"] != nil {
       throw BexError.oauthFailure("OpenAI Codex login was not completed.")
     }
@@ -108,7 +261,7 @@ actor CodexOAuthService {
     guard let code = query["code"], !code.isEmpty else {
       throw BexError.oauthFailure("Missing authorization code.")
     }
-    return try await exchangeAuthorizationCode(code: code, verifier: flow.verifier)
+    return code
   }
 
   static func makeFlow(loopbackAvailable: Bool) throws -> CodexOAuthFlow {
