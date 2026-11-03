@@ -265,14 +265,9 @@ struct BexHookMain {
   }
 
   private static func writeSelfCheck() {
-    let object: [String: Any] = [
-      "protocolVersion": HookProtocolConstants.version,
-      "helper": HookProtocolConstants.helperName,
-    ]
-    guard var data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-    else {
-      return
-    }
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    guard var data = try? encoder.encode(HookHelperContract.current) else { return }
     data.append(0x0A)
     FileHandle.standardOutput.write(data)
   }

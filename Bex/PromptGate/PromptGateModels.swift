@@ -420,9 +420,9 @@ enum HookInstallationStatus: Equatable, Sendable {
 
   var permitsReceipt: Bool {
     switch self {
-    case .awaitingCodexTrust, .installedUnconfirmed, .active, .updateAvailable:
+    case .awaitingCodexTrust, .installedUnconfirmed, .active:
       true
-    case .notInstalled, .needsRepair, .unavailable:
+    case .notInstalled, .updateAvailable, .needsRepair, .unavailable:
       false
     }
   }

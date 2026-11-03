@@ -22,6 +22,7 @@ final class CodexLoopbackListener: @unchecked Sendable {
     init(_ transport: any CodexLoopbackConnectionTransport) { self.transport = transport }
   }
 
+  private let expectedState: String
   private let port: UInt16
   private let timeoutNanoseconds: UInt64
   private let queue = DispatchQueue(label: "com.bex.desktop.codex-loopback")
@@ -41,7 +42,8 @@ final class CodexLoopbackListener: @unchecked Sendable {
   private var timeout: (any CodexLoopbackDeadline)?
   private var timeoutID: UUID?
 
-  init(port: UInt16 = 1455, timeoutNanoseconds: UInt64 = 300_000_000_000) {
+  init(expectedState: String, port: UInt16 = 1455, timeoutNanoseconds: UInt64 = 300_000_000_000) {
+    self.expectedState = expectedState
     self.port = port
     self.timeoutNanoseconds = min(max(timeoutNanoseconds, 1), 300_000_000_000)
     self.makeTransport = { try CodexNetworkLoopbackListener(port: $0) }
@@ -50,11 +52,13 @@ final class CodexLoopbackListener: @unchecked Sendable {
 
   /// Internal synthetic transport seam; never opens a socket when fakes are supplied.
   init(
+    expectedState: String,
     port: UInt16 = 1455,
     timeoutNanoseconds: UInt64 = 300_000_000_000,
     makeTransport: @escaping @Sendable (UInt16) throws -> any CodexLoopbackListenerTransport,
     scheduler: any CodexLoopbackScheduling
   ) {
+    self.expectedState = expectedState
     self.port = port
     self.timeoutNanoseconds = min(max(timeoutNanoseconds, 1), 300_000_000_000)
     self.makeTransport = makeTransport
@@ -125,6 +129,13 @@ final class CodexLoopbackListener: @unchecked Sendable {
       return
     }
     hasStarted = true
+    // Fail closed before creating a transport if trusted configuration is absent.
+    guard !expectedState.isEmpty else {
+      let error = BexError.oauthFailure("OpenAI Codex callback state is unavailable.")
+      continuation.resume(throwing: error)
+      terminate(with: error)
+      return
+    }
     do {
       let transport = try makeTransport(port)
       listener = transport
@@ -234,7 +245,13 @@ final class CodexLoopbackListener: @unchecked Sendable {
     case .complete:
       switch connection.headers.request(port: port) {
       case .callback(let url):
-        // Claim the first callback and close admission before sending or resuming.
+        // Unrelated local requests must not consume the active login. Validate the
+        // immutable attempt binding before claiming a callback or closing admission.
+        guard acceptsState(in: url) else {
+          respond(status: "400 Bad Request", body: "Invalid callback", id: id)
+          return
+        }
+        // Claim the first state-matching callback before sending or resuming.
         callbackURL = url
         closeAdmission()
         for otherID in Array(connections.keys) where otherID != id { cancelConnection(otherID) }
@@ -251,6 +268,22 @@ final class CodexLoopbackListener: @unchecked Sendable {
         respond(status: "400 Bad Request", body: "Invalid callback", id: id)
       }
     }
+  }
+
+  private func acceptsState(in url: URL) -> Bool {
+    guard !expectedState.isEmpty,
+      let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+    else { return false }
+    // Match decoded names and reject every duplicate, as the service does. An
+    // encoded duplicate must not consume admission only to fail service validation.
+    var names = Set<String>()
+    var returnedState: String?
+    for item in items {
+      guard names.insert(item.name).inserted else { return false }
+      if item.name == "state" { returnedState = item.value }
+    }
+    guard let returnedState else { return false }
+    return returnedState.utf8.elementsEqual(expectedState.utf8)
   }
 
   private func respond(status: String, body: String, id: UUID) {

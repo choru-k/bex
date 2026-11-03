@@ -4,6 +4,8 @@ import type { CorrectionResult, CorrectionTransport } from './core/model.ts';
 import { buildCoachContext, clearPolicy, DEFAULT_POLICY, hasSavedPolicy, loadPolicy, makeRequest, MAX_EXCERPT,
   MAX_INPUT, parseResult, presentNotes, RequestGate, savePolicy } from './core/model.ts';
 import { FixtureTransport, SCENARIOS } from './core/fixtures.ts';
+import { HostFlowLab } from './host/HostFlowLab.tsx';
+import { StudyMaterialsPanel } from './study/StudyMaterialsPanel.tsx';
 
 const fixtureTransport = new FixtureTransport();
 function initialPreferences() {
@@ -23,12 +25,14 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
   const [policy, setPolicy] = useState<LearningPolicy>(initial.policy);
   const [remember, setRemember] = useState(initial.remember);
   const [sourceEnabled, setSourceEnabled] = useState(false);
+  const [sourceResetKey, setSourceResetKey] = useState(0);
   const [source, setSource] = useState<StudySource>({ title: '', section: '', excerpt: '' });
   const [result, setResult] = useState<CorrectionResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [ready, setReady] = useState(false);
+  const [hostEpoch, setHostEpoch] = useState(0);
   const gate = useRef(new RequestGate());
 
   useEffect(() => {
@@ -49,7 +53,7 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
     setRemember(enabled);
     try {
       const ok = enabled ? savePolicy(window.localStorage, policy) : clearPolicy(window.localStorage);
-      setNotice(ok ? (enabled ? '학습 설정만 이 기기에 저장합니다. 원문과 자료는 저장하지 않습니다.' : '저장된 학습 설정을 삭제했습니다.')
+      setNotice(ok ? (enabled ? '학습 설정을 저장했습니다. 내 학습 자료 저장은 별도 설정입니다.' : '저장된 학습 설정을 삭제했습니다.')
         : '브라우저 저장소를 사용할 수 없습니다.');
     } catch { setNotice('브라우저 저장소를 사용할 수 없습니다.'); }
   }
@@ -76,6 +80,8 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
     catch { setNotice('복사 권한이 없습니다. 교정문을 직접 선택해 복사하세요.'); }
   }
   function reset() {
+    setHostEpoch(value => value + 1);
+    setSourceResetKey(value => value + 1);
     invalidate(); setText(native ? '' : SCENARIOS[0].text); setPolicy({ ...DEFAULT_POLICY });
     setSourceEnabled(false); setSource({ title: '', section: '', excerpt: '' }); setRemember(false);
     if (native) return;
@@ -158,20 +164,26 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
           </select>
           <label className="check-row"><input type="checkbox" checked={policy.alternatives} onChange={event => updatePolicy({ ...policy, alternatives: event.target.checked })} /><span>선택 가능한 다른 표현도 보기</span></label>
           <div className="divider" />
-          <label className="check-row source-toggle"><input type="checkbox" checked={sourceEnabled} onChange={event => { invalidate(); setSourceEnabled(event.target.checked); }} /><span>지금 공부하는 자료 추가</span></label>
+          <label className="check-row source-toggle"><input type="checkbox" checked={sourceEnabled} onChange={event => { invalidate(); setSourceResetKey(value => value + 1); setSourceEnabled(event.target.checked); }} /><span>지금 공부하는 자료 추가</span></label>
           <p className="hint">{native ? `활성화하면 자료 제목·단원·발췌문도 원문과 함께 호스트로 전달되고, 동의 후 ${providerName}에게 전송됩니다.` : '발췌문을 요청 데이터로 준비합니다. 샘플 피드백에는 적용되지 않으며, 외부로 전송하지 않습니다.'}</p>
           {sourceEnabled && <div className="source-fields">
-            <label className="field-label" htmlFor="source-title">자료 제목</label><input id="source-title" maxLength={160} value={source.title} placeholder="예: 내가 공부하는 교재" onChange={event => { invalidate(); setSource({ ...source, title: event.target.value }); }} />
-            <label className="field-label" htmlFor="source-section">단원·페이지 (선택)</label><input id="source-section" maxLength={160} value={source.section} placeholder="예: Unit 3 · p. 24" onChange={event => { invalidate(); setSource({ ...source, section: event.target.value }); }} />
-            <label className="field-label" htmlFor="source-excerpt">직접 발췌한 학습 내용</label><textarea id="source-excerpt" maxLength={MAX_EXCERPT} value={source.excerpt} placeholder="연습하려는 표현이나 설명을 붙여 넣으세요." onChange={event => { invalidate(); setSource({ ...source, excerpt: event.target.value }); }} />
+            <label className="field-label" htmlFor="source-title">자료 제목</label><input id="source-title" maxLength={160} value={source.title} placeholder="예: 내가 공부하는 교재" onChange={event => { invalidate(); setSourceResetKey(value => value + 1); setSource({ ...source, title: event.target.value }); }} />
+            <label className="field-label" htmlFor="source-section">단원·페이지 (선택)</label><input id="source-section" maxLength={160} value={source.section} placeholder="예: Unit 3 · p. 24" onChange={event => { invalidate(); setSourceResetKey(value => value + 1); setSource({ ...source, section: event.target.value }); }} />
+            <label className="field-label" htmlFor="source-excerpt">직접 발췌한 학습 내용</label><textarea id="source-excerpt" maxLength={MAX_EXCERPT} value={source.excerpt} placeholder="연습하려는 표현이나 설명을 붙여 넣으세요." onChange={event => { invalidate(); setSourceResetKey(value => value + 1); setSource({ ...source, excerpt: event.target.value }); }} />
             <span className="hint">{source.excerpt.length} / {MAX_EXCERPT} · 이번 세션에만 유지</span>
           </div>}
+          <StudyMaterialsPanel mode={native ? 'native' : 'fixture'} providerName={providerName}
+            selectionResetKey={sourceResetKey} onSourceChange={next => {
+              invalidate(); setSourceEnabled(next !== null);
+              setSource(next ?? { title: '', section: '', excerpt: '' });
+            }} />
           <div className="divider" />
           {!native && <label className="check-row"><input type="checkbox" checked={remember} onChange={event => rememberPolicy(event.target.checked)} /><span>학습 설정만 이 기기에 기억</span></label>}
-          <p className="hint">{native ? '학습 설정은 이번 화면에서만 유지합니다. 이 화면은 원문·발췌문·결과를 기기에 저장하지 않습니다. 제공자의 데이터 처리·보관 정책은 해당 제공자에서 별도로 확인하세요.' : '원문·발췌문·결과는 저장하지 않습니다. 기존 Bex 데이터나 연동 설정도 변경하지 않습니다.'}</p>
+          <p className="hint">{native ? '학습 설정은 이번 화면에서만 유지합니다. 이 화면은 원문·발췌문·결과를 기기에 저장하지 않습니다. 제공자의 데이터 처리·보관 정책은 해당 제공자에서 별도로 확인하세요.' : '교정 원문·결과와 직접 입력한 자료는 저장하지 않습니다. 내 학습 자료는 별도 저장 동의를 켠 경우에만 이 브라우저에 저장됩니다. 기존 Bex 연동 설정은 변경하지 않습니다.'}</p>
           <button className="text-button reset" type="button" onClick={reset}>이 실험실 초기화</button>
         </aside>
       </div>
+      {!native && <HostFlowLab key={hostEpoch} policy={policy} />}
       <details className="developer-panel"><summary>개발자 보기 · 모델에 전달할 요청 구조</summary><p className="hint">{native ? '교정 버튼을 누르면 이 원문·설정·자료가 호스트에 전달됩니다. 제공자 전송에는 별도의 네이티브 동의가 필요합니다.' : '현재는 전송하지 않습니다. 설정과 자료가 UI 밖의 독립 모듈에서 구성되는지 확인하는 화면입니다.'}</p><pre>{preview}</pre></details>
       <footer><span>{native ? 'Bex Native Preview' : 'Bex Web Lab'} · protocol v1</span><span>{native ? `${providerName} / 요청마다 동의 / 자동 교정 요청 없음` : '로컬 전용 / 자동 전송 없음 / 기존 앱 변경 없음'}</span></footer>
     </main>

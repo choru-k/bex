@@ -188,6 +188,123 @@ final class CodexLoopbackListenerTests: XCTestCase {
     XCTAssertEqual(state.connections, 0)
   }
 
+  func testInvalidStatesAndDuplicateParametersDoNotConsumeWaitingLogin() async throws {
+    let (listener, transport, clock) = makeListener()
+    try await listener.start()
+    let callback = Task { try await listener.waitForCallback() }
+    try await waitUntil { await listener.snapshot().callbackWaiting }
+    let attemptDeadline = clock.deadlines[0]
+    let queries = [
+      "code=test", "code=test&state", "code=test&state=", "code=test&state=wrong",
+      "code=test&state=STATE", "code=test&State=state", "code=test&state=state%00",
+      "code=test&state=%2573tate", "error=denied", "error=denied&state=wrong",
+      "code=test&state=state&state=state", "code=test&state=wrong&state=state",
+      "code=test&state=state&st%61te=state", "code=test&code=other&state=state",
+      "code=test&%63ode=other&state=state", "error=a&error=b&state=state",
+      "code=test&state=state&extra=a&extra=b"
+    ]
+    for query in queries {
+      let peer = LoopbackFakeConnection()
+      let offered = await transport.offer(peer)
+      guard offered else {
+        XCTFail("rejected callbacks must return capacity")
+        throw LoopbackTestFailure.registrationDidNotArrive
+      }
+      await peer.completeReceive(callbackRequest(query))
+      let response = try XCTUnwrap(peer.records.responses.first)
+      XCTAssertTrue(response.hasPrefix("HTTP/1.1 400 Bad Request\r\n"))
+      XCTAssertTrue(response.hasSuffix("\r\n\r\nInvalid callback"))
+      XCTAssertFalse(response.contains(query), "do not reflect untrusted query data")
+      var state = await listener.snapshot()
+      XCTAssertFalse(state.admissionClosed)
+      XCTAssertTrue(state.callbackWaiting)
+      XCTAssertTrue(state.listenerPending)
+      XCTAssertEqual(state.retainedHeaderBytes, 0)
+      XCTAssertEqual(transport.cancelCalls, 0)
+      XCTAssertFalse(attemptDeadline.isCancelled, "rejection must preserve the original attempt deadline")
+      XCTAssertEqual(clock.deadlines.filter { $0.delay == 300_000_000_000 }.count, 1,
+        "rejected requests must not extend the attempt lifetime")
+      await peer.emitCancelled()
+      state = await listener.snapshot()
+      XCTAssertEqual(state.connections, 1, "rejected response still owns its pending send")
+      await peer.completeSend()
+      state = await listener.snapshot()
+      XCTAssertEqual(state.connections, 0)
+    }
+    let winner = LoopbackFakeConnection()
+    let offered = await transport.offer(winner)
+    guard offered else {
+      XCTFail("valid retry must be admitted")
+      throw LoopbackTestFailure.registrationDidNotArrive
+    }
+    await winner.completeReceive(Data(request.utf8))
+    let captured = try await callback.value
+    XCTAssertEqual(captured.absoluteString, "http://localhost:1455/auth/callback?code=test&state=state")
+    XCTAssertTrue(winner.records.responses.first?.contains("200 OK") == true)
+    try await stopAndDrain(listener, transport: transport, peers: [winner])
+  }
+
+  func testPercentEncodedStateNameAndValueMatchTheBoundAttempt() async throws {
+    let (listener, transport, _) = makeListener()
+    try await listener.start()
+    let peer = LoopbackFakeConnection()
+    _ = await transport.offer(peer)
+    await peer.completeReceive(callbackRequest("code=test&st%61te=%73tate"))
+    let captured = try await listener.waitForCallback()
+    let items = URLComponents(url: captured, resolvingAgainstBaseURL: false)?.queryItems
+    XCTAssertEqual(items?.first(where: { $0.name == "state" })?.value, "state")
+    XCTAssertTrue(peer.records.responses.first?.contains("200 OK") == true)
+    try await stopAndDrain(listener, transport: transport, peers: [peer])
+  }
+
+  func testMatchingStateOAuthErrorReachesServiceWithoutRequiringCode() async throws {
+    let (listener, transport, _) = makeListener()
+    try await listener.start()
+    let peer = LoopbackFakeConnection()
+    _ = await transport.offer(peer)
+    await peer.completeReceive(callbackRequest("error=access_denied&state=state"))
+    let captured = try await listener.waitForCallback()
+    XCTAssertEqual(captured.query, "error=access_denied&state=state")
+    XCTAssertTrue(peer.records.responses.first?.contains("200 OK") == true)
+    try await stopAndDrain(listener, transport: transport, peers: [peer])
+  }
+
+  func testOldAttemptStateCannotClaimNewListenerBeforeWaiterRegisters() async throws {
+    let transport = LoopbackFakeListener()
+    let listener = CodexLoopbackListener(expectedState: "new-state",
+      makeTransport: { _ in transport.factoryResult() }, scheduler: LoopbackFakeScheduler())
+    try await listener.start()
+    let stale = LoopbackFakeConnection()
+    let current = LoopbackFakeConnection()
+    _ = await transport.offer(stale)
+    _ = await transport.offer(current)
+    await stale.completeReceive(callbackRequest("code=old&state=old-state"))
+    let state = await listener.snapshot()
+    XCTAssertFalse(state.admissionClosed)
+    XCTAssertFalse(state.callbackWaiting)
+    XCTAssertEqual(current.records.cancelCalls, 0, "rejection must preserve another pending connection")
+    await current.completeReceive(callbackRequest("code=new&state=new-state"))
+    let captured = try await listener.waitForCallback()
+    XCTAssertEqual(captured.query, "code=new&state=new-state")
+    XCTAssertTrue(stale.records.responses.first?.contains("400 Bad Request") == true)
+    XCTAssertTrue(current.records.responses.first?.contains("200 OK") == true)
+    try await stopAndDrain(listener, transport: transport, peers: [stale, current])
+  }
+
+  func testEmptyExpectedStateFailsBeforeConstructingTransport() async throws {
+    let transport = LoopbackFakeListener()
+    let clock = LoopbackFakeScheduler()
+    let listener = CodexLoopbackListener(expectedState: "",
+      makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
+    do { try await listener.start(); XCTFail("missing trusted state must fail closed") }
+    catch { XCTAssertEqual(error as? BexError, .oauthFailure("OpenAI Codex callback state is unavailable.")) }
+    XCTAssertEqual(transport.factoryCalls, 0)
+    XCTAssertEqual(transport.startCalls, 0)
+    XCTAssertTrue(clock.deadlines.isEmpty)
+    await assertCancelled { _ = try await listener.waitForCallback() }
+    await listener.stop()
+  }
+
   func testEOFAndErrorNeverPromotePartialHeadersToCallback() async throws {
     let (listener, transport, _) = makeListener()
     try await listener.start()
@@ -266,7 +383,7 @@ final class CodexLoopbackListenerTests: XCTestCase {
   func testAttemptDeadlineExistsWithoutWaiterAndLateReadyCannotReviveListener() async throws {
     let transport = LoopbackFakeListener(automaticallyReady: false)
     let clock = LoopbackFakeScheduler()
-    let listener = CodexLoopbackListener(makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
+    let listener = CodexLoopbackListener(expectedState: "state", makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
     let start = Task { try await listener.start() }
     try await waitUntil { !clock.deadlines.isEmpty }
     await clock.deadlines[0].fire()
@@ -296,7 +413,7 @@ final class CodexLoopbackListenerTests: XCTestCase {
   func testStopBeforeStartNeverConstructsTransportAndRepeatedStopIsImmediate() async throws {
     let transport = LoopbackFakeListener()
     let clock = LoopbackFakeScheduler()
-    let listener = CodexLoopbackListener(makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
+    let listener = CodexLoopbackListener(expectedState: "state", makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
     await listener.stop()
     await listener.stop()
     await assertCancelled { try await listener.start() }
@@ -307,7 +424,7 @@ final class CodexLoopbackListenerTests: XCTestCase {
 
   func testPrecancelledStartNeverConstructsTransport() async throws {
     let transport = LoopbackFakeListener()
-    let listener = CodexLoopbackListener(makeTransport: { _ in transport.factoryResult() }, scheduler: LoopbackFakeScheduler())
+    let listener = CodexLoopbackListener(expectedState: "state", makeTransport: { _ in transport.factoryResult() }, scheduler: LoopbackFakeScheduler())
     let gate = LoopbackTestSignal()
     let start = Task {
       await gate.wait()
@@ -325,7 +442,7 @@ final class CodexLoopbackListenerTests: XCTestCase {
   func testCancelledStartCannotBeRevivedByLateReadyAndStillNeedsTerminalAck() async throws {
     let transport = LoopbackFakeListener(automaticallyReady: false)
     let clock = LoopbackFakeScheduler()
-    let listener = CodexLoopbackListener(makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
+    let listener = CodexLoopbackListener(expectedState: "state", makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
     let start = Task { try await listener.start() }
     try await waitUntil { transport.startCalls == 1 }
     start.cancel()
@@ -361,7 +478,7 @@ final class CodexLoopbackListenerTests: XCTestCase {
     let transport = LoopbackFakeListener()
     let clock = LoopbackFakeScheduler()
     var listener: CodexLoopbackListener? = CodexLoopbackListener(
-      makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
+      expectedState: "state", makeTransport: { _ in transport.factoryResult() }, scheduler: clock)
     weak var weakOwner = listener
     try await listener!.start()
     let peer = LoopbackFakeConnection()
@@ -383,6 +500,10 @@ final class CodexLoopbackListenerTests: XCTestCase {
     XCTAssertTrue(peer.records.responses.isEmpty)
   }
 
+  private func callbackRequest(_ query: String) -> Data {
+    Data("GET /auth/callback?\(query) HTTP/1.1\r\nHost: localhost:1455\r\n\r\n".utf8)
+  }
+
   private var request: String {
     "GET /auth/callback?code=test&state=state HTTP/1.1\r\nHost: localhost:1455\r\n\r\n"
   }
@@ -400,7 +521,7 @@ final class CodexLoopbackListenerTests: XCTestCase {
   private func makeListener() -> (CodexLoopbackListener, LoopbackFakeListener, LoopbackFakeScheduler) {
     let transport = LoopbackFakeListener()
     let clock = LoopbackFakeScheduler()
-    return (CodexLoopbackListener(makeTransport: { _ in transport.factoryResult() }, scheduler: clock), transport, clock)
+    return (CodexLoopbackListener(expectedState: "state", makeTransport: { _ in transport.factoryResult() }, scheduler: clock), transport, clock)
   }
 
   private func waitUntil(_ predicate: () async -> Bool) async throws {
@@ -568,7 +689,7 @@ private final class LoopbackFakeScheduler: CodexLoopbackScheduling, @unchecked S
   var deadlines: [LoopbackFakeDeadline] { lock.withLock { stored } }
   func schedule(after nanoseconds: UInt64, queue: DispatchQueue,
     action: @escaping @Sendable () -> Void) -> any CodexLoopbackDeadline {
-    let deadline = LoopbackFakeDeadline(queue: queue, action: action)
+    let deadline = LoopbackFakeDeadline(delay: nanoseconds, queue: queue, action: action)
     lock.withLock { stored.append(deadline) }
     return deadline
   }
@@ -578,7 +699,13 @@ private final class LoopbackFakeDeadline: CodexLoopbackDeadline, @unchecked Send
   private let queue: DispatchQueue
   private let action: @Sendable () -> Void
   private var cancelled = false
-  init(queue: DispatchQueue, action: @escaping @Sendable () -> Void) { self.queue = queue; self.action = action }
+  let delay: UInt64
+  var isCancelled: Bool { lock.withLock { cancelled } }
+  init(delay: UInt64, queue: DispatchQueue, action: @escaping @Sendable () -> Void) {
+    self.delay = delay
+    self.queue = queue
+    self.action = action
+  }
   func cancel() { lock.withLock { cancelled = true } }
   func fire(evenIfCancelled: Bool = false) async {
     await withCheckedContinuation { continuation in

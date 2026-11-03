@@ -105,6 +105,7 @@ actor HookInstallationManager: HookInstallationManaging {
   private let embeddedHelperURL: URL
   private let supportDirectory: URL
   private let signatureVerifier: @Sendable (URL) throws -> Void
+  private let helperContractReader: @Sendable (URL) throws -> HookHelperContract
   private let transactionFaultInjector: @Sendable (Int, URL?) throws -> Void
   private var preparedTransactions: [UUID: PreparedTransaction] = [:]
 
@@ -117,6 +118,7 @@ actor HookInstallationManager: HookInstallationManaging {
     supportDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
       .appendingPathComponent("Library/Application Support/Bex", isDirectory: true),
     signatureVerifier: @escaping @Sendable (URL) throws -> Void = HookInstallationManager.verifyHelperSignature,
+    helperContractReader: @escaping @Sendable (URL) throws -> HookHelperContract = HookInstallationManager.readHelperContract,
     transactionFaultInjector: @escaping @Sendable (Int, URL?) throws -> Void = { _, _ in }
   ) {
     self.fileManager = fileManager
@@ -125,6 +127,7 @@ actor HookInstallationManager: HookInstallationManaging {
     self.embeddedHelperURL = embeddedHelperURL
     self.supportDirectory = supportDirectory
     self.signatureVerifier = signatureVerifier
+    self.helperContractReader = helperContractReader
     self.transactionFaultInjector = transactionFaultInjector
   }
 
@@ -315,12 +318,14 @@ actor HookInstallationManager: HookInstallationManaging {
     _ operation: HookInstallationOperation,
     for descriptor: HookIntegrationDescriptor
   ) async throws -> HookInstallationReview {
-    try signatureVerifier(embeddedHelperURL)
-    guard case .supported = descriptor.validation else {
-      if case let .unavailable(reason) = descriptor.validation {
-        throw BexError.storageFailure(reason)
+    if operation != .uninstall { try signatureVerifier(embeddedHelperURL) }
+    if operation != .uninstall {
+      guard case .supported = descriptor.validation else {
+        if case let .unavailable(reason) = descriptor.validation {
+          throw BexError.storageFailure(reason)
+        }
+        throw BexError.storageFailure("This integration target is unavailable.")
       }
-      throw BexError.storageFailure("This integration target is unavailable.")
     }
     let transaction = try makePreparedTransaction(operation: operation, descriptor: descriptor)
     preparedTransactions[transaction.review.id] = transaction
@@ -331,7 +336,14 @@ actor HookInstallationManager: HookInstallationManaging {
     guard let transaction = preparedTransactions.removeValue(forKey: reviewID) else {
       throw BexError.storageFailure("This integration review is stale or was already applied.")
     }
-    try signatureVerifier(embeddedHelperURL)
+    if transaction.review.operation != .uninstall {
+      try signatureVerifier(embeddedHelperURL)
+      guard let helperWrite = transaction.writes.first(where: {
+        $0.url == transaction.review.descriptor.helperURL
+      }), try Data(contentsOf: embeddedHelperURL) == helperWrite.after else {
+        throw BexError.storageFailure("Nothing changed because the embedded helper changed after review.")
+      }
+    }
     return try applyPreparedTransaction(transaction)
   }
 
@@ -410,6 +422,14 @@ actor HookInstallationManager: HookInstallationManaging {
         return .needsRepair("The Bex-owned hook fragment is missing or changed.")
       }
     }
+    do {
+      guard try ownedHelperURL(for: entry) == descriptor.helperURL else {
+        return .needsRepair("The immutable Bex hook helper path does not match its digest.")
+      }
+      try validateNoSymlinkAncestors(descriptor.helperURL)
+    } catch {
+      return .needsRepair("The immutable Bex hook helper path is unsafe.")
+    }
     guard let helper = try? Data(contentsOf: descriptor.helperURL),
       Self.digest(helper) == entry.helperDigest,
       fileManager.isExecutableFile(atPath: descriptor.helperURL.path)
@@ -421,9 +441,27 @@ actor HookInstallationManager: HookInstallationManaging {
     } catch {
       return .needsRepair("The immutable Bex hook helper signature is invalid.")
     }
-    if let embedded = try? Data(contentsOf: embeddedHelperURL),
-      Self.digest(embedded) != entry.helperDigest
-    {
+    // Content addressing protects the installed bytes, not their compatibility. A rebuild
+    // alone must not change the trusted command or invalidate its post-install heartbeat.
+    guard let embedded = try? Data(contentsOf: embeddedHelperURL) else {
+      return .unavailable("The embedded Bex hook helper is missing.")
+    }
+    let embeddedDigest = Self.digest(embedded)
+    do {
+      let installedContract = try verifiedHelperContract(
+        at: descriptor.helperURL, expectedDigest: Self.digest(helper)
+      )
+      // Even identical packaged bytes must satisfy this app's requirements. A stale
+      // packaging artifact is not compatibility evidence just because its hash matches.
+      let embeddedContract = embeddedDigest == entry.helperDigest
+        ? installedContract
+        : (try verifiedHelperContract(at: embeddedHelperURL, expectedDigest: embeddedDigest))
+      guard installedContract.satisfiesCurrentApp, embeddedContract.satisfiesCurrentApp else {
+        return .updateAvailable
+      }
+    } catch {
+      // Missing/invalid signed metadata cannot establish compatibility. No files are
+      // rewritten; the existing reviewed Update flow is the only migration path.
       return .updateAvailable
     }
     let heartbeat = heartbeatDate(for: descriptor.id)
@@ -442,19 +480,9 @@ actor HookInstallationManager: HookInstallationManaging {
   }
 
   func refreshInstalledHelper() async throws {
-    let statuses = [
-      await status(for: .claudeCode),
-      await status(for: .codex),
-    ]
-    guard statuses.contains(where: {
-      switch $0 {
-      case .notInstalled, .unavailable: false
-      default: true
-      }
-    }) else {
-      return
-    }
-    try refreshHelper()
+    // Kept for the app's launch hook. Launching or updating the UI is never permission to
+    // replace an installed executable, edit host configuration, or reset host trust.
+    // status(for:) is read-only; all helper changes require prepare + explicit Apply.
   }
 
   static func shellQuote(_ value: String) -> String {
@@ -648,9 +676,24 @@ actor HookInstallationManager: HookInstallationManaging {
       throw BexError.storageFailure("The embedded Bex hook helper is missing.")
     }
     let digest = Self.digest(try Data(contentsOf: embeddedHelperURL))
-    return supportDirectory
+    return immutableHelperURL(digest: digest)
+  }
+
+  private func immutableHelperURL(digest: String) -> URL {
+    supportDirectory
       .appendingPathComponent("bin/\(digest)", isDirectory: true)
       .appendingPathComponent(HookProtocolConstants.helperName)
+  }
+
+  private func ownedHelperURL(for entry: Manifest.Entry) throws -> URL {
+    guard let path = entry.helperPath else { return stableHelperURL }
+    guard let digest = entry.helperDigest, digest.count == 64,
+      digest.allSatisfy({ "0123456789abcdef".contains($0) }),
+      path == immutableHelperURL(digest: digest).path
+    else {
+      throw BexError.storageFailure("The owned helper path does not match its content digest.")
+    }
+    return immutableHelperURL(digest: digest)
   }
 
   private func exactAbsoluteDirectoryURL(_ path: String, field: String) throws -> URL {
@@ -735,27 +778,51 @@ actor HookInstallationManager: HookInstallationManaging {
     operation: HookInstallationOperation,
     descriptor: HookIntegrationDescriptor
   ) throws -> PreparedTransaction {
-    let helperData = try Data(contentsOf: embeddedHelperURL)
-    let helperDigest = Self.digest(helperData)
     var manifest = try loadManifest()
     let existingEntry = manifest.entries[descriptor.id]
     let configurationAliasIdentity = try configurationAliasIdentity(for: descriptor)
-    let resolvedHelperURL = try contentAddressedHelperURL()
-    let acceptsLegacyUninstall =
-      operation == .uninstall
-      && existingEntry?.helperPath == nil
-      && descriptor.helperURL == stableHelperURL
-    guard descriptor.helperURL == resolvedHelperURL || acceptsLegacyUninstall else {
+    let ownedHelper = try existingEntry.map { try ownedHelperURL(for: $0) }
+    if let existingEntry {
+      guard (existingEntry.client ?? PromptClient(rawValue: descriptor.id)) == descriptor.client,
+        existingEntry.destination == nil || existingEntry.destination == descriptor.configurationURL.path
+      else {
+        throw BexError.storageFailure("The integration target changed; resolve it again.")
+      }
+    }
+    let helperData = operation == .uninstall ? Data() : (try Data(contentsOf: embeddedHelperURL))
+    let helperDigest = Self.digest(helperData)
+    let resolvedHelperURL = operation == .uninstall ? ownedHelper : immutableHelperURL(digest: helperDigest)
+    guard let resolvedHelperURL,
+      descriptor.helperURL == resolvedHelperURL || descriptor.helperURL == ownedHelper
+        || (operation == .uninstall && descriptor.helperURL == (try? contentAddressedHelperURL()))
+    else {
       throw BexError.storageFailure("The resolved helper changed; resolve the integration again.")
     }
+    // Settings may hold the installed descriptor across an app rebuild. Updates use the
+    // newly reviewed embedded bytes; uninstalls always remove the actually owned helper.
+    let descriptor = HookIntegrationDescriptor(
+      id: descriptor.id, client: descriptor.client, profile: descriptor.profile,
+      executableURL: descriptor.executableURL, workingDirectory: descriptor.workingDirectory,
+      configurationURL: descriptor.configurationURL, gateURL: descriptor.gateURL,
+      helperURL: resolvedHelperURL, capabilityVersion: descriptor.capabilityVersion,
+      validation: descriptor.validation
+    )
     let configExists = fileManager.fileExists(atPath: descriptor.configurationURL.path)
     let currentConfig = configExists ? try Data(contentsOf: descriptor.configurationURL) : nil
     let currentMode = UInt16(try fileMode(at: descriptor.configurationURL, fallback: 0o600))
     var writes: [PreparedWrite] = []
     var proposedConfig: Data?
+    var retainedBaseline = existingEntry == nil ? currentConfig : existingEntry?.baseline
+    var baselineFileDidNotExist = existingEntry?.fileDidNotExist ?? !configExists
+    var baselineMode = existingEntry?.mode ?? currentMode
 
     switch operation {
     case .install, .update, .repair:
+      guard try verifiedHelperContract(
+        at: embeddedHelperURL, expectedDigest: helperDigest
+      ).satisfiesCurrentApp else {
+        throw BexError.storageFailure("The embedded helper is not compatible with this app.")
+      }
       switch descriptor.client {
       case .ohMyPi:
         proposedConfig = try renderOMPGate(descriptor: descriptor, helperDigest: helperDigest)
@@ -770,18 +837,26 @@ actor HookInstallationManager: HookInstallationManaging {
             helperURL: oldHelperURL
           )
         }
+        if let existingEntry, currentConfig.map(Self.digest) != existingEntry.postInstallDigest {
+          // A user edited host-owned JSON after the last Apply. Retain those edits as
+          // the next uninstall baseline, excluding only the old Bex-owned fragment.
+          retainedBaseline = try encodedJSONObject(root)
+          baselineFileDidNotExist = false
+          baselineMode = currentMode
+        } else if existingEntry != nil, baselineMode != currentMode {
+          baselineMode = currentMode
+        }
         try addBexHandler(to: &root, client: descriptor.client, helperURL: descriptor.helperURL)
         proposedConfig = try encodedJSONObject(root)
       }
       guard let proposedConfig else {
         throw BexError.storageFailure("Bex could not render the integration artifact.")
       }
-      let baseline = existingEntry?.baseline ?? currentConfig
       let entry = Manifest.Entry(
-        baseline: baseline,
-        fileDidNotExist: existingEntry?.fileDidNotExist ?? !configExists,
+        baseline: retainedBaseline,
+        fileDidNotExist: baselineFileDidNotExist,
         postInstallDigest: Self.digest(proposedConfig),
-        mode: existingEntry?.mode ?? currentMode,
+        mode: baselineMode,
         integrationID: descriptor.id,
         client: descriptor.client,
         destination: descriptor.configurationURL.path,
@@ -970,6 +1045,17 @@ actor HookInstallationManager: HookInstallationManaging {
           for: write,
           expected: transaction.targetIdentities[write.url.path]
         )
+        if write.before == write.after,
+          write.before != nil,
+          try fileMode(at: write.url, fallback: write.mode) == write.mode
+        {
+          guard try Data(contentsOf: write.url) == write.before else {
+            throw BexError.storageFailure("Nothing changed because an unchanged artifact drifted after review.")
+          }
+          // A reviewed keep is a real no-op, including an existing helper shared by
+          // another integration. Preserve its inode rather than atomically rewriting it.
+          continue
+        }
         let missingDirectories = missingParentDirectories(for: write.url)
         for directory in missingDirectories {
           try validateIdentities(runtimeAncestorIdentities)
@@ -1161,7 +1247,7 @@ actor HookInstallationManager: HookInstallationManaging {
       case (nil, .some): change = .create
       case (.some, nil): change = .delete
       case let (.some(beforeData), .some(afterData)):
-        change = beforeData == afterData ? .keep : .replace
+        change = beforeData == afterData && before.mode == after.mode ? .keep : .replace
       case (nil, nil): change = .keep
       }
       actions.append(
@@ -1381,6 +1467,11 @@ actor HookInstallationManager: HookInstallationManaging {
   }
 
   static func verifyHelperSignature(_ url: URL) throws {
+    _ = try verifiedHelperStaticCode(url)
+  }
+
+  /// Keep validity, signer identity, and metadata tied to one Code Signing object.
+  private static func verifiedHelperStaticCode(_ url: URL) throws -> SecStaticCode {
     var staticCode: SecStaticCode?
     let createStatus = SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode)
     guard createStatus == errSecSuccess, let staticCode else {
@@ -1402,13 +1493,14 @@ actor HookInstallationManager: HookInstallationManaging {
     let identifier = dictionary[kSecCodeInfoIdentifier as String] as? String
     let teamID = dictionary[kSecCodeInfoTeamIdentifier as String] as? String
     if identifier == HookProtocolConstants.helperName, teamID == "ESURPGU29C" {
-      return
+      return staticCode
     }
 
     #if DEBUG
       guard isBundledAdHocDebugHelper(url, helperInformation: dictionary) else {
         throw BexError.storageFailure("The embedded hook signer identity does not match Bex.")
       }
+      return staticCode
     #else
       throw BexError.storageFailure("The embedded hook signer identity does not match Bex.")
     #endif
@@ -1492,6 +1584,19 @@ actor HookInstallationManager: HookInstallationManaging {
     guard fileManager.fileExists(atPath: embeddedHelperURL.path) else {
       throw BexError.storageFailure("The embedded Bex hook helper is missing.")
     }
+    try signatureVerifier(embeddedHelperURL)
+    let data = try Data(contentsOf: embeddedHelperURL)
+    guard try verifiedHelperContract(at: embeddedHelperURL, expectedDigest: Self.digest(data)).satisfiesCurrentApp else {
+      throw BexError.storageFailure("The embedded helper is not compatible with this app.")
+    }
+    if fileManager.fileExists(atPath: stableHelperURL.path) {
+      try validateNoSymlinkAncestors(stableHelperURL)
+      try signatureVerifier(stableHelperURL)
+      guard try Data(contentsOf: stableHelperURL) == data else {
+        throw BexError.storageFailure("Review an Update or Repair before replacing the installed helper.")
+      }
+      return
+    }
     let directory = stableHelperURL.deletingLastPathComponent()
     try fileManager.createDirectory(
       at: directory,
@@ -1499,30 +1604,52 @@ actor HookInstallationManager: HookInstallationManaging {
       attributes: [.posixPermissions: 0o700]
     )
     chmod(directory.path, 0o700)
-    let data = try Data(contentsOf: embeddedHelperURL)
     try safeWrite(data, to: stableHelperURL, expected: nil, mode: 0o755)
   }
 
   private func helperProtocolMatches() -> Bool {
-    let process = Process()
-    let output = Pipe()
-    process.executableURL = stableHelperURL
-    process.arguments = ["--self-check"]
-    process.standardOutput = output
-    process.standardError = Pipe()
-    do {
-      try process.run()
-      process.waitUntilExit()
-      let data = output.fileHandleForReading.readDataToEndOfFile()
-      guard process.terminationStatus == 0,
-        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-      else {
-        return false
-      }
-      return object["protocolVersion"] as? Int == HookProtocolConstants.version
-    } catch {
-      return false
+    guard let bytes = try? Data(contentsOf: stableHelperURL) else { return false }
+    return (try? verifiedHelperContract(
+      at: stableHelperURL, expectedDigest: Self.digest(bytes)
+    ).satisfiesCurrentApp) == true
+  }
+
+  private func verifiedHelperContract(at url: URL, expectedDigest: String) throws -> HookHelperContract {
+    try validateNoSymlinkAncestors(url)
+    guard let identity = try pathIdentity(at: url, expectedDirectory: false),
+      Self.digest(try Data(contentsOf: url)) == expectedDigest,
+      fileManager.isExecutableFile(atPath: url.path)
+    else {
+      throw BexError.storageFailure("The Bex helper changed before its compatibility check.")
     }
+    try signatureVerifier(url)
+    let contract = try helperContractReader(url)
+    try validateNoSymlinkAncestors(url)
+    guard try pathIdentity(at: url, expectedDirectory: false) == identity,
+      Self.digest(try Data(contentsOf: url)) == expectedDigest
+    else {
+      throw BexError.storageFailure("The Bex helper changed during its compatibility check.")
+    }
+    return contract
+  }
+
+  /// Read the contract sealed into the Mach-O's __info_plist by code signing. Never run
+  /// an installed helper merely to discover its version, even when its signature is valid.
+  static func readHelperContract(at url: URL) throws -> HookHelperContract {
+    let staticCode = try verifiedHelperStaticCode(url)
+    var information: CFDictionary?
+    guard SecCodeCopySigningInformation(staticCode, [], &information) == errSecSuccess,
+      let dictionary = information as? [String: Any],
+      let propertyList = dictionary[kSecCodeInfoPList as String] as? [String: Any],
+      let contract = propertyList["BexHelperContract"] as? [String: Any]
+    else {
+      throw BexError.storageFailure("The signed Bex helper compatibility contract is missing or invalid.")
+    }
+    let data = try PropertyListSerialization.data(fromPropertyList: contract, format: .binary, options: 0)
+    guard data.count <= 16_384 else {
+      throw BexError.storageFailure("The signed Bex helper compatibility contract is too large.")
+    }
+    return try PropertyListDecoder().decode(HookHelperContract.self, from: data)
   }
 
   private func heartbeatDate(for client: PromptClient) -> Date? {

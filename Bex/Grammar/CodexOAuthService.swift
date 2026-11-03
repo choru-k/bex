@@ -42,7 +42,7 @@ actor CodexOAuthService {
   private let keychain: KeychainStore
   private let transport: any HTTPTransport
   private let timeout: TimeInterval
-  private let makeListener: @Sendable () -> any CodexOAuthListening
+  private let makeListener: @Sendable (String) -> any CodexOAuthListening
   // Set before the first suspension, including while the shared login token is pending.
   private var currentAttemptID: UUID?
   private var activeAttempt: LoginAttempt?
@@ -51,8 +51,8 @@ actor CodexOAuthService {
     keychain: KeychainStore,
     transport: any HTTPTransport,
     timeout: TimeInterval = 30,
-    makeListener: @escaping @Sendable () -> any CodexOAuthListening = {
-      CodexLoopbackListener()
+    makeListener: @escaping @Sendable (String) -> any CodexOAuthListening = { expectedState in
+      CodexLoopbackListener(expectedState: expectedState)
     }
   ) {
     self.keychain = keychain
@@ -73,7 +73,8 @@ actor CodexOAuthService {
     do {
       try requireCurrentAttempt(id)
       let baseFlow = try Self.makeFlow(loopbackAvailable: false)
-      let listener = makeListener()
+      // Bind this attempt before startup; there is no mutable listener state handoff.
+      let listener = makeListener(baseFlow.state)
       activeAttempt = LoginAttempt(id: id, token: token, flow: baseFlow, listener: listener)
       return try await withTaskCancellationHandler {
         do {

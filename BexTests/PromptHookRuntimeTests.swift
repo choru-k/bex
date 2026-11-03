@@ -1388,6 +1388,7 @@ private struct InstallerFixture {
       embeddedHelperURL: embedded,
       supportDirectory: supportDirectory,
       signatureVerifier: { _ in },
+      helperContractReader: { _ in .current },
       transactionFaultInjector: transactionFaultInjector
     )
   }

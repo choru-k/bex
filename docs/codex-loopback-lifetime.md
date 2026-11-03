@@ -13,8 +13,12 @@ Mac/device actions, application activation, CI or project metadata changes were 
 with an explicitly `@unchecked Sendable` owner, rather than an actor that creates
 an unbounded Task for every Network callback. All mutable state, transport callbacks,
 parsing, admission and continuation ownership run on that queue. Immutable settings
-are initialized before publication. Deinitialization can only occur after the last
-strong owner/queue operation releases the object; it requests cancellation, not drain.
+are initialized before publication. Both production and synthetic-transport initializers
+require the active attempt's nonoptional `expectedState`, with no default or bypass.
+`CodexOAuthService` supplies each newly generated `baseFlow.state` to its listener
+factory before calling `start()`. Empty configuration fails closed before any transport
+is constructed. No listener can be rebound to another attempt. Deinitialization can
+only occur after the last strong owner/queue operation releases the object; it requests cancellation, not drain.
 
 The Network adapter requires `.loopback` interface type. This is an interface
 restriction, not an IPv4-only bind. The issuer redirect remains exactly
@@ -71,17 +75,32 @@ and its encoded path must be exactly `/auth/callback`. HTTP/1.1 requires a singl
 loopback Host header for the same port; localhost, IPv4 loopback and IPv6 loopback
 forms are accepted. HTTP/1.0 can omit Host. Field names/values are syntactically
 checked; nonzero Content-Length and Transfer-Encoding are rejected. No request body
-or pipeline is served. OAuth query/state/code/error validation stays in the service.
-As before, the first syntactically valid callback closes the listener before the service
-validates its state/code. A local sender with invalid state can still force a retry or
-manual callback. This is not general availability protection against local software,
-and it does not change the fixed outbound token endpoint.
+or pipeline is served.
+
+Before claiming a callback, the listener independently parses decoded query items.
+There must be exactly one nonempty `state` matching the immutable expected state's
+UTF-8 bytes; missing, valueless, empty or mismatched state gets a fixed 400 response.
+Every duplicate decoded parameter name is also rejected, matching the service's
+existing duplicate policy, including percent-encoded duplicates. Percent-encoded
+names and values that decode to a unique matching state remain compatible. Rejection
+closes only that connection after its response drains; it does not capture a URL,
+resume the callback waiter, cancel siblings, close admission, or reset the attempt
+deadline. A later valid callback can still complete the same login.
+
+The service retains its own independent query/state/code/error validation before any
+token exchange. A unique matching-state OAuth error is delivered to that unchanged
+error handler without requiring a code. Manual-paste validation and retry behavior
+remain unchanged. State binding prevents unrelated callbacks from consuming the login;
+it is not general availability protection against local software, a leaked state,
+connection saturation or the already bounded attempt timeout. The fixed outbound token
+endpoint and registered redirect URI are unchanged.
 
 ## Terminal ownership
 
-Success claims a single callback URL and closes admission before any send or waiter
-resumption. Its HTTP 200 only acknowledges callback receipt and asks the user to finish
-sign-in in Bex; it does not claim state validation, token exchange or storage committed.
+Success claims a single state-matching callback URL and closes admission before any
+send or waiter resumption. Its HTTP 200 only acknowledges callback receipt and asks the
+user to finish sign-in in Bex; it does not claim successful authorization, token exchange
+or committed storage.
 It cancels the listening socket and sibling connections, and tracks the
 winning response until its send completion requests cancellation. A captured callback
 can still be read after the expected listener-cancelled event, unless explicit stop
@@ -113,20 +132,28 @@ requests cleanup but cannot substitute for the explicit asynchronous stop barrie
 
 ## Authored synthetic coverage
 
-`CodexLoopbackListenerTests` adds 19 socket-free methods covering delimiter split
+`CodexLoopbackListenerTests` contains 24 socket-free methods covering delimiter split
 positions, exact/overflow header bounds, oversized delivered chunks, malformed URL
 and HTTP syntax, loopback Host forms, finite queued accepts, conservative credit return,
 listener/connection/I/O drain ordering, simultaneous stop waiters, success with pending
 siblings/accepts/sends, EOF/errors, header/send/attempt deadlines, stale timer tokens,
 duplicate/cancelled waits, stop before start, pre-cancelled start, late-ready events,
-listener failure and owner deallocation/weak-handler fallback. Fakes explicitly hold
-terminal events and I/O completions so cancellation is never used as an acknowledgement.
+listener failure and owner deallocation/weak-handler fallback. Five state-admission
+methods cover invalid/missing/empty/duplicate/encoded state and duplicate other keys,
+retained waiter and drain ownership, unextended attempt deadline, a valid subsequent
+callback, encoded valid state, matching-state OAuth errors, stale previous-attempt
+state with another pending connection, and empty configuration before transport creation.
+Fakes explicitly hold terminal events and I/O completions so cancellation is never used as an acknowledgement.
 Test registration helpers have a bounded yield observation and throw on failure rather
 than continuing into a pending operation after a failed registration assertion. Their
 scheduling assumptions, including those bounded observation helpers, remain unverified.
 
-The existing two stop/pre-cancelled-wait tests in `CodexAccountLifecycleTests` still
-exercise the actual listener without calling start. All new tests and changed Swift
+`CodexAccountLifecycleTests` contains 33 methods, including three new methods for
+factory/start ordering with each generated state, independent service validation even
+when a synthetic listener bypasses admission, and unchanged OAuth-error/manual-retry
+handling. The two existing stop/pre-cancelled-wait tests still exercise the actual
+listener without calling start. The state-binding change was authored against local
+baseline `14a7f47ffc44dccc7e71de6a00e363189324e596`. All new tests and changed Swift
 remain **UNCOMPILED / UNRUN**. Diff checks, static inspection and any unrelated Node
 checks are not Swift compilation, XCTest execution or Network runtime proof. Normal
 application-hosted tests can launch the application, so these notes do not authorize

@@ -12,6 +12,8 @@ for (const extension of ['.ts', '.tsx']) require.extensions[extension] = (module
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, file);
 };
+// CSS is bundled by Vite; this lifecycle harness has no layout engine.
+require.extensions['.css'] = () => {};
 const { JSDOM } = harnessRequire('jsdom');
 const dom = new JSDOM('<html><body></body></html>', { url: 'http://127.0.0.1:5179' });
 for (const key of ['window', 'document', 'HTMLElement', 'Event', 'MutationObserver']) global[key] = dom.window[key];

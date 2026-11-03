@@ -56,7 +56,7 @@ async function main() {
     return;
   }
   if (command === 'test') {
-    await run(process.execPath, ['--experimental-strip-types', '--test', 'tests/core.test.mjs', 'tests/coaching-quality.test.mjs', 'tests/native-smoke.test.mjs', 'tests/native-transport.test.mjs', 'tests/packaged-endpoint.test.mjs', '../scripts/tests/bex-audit-native-resources.test.mjs']);
+    await run(process.execPath, ['--experimental-strip-types', '--test', 'tests/core.test.mjs', 'tests/coaching-quality.test.mjs', 'tests/native-smoke.test.mjs', 'tests/native-transport.test.mjs', 'tests/packaged-endpoint.test.mjs', '../scripts/tests/bex-audit-native-resources.test.mjs', '../scripts/tests/bex-helper-contract.test.mjs', '../scripts/tests/bex-package-native-resources.test.mjs', '../scripts/tests/bex-package-native-resources-adversarial.test.mjs', 'tests/study-materials.test.mjs', 'tests/host-flow.test.mjs']);
     return;
   }
   if (command === 'desktop' && process.platform !== 'darwin') throw new Error('desktop requires macOS. Use dev for the browser lab.');

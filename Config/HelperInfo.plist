@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>bex-hook</string>
+	<key>CFBundleName</key>
+	<string>bex-hook</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>BexHelperContract</key>
+	<dict>
+		<key>contractVersion</key>
+		<integer>1</integer>
+		<key>helper</key>
+		<string>bex-hook</string>
+		<key>protocolVersion</key>
+		<integer>1</integer>
+		<key>runtimeRevision</key>
+		<integer>1</integer>
+		<key>maximumMessageBytes</key>
+		<integer>1048576</integer>
+		<key>capabilities</key>
+		<array>
+			<string>review-v1</string>
+			<string>ack-v1</string>
+			<string>single-use-receipts-v1</string>
+			<string>prompt-gate-v1</string>
+		</array>
+	</dict>
+</dict>
+</plist>

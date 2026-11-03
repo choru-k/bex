@@ -237,7 +237,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([oldListener, newListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     _ = try await oauth.begin()
     let stopGate = CodexRaceSignal()
     await oldListener.pauseStop(until: stopGate)
@@ -266,7 +266,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([oldListener, newListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     let oldBegin = Task { try await oauth.begin() }
     await oldListener.waitUntilStartStarts()
 
@@ -290,7 +290,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([oldListener, newListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     _ = try await oauth.begin()
     let stopGate = CodexRaceSignal()
     await oldListener.pauseStop(until: stopGate)
@@ -343,7 +343,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([oldListener, newListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     let oldFlow = try await oauth.begin()
     let stopGate = CodexRaceSignal()
     await oldListener.pauseStop(until: stopGate)
@@ -369,6 +369,72 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let connected = try await newCompletion.value
     let stored = try await keychain.codexSession()
     XCTAssertEqual(stored, connected)
+  }
+
+  func testBeginPassesEachGeneratedStateToListenerFactoryBeforeStartup() async throws {
+    let binding = CodexStateBindingProbe()
+    let oauth = CodexOAuthService(keychain: makeKeychain(), transport: DeferredCodexTransport(),
+      makeListener: { binding.makeListener(expectedState: $0) })
+    let first = try await oauth.begin()
+    XCTAssertEqual(binding.events, ["construct:\(first.state)", "start:\(first.state)"])
+    XCTAssertFalse(first.state.isEmpty)
+    let second = try await oauth.begin()
+    XCTAssertEqual(binding.events, ["construct:\(first.state)", "start:\(first.state)",
+      "construct:\(second.state)", "start:\(second.state)"])
+    XCTAssertNotEqual(first.state, second.state)
+    XCTAssertTrue(first.loopbackAvailable)
+    XCTAssertTrue(second.loopbackAvailable)
+    let query = URLComponents(url: second.authorizationURL, resolvingAgainstBaseURL: false)?.queryItems
+    XCTAssertEqual(query?.first(where: { $0.name == "state" })?.value, second.state)
+    XCTAssertEqual(query?.first(where: { $0.name == "redirect_uri" })?.value,
+      "http://localhost:1455/auth/callback")
+    await oauth.cancel()
+  }
+
+  func testServiceIndependentlyRejectsUntrustedLoopbackStatesAndAllowsManualRetry() async throws {
+    for suffix in ["", "&state=wrong", "&state=", "&state=wrong&st%61te=wrong"] {
+      let keychain = makeKeychain()
+      let listener = SyntheticCodexListener()
+      let transport = DeferredCodexTransport()
+      let oauth = makeService(keychain: keychain, transport: transport, listener: listener)
+      let flow = try await oauth.begin()
+      // This deliberate fake bypasses the real listener's admission check. The
+      // service must validate independently before any token request or storage.
+      await listener.deliver(URL(string: "http://localhost:1455/auth/callback?code=test" + suffix)!)
+      do { _ = try await oauth.waitForLoopbackCompletion(); XCTFail("service must reject invalid state") }
+      catch {
+        let message = suffix.contains("st%61te")
+          ? "OpenAI Codex callback contains duplicate parameters."
+          : "State mismatch while completing Codex login."
+        XCTAssertEqual(error as? BexError, .oauthFailure(message))
+      }
+      let requests = await transport.recordedRequests()
+      let stored = try await keychain.codexSession()
+      XCTAssertTrue(requests.isEmpty)
+      XCTAssertNil(stored)
+      let completion = Task { try await oauth.completeManual(callbackURL: callback(for: flow)) }
+      await transport.waitForRequests(1)
+      await transport.succeed(0, data: try tokenPayload(marker: "independent-state-check"))
+      _ = try await completion.value
+    }
+  }
+
+  func testMatchingStateOAuthErrorKeepsExistingServiceErrorAndManualRetry() async throws {
+    let keychain = makeKeychain()
+    let listener = SyntheticCodexListener()
+    let transport = DeferredCodexTransport()
+    let oauth = makeService(keychain: keychain, transport: transport, listener: listener)
+    let flow = try await oauth.begin()
+    await listener.deliver(URL(string:
+      "http://localhost:1455/auth/callback?error=access_denied&state=\(flow.state)")!)
+    do { _ = try await oauth.waitForLoopbackCompletion(); XCTFail("OAuth error must not exchange tokens") }
+    catch { XCTAssertEqual(error as? BexError, .oauthFailure("OpenAI Codex login was not completed.")) }
+    let requests = await transport.recordedRequests()
+    XCTAssertTrue(requests.isEmpty)
+    let completion = Task { try await oauth.completeManual(callbackURL: callback(for: flow)) }
+    await transport.waitForRequests(1)
+    await transport.succeed(0, data: try tokenPayload(marker: "error-manual-retry"))
+    _ = try await completion.value
   }
 
   func testDuplicateCallbackParametersFailWithoutNetworkAndAllowValidRetry() async throws {
@@ -421,7 +487,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([SyntheticCodexListener(), SyntheticCodexListener()])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     let oldFlow = try await oauth.begin()
     let newFlow = try await oauth.begin()
     await oauth.cancel(flow: oldFlow)
@@ -525,7 +591,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([firstListener, secondListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     var openCount = 0
     var latestURL: URL?
     let viewModel = makeSettings(keychain: keychain, oauth: oauth) { url in
@@ -558,7 +624,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([firstListener, secondListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     var latestURL: URL?
     let viewModel = makeSettings(keychain: keychain, oauth: oauth) { url in
       latestURL = url
@@ -589,7 +655,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     let listeners = CodexListenerSequence([firstListener, secondListener])
     let transport = DeferredCodexTransport()
     let oauth = CodexOAuthService(
-      keychain: keychain, transport: transport, makeListener: { listeners.next() })
+      keychain: keychain, transport: transport, makeListener: { _ in listeners.next() })
     var latestURL: URL?
     let viewModel = makeSettings(keychain: keychain, oauth: oauth) { url in
       latestURL = url
@@ -710,7 +776,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     // Never call start(): this exercises the real terminal-state/continuation code
     // without constructing NWListener. A tiny timeout makes the old bug fail rather
     // than leave a five-minute waiter if this regression is reintroduced.
-    let listener = CodexLoopbackListener(timeoutNanoseconds: 1)
+    let listener = CodexLoopbackListener(expectedState: "synthetic-state", timeoutNanoseconds: 1)
     await listener.stop()
     do {
       _ = try await listener.waitForCallback()
@@ -721,7 +787,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
   }
 
   func testRealListenerPrecancelledWaitFailsWithoutOpeningSocket() async throws {
-    let listener = CodexLoopbackListener(timeoutNanoseconds: 1)
+    let listener = CodexLoopbackListener(expectedState: "synthetic-state", timeoutNanoseconds: 1)
     let gate = CodexRaceSignal()
     let completion = Task {
       await gate.wait()
@@ -766,7 +832,7 @@ final class CodexAccountLifecycleTests: XCTestCase {
     transport: DeferredCodexTransport,
     listener: SyntheticCodexListener = SyntheticCodexListener()
   ) -> CodexOAuthService {
-    CodexOAuthService(keychain: keychain, transport: transport, makeListener: { listener })
+    CodexOAuthService(keychain: keychain, transport: transport, makeListener: { _ in listener })
   }
 
   private func callback(for flow: CodexOAuthFlow) -> String {
@@ -864,6 +930,7 @@ private actor DeferredCodexTransport: HTTPTransport {
 
 private actor SyntheticCodexListener: CodexOAuthListening {
   private let startFails: Bool
+  private let onStart: @Sendable () -> Void
   private let startStarted = CodexRaceSignal()
   private let stopStarted = CodexRaceSignal()
   private let callbackWaits = CodexRaceSignal()
@@ -876,9 +943,13 @@ private actor SyntheticCodexListener: CodexOAuthListening {
   private var stopCalls = 0
   private var stopCallWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
 
-  init(startFails: Bool = false) { self.startFails = startFails }
+  init(startFails: Bool = false, onStart: @escaping @Sendable () -> Void = {}) {
+    self.startFails = startFails
+    self.onStart = onStart
+  }
 
   func start() async throws {
+    onStart()
     await startStarted.signal()
     await startGate?.wait()
     // Deliberately returns after stop/cancellation when paused: begin must reject it.
@@ -950,4 +1021,18 @@ private final class CodexListenerSequence: @unchecked Sendable {
     precondition(!listeners.isEmpty)
     return listeners.removeFirst()
   }
+}
+
+/// Captures each immutable factory argument and observes it again at start entry.
+private final class CodexStateBindingProbe: @unchecked Sendable {
+  private let lock = NSLock()
+  private var recordedEvents: [String] = []
+  var events: [String] { lock.withLock { recordedEvents } }
+
+  func makeListener(expectedState: String) -> any CodexOAuthListening {
+    record("construct:\(expectedState)")
+    return SyntheticCodexListener(onStart: { self.record("start:\(expectedState)") })
+  }
+
+  private func record(_ event: String) { lock.withLock { recordedEvents.append(event) } }
 }
