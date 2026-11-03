@@ -8,6 +8,7 @@ import UserNotifications
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var services: AppServices?
+  private var packagedTerminationTask: Task<Void, Never>?
   private var windowCoordinator: WindowCoordinator?
   private var statusItem: NSStatusItem?
   private var hubController: MenuBarHubController?
@@ -237,6 +238,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.runBackgroundAgentNow()
     }
     return coordinator
+  }
+
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    guard let owner = services?.packagedCorrectionWindows else { return .terminateNow }
+    owner.shutdown() // Close admission and revoke synchronously, before yielding.
+    guard owner.hasOutstandingWork else { return .terminateNow }
+    if packagedTerminationTask == nil {
+      packagedTerminationTask = Task { @MainActor in
+        await owner.shutdownAndWait()
+        sender.reply(toApplicationShouldTerminate: true)
+      }
+    }
+    // A non-cooperative provider blocks termination rather than being declared done.
+    return .terminateLater
   }
 
   func applicationWillTerminate(_ notification: Notification) {

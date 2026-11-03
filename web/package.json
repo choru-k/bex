@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5179 --strictPort",
@@ -12,12 +12,13 @@
     "build:native": "tsc -p tsconfig.json && vite build --config vite.native.config.ts",
     "preview": "vite preview --host 127.0.0.1 --port 5180 --strictPort",
     "typecheck": "tsc -p tsconfig.json",
-    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/coaching-quality.test.mjs tests/native-smoke.test.mjs tests/native-transport.test.mjs tests/packaged-endpoint.test.mjs ../scripts/tests/bex-audit-native-resources.test.mjs ../scripts/tests/bex-helper-contract.test.mjs ../scripts/tests/bex-package-native-resources.test.mjs ../scripts/tests/bex-package-native-resources-adversarial.test.mjs tests/study-materials.test.mjs tests/host-flow.test.mjs",
+    "test": "node --experimental-strip-types --test tests/core.test.mjs tests/coaching-quality.test.mjs tests/native-smoke.test.mjs tests/native-transport.test.mjs tests/packaged-endpoint.test.mjs ../scripts/tests/bex-audit-native-resources.test.mjs ../scripts/tests/bex-helper-contract.test.mjs ../scripts/tests/bex-package-native-resources.test.mjs ../scripts/tests/bex-package-native-resources-adversarial.test.mjs tests/study-materials.test.mjs tests/host-flow.test.mjs ../scripts/tests/bex-native-composition-source.test.mjs ../scripts/tests/bex-native-resource-admission.test.mjs tests/personalization-quality.test.mjs tests/study-documents.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium webkit",
     "check": "npm run typecheck && npm test && npm run build"
   },
   "dependencies": {
+    "pdfjs-dist": "6.5.438",
     "react": "19.3.1",
     "react-dom": "19.3.1"
   },

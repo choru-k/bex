@@ -7,11 +7,14 @@ private func wireJSON(_ object: [String: Any]) throws -> String {
 }
 
 private func request(_ text: String = "I is ready.", maxNotes: Int = 1,
-                     alternatives: Bool = true, source: [String: String]? = nil) throws -> BridgeRequest {
+                     alternatives: Bool = true, source: [String: String]? = nil,
+                     explanationLanguage: String? = nil) throws -> BridgeRequest {
+  var policy: [String: Any] = ["vocabulary": "stretch", "maxNotes": maxNotes,
+    "alternatives": alternatives, "focus": "verb-forms"]
+  if let explanationLanguage { policy["explanationLanguage"] = explanationLanguage }
   let data = try JSONSerialization.data(withJSONObject: [
     "protocolVersion": 1, "text": text,
-    "policy": ["vocabulary": "stretch", "maxNotes": maxNotes,
-               "alternatives": alternatives, "focus": "verb-forms"] as [String: Any],
+    "policy": policy,
     "source": source.map { $0 as Any } ?? NSNull(),
   ])
   return try JSONDecoder().decode(BridgeRequest.self, from: data)
@@ -64,6 +67,22 @@ final class NativeStructuredCorrectionProviderTests: XCTestCase {
     let service = try adapter(client)
     do { _ = try await service.correct(input); XCTFail("Expected rejection") }
     catch { /* Entire response rejected; no partial/fabricated feedback. */ }
+  }
+
+  func testExplicitExplanationLanguageAndLegacyAbsenceReachProviderWithoutTranslation() async throws {
+    for language in [nil, "ko", "en"] as [String?] {
+      let client = StructuredFakeClient()
+      _ = try await adapter(client).correct(request(explanationLanguage: language))
+      let sent = await client.messages
+      let message = try payload(XCTUnwrap(sent.last))
+      let policy = try XCTUnwrap(message["policy"] as? [String: Any])
+      XCTAssertEqual(policy["explanationLanguage"] as? String, language)
+      XCTAssertEqual(message["userText"] as? String, "I is ready.")
+    }
+    XCTAssertTrue(NativeStructuredCorrectionProvider.instructions.contains("write note reasons in Korean"))
+    XCTAssertTrue(NativeStructuredCorrectionProvider.instructions.contains("write note reasons in concise English"))
+    XCTAssertTrue(NativeStructuredCorrectionProvider.instructions.contains("Leave already-natural text unchanged"))
+    XCTAssertTrue(NativeStructuredCorrectionProvider.instructions.contains("never apply them to corrected text automatically"))
   }
 
   func testInitializationIsInertAndCodexFailsBeforeFactory() async throws {

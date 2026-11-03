@@ -57,7 +57,8 @@ public final class NativeCorrectionBridge {
             sessionID = message.sessionID
             usedIDs.insert(message.requestID)
             reply(message.requestID, payload: ["kind": "capabilities", "capabilities": [
-                "providerName": providerName, "perRequestConsent": true, "operations": ["correct", "cancel"]
+                "providerName": providerName, "perRequestConsent": true, "operations": ["correct", "cancel"],
+                "explanationLanguages": ["ko", "en"]
             ]])
             return
         }
@@ -232,15 +233,22 @@ public struct BridgeRequest: Decodable, Equatable {
         public let maxNotes: Int
         public let alternatives: Bool
         public let focus: String
-        enum CodingKeys: String, CodingKey { case vocabulary, maxNotes, alternatives, focus }
+        public let explanationLanguage: String?
+        enum CodingKeys: String, CodingKey { case vocabulary, maxNotes, alternatives, focus, explanationLanguage }
         public init(from decoder: Decoder) throws {
-            try exactKeys(decoder, ["vocabulary", "maxNotes", "alternatives", "focus"])
             let c = try decoder.container(keyedBy: CodingKeys.self)
+            // A legacy policy has exactly four fields. Explicit null is not omission.
+            let languagePresent = c.contains(.explanationLanguage)
+            try exactKeys(decoder, languagePresent
+                ? ["vocabulary", "maxNotes", "alternatives", "focus", "explanationLanguage"]
+                : ["vocabulary", "maxNotes", "alternatives", "focus"])
             vocabulary = try c.decode(String.self, forKey: .vocabulary)
             maxNotes = try c.decode(Int.self, forKey: .maxNotes)
             alternatives = try c.decode(Bool.self, forKey: .alternatives)
             focus = try c.decode(String.self, forKey: .focus)
-            guard ["familiar", "stretch", "wide"].contains(vocabulary), (0...2).contains(maxNotes),
+            explanationLanguage = languagePresent ? try c.decode(String.self, forKey: .explanationLanguage) : nil
+            guard explanationLanguage == nil || ["ko", "en"].contains(explanationLanguage!),
+                   ["familiar", "stretch", "wide"].contains(vocabulary), (0...2).contains(maxNotes),
                   ["general", "articles", "verb-forms", "expression"].contains(focus) else { throw BridgeValidation.invalid }
         }
     }

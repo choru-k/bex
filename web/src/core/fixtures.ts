@@ -33,6 +33,7 @@ const FIXTURES: Record<Exclude<ScenarioID, 'failure'>, Omit<CorrectionResult, 'o
 /** Deliberately refuses unknown input. A fixture is not a working grammar model. */
 export class FixtureTransport implements CorrectionTransport {
   readonly kind = 'fixture' as const;
+  readonly explanationLanguages = ['ko', 'en'] as const;
   private readonly delayMs: number;
   constructor(delayMs = 220) { this.delayMs = delayMs; }
   async check(request: CorrectionRequest, signal: AbortSignal): Promise<CorrectionResult> {
@@ -46,6 +47,22 @@ export class FixtureTransport implements CorrectionTransport {
     const scenario = SCENARIOS.find(item => item.text === request.text);
     if (!scenario) throw new Error('현재는 샘플 검증 모드입니다. 위의 샘플을 선택하세요. 실제 AI 교정은 아직 연결되지 않았습니다.');
     if (scenario.id === 'failure') throw new Error('테스트용 실패입니다. 입력은 유지되며 다른 앱으로 전송되지 않습니다.');
-    return structuredClone({ ...FIXTURES[scenario.id], original: request.text });
+    const result = structuredClone({ ...FIXTURES[scenario.id], original: request.text });
+    // Curated variants demonstrate controls, not live or general AI personalization.
+    const englishReasons: Record<string, string> = {
+      makes: 'Use the base verb after would.',
+      'harder to maintain': 'This is an optional alternative. The original wording is also natural.',
+      'need rollback plan': 'Use a before the singular count noun plan when it is not a specific plan.',
+      changes: 'Use the base verb after does. Keep code and paths unchanged.',
+    };
+    for (const note of result.notes) {
+      if (note.kind === 'alternative' && note.before === 'harder to maintain') {
+        note.after = { familiar: 'more work to maintain', stretch: 'more difficult to maintain', wide: 'more demanding to maintain' }[request.policy.vocabulary];
+      }
+      if (request.policy.explanationLanguage === 'en') note.reason = englishReasons[note.before] ?? note.reason;
+    }
+    // Fixed correction stays complete; these controls only change optional teaching.
+    if (!request.policy.alternatives) result.notes = result.notes.filter(note => note.kind === 'correction');
+    return result;
   }
 }

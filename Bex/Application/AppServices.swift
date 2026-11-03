@@ -18,6 +18,8 @@ final class AppServices {
   let hookManager: any HookInstallationManaging
   let promptGateIPC: any PromptGateIPCServicing & HookReviewResponding
   let codexOAuth: CodexOAuthService
+  /// One inert owner; the packaged correction open action remains disabled.
+  let packagedCorrectionWindows: PackagedCorrectionWindowOwner
 
   init(
     preferences: PreferencesStore,
@@ -53,6 +55,9 @@ final class AppServices {
     self.hookManager = hookManager
     self.promptGateIPC = promptGateIPC
     self.codexOAuth = codexOAuth
+    packagedCorrectionWindows = PackagedCorrectionWindowOwner(
+      preferences: preferences, keychain: keychain
+    )
   }
 
   static func production() -> AppServices {

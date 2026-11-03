@@ -6,7 +6,7 @@ import { makeRequest, DEFAULT_POLICY } from '../src/core/model.ts';
 
 const request = () => makeRequest('The tests passes.', DEFAULT_POLICY);
 const result = () => ({ protocolVersion: 1, original: 'The tests passes.', corrected: 'The tests pass.', notes: [], provenance: 'provider' });
-const capabilities = () => ({ providerName: 'Native provider', perRequestConsent: true, operations: ['correct', 'cancel'] });
+const capabilities = () => ({ providerName: 'Native provider', perRequestConsent: true, operations: ['correct', 'cancel'], explanationLanguages: ['ko', 'en'] });
 const signal = () => new AbortController().signal;
 // Shared with the standalone Swift host tests. Passing here executes the renderer,
 // not Swift: native compilation and XCTest remain a separate acceptance gate.
@@ -211,4 +211,34 @@ test('posting failure releases capacity and supports another successful request'
   await assert.rejects(h.transport.check(request(), signal()), /unavailable/);
   h.endpoint.postMessage = json => { h.reply(JSON.parse(json), { kind: 'result', result: result() }); };
   assert.deepEqual(await h.transport.check(request(), signal()), result());
+});
+
+test('legacy host capabilities retain four-field requests and refuse an explicit language before dispatch', async t => {
+  const h = harness(t); const pending = h.transport.connect(signal());
+  const { explanationLanguages: _new, ...legacy } = capabilities();
+  h.reply(h.messages.at(-1), { kind: 'capabilities', capabilities: legacy }); await pending;
+  assert.deepEqual(h.transport.explanationLanguages, []);
+  const before = h.messages.length;
+  await assert.rejects(h.transport.check(makeRequest('The tests passes.', { ...DEFAULT_POLICY, explanationLanguage: 'en' }), signal()), /does not support/);
+  assert.equal(h.messages.length, before);
+  const correction = h.transport.check(request(), signal());
+  assert.deepEqual(Object.keys(h.messages.at(-1).request.policy).sort(), ['alternatives', 'focus', 'maxNotes', 'vocabulary']);
+  h.reply(h.messages.at(-1), { kind: 'result', result: result() }); await correction;
+});
+for (const languageList of [null, [], ['fr'], ['en', 'en'], ['ko', 'en', 'fr'], ['ko', 1], 'en']) {
+  test(`invalid explanation capabilities fail closed: ${JSON.stringify(languageList)}`, async t => {
+    const h = harness(t); const pending = h.transport.connect(signal());
+    h.reply(h.messages.at(-1), { kind: 'capabilities', capabilities: { ...capabilities(), explanationLanguages: languageList } });
+    await assert.rejects(pending, /Invalid native/);
+  });
+}
+test('language capabilities are copied and only advertised choices can be dispatched', async t => {
+  const h = harness(t); const pending = h.transport.connect(signal());
+  h.reply(h.messages.at(-1), { kind: 'capabilities', capabilities: { ...capabilities(), explanationLanguages: ['ko'] } });
+  const connected = await pending; connected.explanationLanguages.push('en');
+  h.transport.explanationLanguages.push('en');
+  assert.deepEqual((await h.transport.connect(signal())).explanationLanguages, ['ko']);
+  const before = h.messages.length;
+  await assert.rejects(h.transport.check(makeRequest('The tests passes.', { ...DEFAULT_POLICY, explanationLanguage: 'en' }), signal()), /does not support/);
+  assert.equal(h.messages.length, before);
 });

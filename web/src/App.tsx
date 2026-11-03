@@ -1,11 +1,13 @@
+import type { ComponentType } from 'react';
 import { useEffect, useRef, useState } from 'react';
-import type { Focus, LearningPolicy, StudySource, Vocabulary } from './core/model.ts';
+import type { Focus, LearningPolicy, StudySource } from './core/model.ts';
 import type { CorrectionResult, CorrectionTransport } from './core/model.ts';
 import { buildCoachContext, clearPolicy, DEFAULT_POLICY, hasSavedPolicy, loadPolicy, makeRequest, MAX_EXCERPT,
   MAX_INPUT, parseResult, presentNotes, RequestGate, savePolicy } from './core/model.ts';
 import { FixtureTransport, SCENARIOS } from './core/fixtures.ts';
 import { HostFlowLab } from './host/HostFlowLab.tsx';
 import { StudyMaterialsPanel } from './study/StudyMaterialsPanel.tsx';
+import { PersonalizationControls, policyForTransport } from './learning/PersonalizationControls.tsx';
 
 const fixtureTransport = new FixtureTransport();
 function initialPreferences() {
@@ -14,14 +16,18 @@ function initialPreferences() {
 }
 
 export interface AppProps {
+  DocumentImport?: ComponentType<{ onAdd: (source: StudySource) => void }>;
   transport?: CorrectionTransport;
   providerName?: string;
 }
 
-export function App({ transport = fixtureTransport, providerName = 'Native provider' }: AppProps = {}) {
+export function App({ transport = fixtureTransport, providerName = 'Native provider', DocumentImport }: AppProps = {}) {
   const native = transport.kind === 'native';
   const [text, setText] = useState<string>(native ? '' : SCENARIOS[0].text);
-  const [initial] = useState(() => native ? { policy: { ...DEFAULT_POLICY }, remember: false } : initialPreferences());
+  const [initial] = useState(() => {
+    const value = native ? { policy: { ...DEFAULT_POLICY }, remember: false } : initialPreferences();
+    return { ...value, policy: policyForTransport(value.policy, transport) };
+  });
   const [policy, setPolicy] = useState<LearningPolicy>(initial.policy);
   const [remember, setRemember] = useState(initial.remember);
   const [sourceEnabled, setSourceEnabled] = useState(false);
@@ -82,7 +88,7 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
   function reset() {
     setHostEpoch(value => value + 1);
     setSourceResetKey(value => value + 1);
-    invalidate(); setText(native ? '' : SCENARIOS[0].text); setPolicy({ ...DEFAULT_POLICY });
+    invalidate(); setText(native ? '' : SCENARIOS[0].text); setPolicy(policyForTransport({ ...DEFAULT_POLICY }, transport));
     setSourceEnabled(false); setSource({ title: '', section: '', excerpt: '' }); setRemember(false);
     if (native) return;
     try { if (!clearPolicy(window.localStorage)) setNotice('저장된 설정을 삭제하지 못했습니다.'); } catch { setNotice('메모리 상태는 초기화했지만 저장된 설정 삭제는 확인하지 못했습니다.'); }
@@ -149,11 +155,7 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
         </div>
         <aside className="panel settings-panel" aria-labelledby="settings-title">
           <div className="section-heading"><div><span className="step">03</span><h2 id="settings-title">나에게 맞추기</h2></div></div>
-          <label className="field-label" htmlFor="vocabulary">일반 어휘 수준</label>
-          <select id="vocabulary" value={policy.vocabulary} onChange={event => updatePolicy({ ...policy, vocabulary: event.target.value as Vocabulary })}>
-            <option value="familiar">익숙한 표현 중심</option><option value="stretch">조금씩 확장</option><option value="wide">폭넓은 표현</option>
-          </select>
-          <p className="hint">{native ? '기술 용어 보존을 요청합니다. 이 설정은 교정 요청에 포함됩니다.' : '기술 용어는 그대로 보존합니다. 샘플 문장은 고정이며, 이 설정은 연결 예정인 모델 요청에 포함됩니다.'}</p>
+          <PersonalizationControls policy={policy} onChange={updatePolicy} transport={transport} />
           <label className="field-label" htmlFor="notes">메시지당 설명</label>
           <select id="notes" value={policy.maxNotes} onChange={event => updatePolicy({ ...policy, maxNotes: Number(event.target.value) as 0 | 1 | 2 })}>
             <option value="0">교정문만</option><option value="1">핵심 1개</option><option value="2">최대 2개</option>
@@ -162,7 +164,6 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
           <select id="focus" value={policy.focus} onChange={event => updatePolicy({ ...policy, focus: event.target.value as Focus })}>
             <option value="general">전체에서 필요한 부분</option><option value="articles">관사</option><option value="verb-forms">동사 형태</option><option value="expression">표현 확장</option>
           </select>
-          <label className="check-row"><input type="checkbox" checked={policy.alternatives} onChange={event => updatePolicy({ ...policy, alternatives: event.target.checked })} /><span>선택 가능한 다른 표현도 보기</span></label>
           <div className="divider" />
           <label className="check-row source-toggle"><input type="checkbox" checked={sourceEnabled} onChange={event => { invalidate(); setSourceResetKey(value => value + 1); setSourceEnabled(event.target.checked); }} /><span>지금 공부하는 자료 추가</span></label>
           <p className="hint">{native ? `활성화하면 자료 제목·단원·발췌문도 원문과 함께 호스트로 전달되고, 동의 후 ${providerName}에게 전송됩니다.` : '발췌문을 요청 데이터로 준비합니다. 샘플 피드백에는 적용되지 않으며, 외부로 전송하지 않습니다.'}</p>
@@ -172,7 +173,7 @@ export function App({ transport = fixtureTransport, providerName = 'Native provi
             <label className="field-label" htmlFor="source-excerpt">직접 발췌한 학습 내용</label><textarea id="source-excerpt" maxLength={MAX_EXCERPT} value={source.excerpt} placeholder="연습하려는 표현이나 설명을 붙여 넣으세요." onChange={event => { invalidate(); setSourceResetKey(value => value + 1); setSource({ ...source, excerpt: event.target.value }); }} />
             <span className="hint">{source.excerpt.length} / {MAX_EXCERPT} · 이번 세션에만 유지</span>
           </div>}
-          <StudyMaterialsPanel mode={native ? 'native' : 'fixture'} providerName={providerName}
+          <StudyMaterialsPanel DocumentImport={DocumentImport} mode={native ? 'native' : 'fixture'} providerName={providerName}
             selectionResetKey={sourceResetKey} onSourceChange={next => {
               invalidate(); setSourceEnabled(next !== null);
               setSource(next ?? { title: '', section: '', excerpt: '' });

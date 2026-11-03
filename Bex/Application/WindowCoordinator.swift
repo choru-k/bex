@@ -72,6 +72,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     super.init()
   }
 
+  // Deliberately unreachable until native security, resource packaging and UI
+  // validation are authorized and completed. No build flag or runtime toggle can
+  // enable this literal false branch; there is no menu, shortcut or URL route.
+  #if false
+    func showPackagedCorrection() {
+      services.packagedCorrectionWindows.requestOpen()
+    }
+  #endif
+
   func showPromptGate() {
     if pendingManualFixAndSendDraft != nil {
       reinvokeManualFixAndSend()

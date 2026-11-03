@@ -6,7 +6,7 @@ The existing Swift app, release workflow, credentials, user data and host hooks 
 
 ## Start on your Mac
 
-From the repository root, with Node **22.12 or newer** installed:
+From the repository root, with Node **22.13 or newer** installed:
 
 ```sh
 node scripts/bex-web.mjs dev

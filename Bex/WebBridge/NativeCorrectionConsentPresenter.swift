@@ -188,8 +188,8 @@ private final class PresentationState {
       stack.addArrangedSubview(NSTextField(labelWithString: "Source: none"))
     }
     appendField("Correction options", value:
-      "Vocabulary: \(request.policy.vocabulary)\nFocus: \(request.policy.focus)\nMaximum notes: \(request.policy.maxNotes)\nAlternatives: \(request.policy.alternatives ? "yes" : "no")",
-      height: 64, to: stack)
+      "Vocabulary: \(request.policy.vocabulary)\nFocus: \(request.policy.focus)\nMaximum notes: \(request.policy.maxNotes)\nCorrection: necessary errors only\nOptional alternatives: \(request.policy.alternatives ? "yes, separate notes only" : "no")\nExplanation language: \(request.policy.explanationLanguage ?? "provider default (not selected)")",
+      height: 104, to: stack)
 
     // The outer viewport fits short screens; each exact-value field can also scroll.
     let viewport = NSScrollView(frame: NSRect(x: 0, y: 0, width: 540, height: 420))

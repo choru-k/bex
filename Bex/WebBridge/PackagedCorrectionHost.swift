@@ -20,6 +20,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   private var committed = false
   private var closed = false
   var view: NSView { webView }
+  var isClosed: Bool { closed }
 
   // A weak relay avoids WKUserContentController -> host -> WKWebView cycles.
   @MainActor private final class MessageRelay: NSObject, WKScriptMessageHandler {
@@ -47,14 +48,11 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     guard snapshot.destination.provider != .openAICodex else {
       throw HostError.unsupportedProvider
     }
-    guard let resources = Bundle.main.resourceURL else { throw HostError.missingPackagedUI }
-    let root = resources.appendingPathComponent("BexWebUI", isDirectory: true)
-    let document = root.appendingPathComponent("native.html", isDirectory: false)
-    // Reject symlink escape as well as absent/nonregular assets before creating WebKit.
-    guard root.resolvingSymlinksInPath().standardizedFileURL == root.standardizedFileURL,
-      document.resolvingSymlinksInPath().standardizedFileURL == document.standardizedFileURL,
-      (try? document.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true
-    else { throw HostError.missingPackagedUI }
+    // Validate the exact manifest, CSP template, inventory and content hashes before
+    // any WebKit construction/load. Only Bundle.main can supply an admission.
+    let admitted = try NativePackagedResourceValidator.validateMainBundle()
+    let root = admitted.resourceURL
+    let document = admitted.documentURL
     let rules = try await WKContentRuleListStore.default().compileContentRuleList(
       forIdentifier: "BexPackagedCorrectionNoNetwork-v1",
       encodedContentRuleList: Self.networkRules)

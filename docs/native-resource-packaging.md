@@ -136,3 +136,12 @@ isolation. Those remain separate required checks before any activation. The
 [packaged host candidate](packaged-native-host.md) remains inactive, uncompiled and
 unrun by this workflow. No Mac/device, provider, credential, socket or native-app
 operation is performed.
+
+## Inactive native consumer
+
+The [native resource admission candidate](native-resource-admission.md) now checks
+this layout and exact manifest/content profile before the inactive host constructs
+WebKit. It is source-only and unrun, not a packaging, signing, installation or
+activation step. Its two narrowly accepted inventory orders and native read-only
+permission policy are documented separately; this offline verifier remains
+unchanged and still requires its exact output modes and auditor ordering.

@@ -3,10 +3,14 @@
 **Native status: UNCOMPILED / UNRUN.** The wiring below describes candidate source,
 not verified native behavior.
 
-This follow-up implements concrete host/consent/renderer wiring, but does not open a
-window, install a handler in the existing app, or package resources into Bex.app.
-No composition root calls `PackagedCorrectionHost.make`. The default browser and
-WKWebView development lab remain fixture-only.
+This follow-up implements concrete host/consent/renderer wiring and an
+[inert app-owned window controller](inactive-app-composition.md), but does not open
+a window, install a live handler in the existing app, or package resources into
+Bex.app. `AppServices` owns one controller whose constructor performs no work.
+Its real native session calls `PackagedCorrectionHost.make` only after an explicit
+open operation; the only composition open hook is inside literal `#if false` with
+no UI, menu, shortcut, URL, environment or build-flag activation path. The default
+browser and WKWebView development lab remain fixture-only.
 
 ## Candidate source wiring
 
@@ -19,8 +23,13 @@ WKWebView development lab remain fixture-only.
   It rebuilds the factory with its own [isolated provider transport](native-provider-transport.md),
   ignoring any caller-supplied transport. This remains inactive and uncompiled;
   the existing app's transport/factory wiring does not change.
-  It looks only for `Bundle.main/BexWebUI/native.html`, rejecting missing or symlinked
-  entry assets. There is no development-server or arbitrary-document initializer.
+  It uses [strict native resource admission](native-resource-admission.md) against
+  `Bundle.main` before any WebKit construction or loading. The fixed sibling manifest,
+  exact three-file `BexWebUI` inventory, HTML/CSP template, byte counts and full hashes
+  must agree; missing, nonregular, linked, oversized or noncanonical resources fail
+  closed. There is no development-server or arbitrary-document/bundle initializer.
+  This integrity check requires a trusted, signed, immutable app bundle and does
+  not establish authenticity or prevent WebKit's later path-reopen race.
 - The candidate creates a nonpersistent WKWebView, installs resource-blocking rules
   before loading, and admits one exact document navigation. Messages require the
   owning webview, main frame, exact committed document and bounded string JSON.

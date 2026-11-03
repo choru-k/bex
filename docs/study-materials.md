@@ -1,8 +1,10 @@
 # Manual study-material library
 
 This candidate adds a small, local library of **user-entered attributed excerpts**.
-It does not import PDF/EPUB files, retrieve whole books, search documents, build
-embeddings, or claim that fixed sample feedback adapts to a book.
+The browser entry also offers explicit local PDF/EPUB text extraction and keyword
+passage search; see [document import and limits](study-document-import.md). Native
+mode remains manual and session-only. Neither path builds embeddings or claims
+that fixed sample feedback adapts to a book.
 
 ## User workflow
 
@@ -93,8 +95,9 @@ external request absence, and narrow layout.
 
 ## Remaining boundaries
 
-- Named target vocabulary lists, learner history/mastery, automatic relevance
-  selection, book search, file imports, and full-document citations are not added.
+- Learner history/mastery, automatic semantic relevance selection and verified
+  full-document quotations are not added. Browser PDF/EPUB extraction is a bounded
+  separate workflow; its source attribution and limits are documented above.
 - Existing general vocabulary preference remains a request preference, not a
   demonstrated adaptive learning result.
 - Fixture feedback remains deterministic and does not incorporate the excerpt.

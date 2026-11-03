@@ -49,14 +49,14 @@ async function waitUntilReady(child) {
   throw new Error('The web development server did not become ready.');
 }
 async function main() {
-  if (major < 22 || (major === 22 && minor < 12)) throw new Error('Node 22.12 or newer is required.');
+  if (major < 22 || (major === 22 && minor < 13)) throw new Error('Node 22.13 or newer is required.');
   if (!allowed.includes(command)) throw new Error(`Unknown command: ${command}. Use: ${allowed.join(', ')}`);
   if (command === 'help') {
     console.log('node scripts/bex-web.mjs dev      Browser + live reload (first run installs npm dependencies)\nnode scripts/bex-web.mjs desktop  Isolated macOS WKWebView lab (requires Xcode CLT)\nnode scripts/bex-web.mjs test     Domain tests; no npm install required\nnode scripts/bex-web.mjs check    Typecheck, domain tests, production build\nnode scripts/bex-web.mjs e2e      Install test browsers and run Chromium + WebKit tests');
     return;
   }
   if (command === 'test') {
-    await run(process.execPath, ['--experimental-strip-types', '--test', 'tests/core.test.mjs', 'tests/coaching-quality.test.mjs', 'tests/native-smoke.test.mjs', 'tests/native-transport.test.mjs', 'tests/packaged-endpoint.test.mjs', '../scripts/tests/bex-audit-native-resources.test.mjs', '../scripts/tests/bex-helper-contract.test.mjs', '../scripts/tests/bex-package-native-resources.test.mjs', '../scripts/tests/bex-package-native-resources-adversarial.test.mjs', 'tests/study-materials.test.mjs', 'tests/host-flow.test.mjs']);
+    await run(process.execPath, ['--experimental-strip-types', '--test', 'tests/core.test.mjs', 'tests/coaching-quality.test.mjs', 'tests/native-smoke.test.mjs', 'tests/native-transport.test.mjs', 'tests/packaged-endpoint.test.mjs', '../scripts/tests/bex-audit-native-resources.test.mjs', '../scripts/tests/bex-helper-contract.test.mjs', '../scripts/tests/bex-native-composition-source.test.mjs', '../scripts/tests/bex-native-resource-admission.test.mjs', '../scripts/tests/bex-package-native-resources.test.mjs', '../scripts/tests/bex-package-native-resources-adversarial.test.mjs', 'tests/study-materials.test.mjs', 'tests/host-flow.test.mjs', 'tests/personalization-quality.test.mjs', 'tests/study-documents.test.mjs']);
     return;
   }
   if (command === 'desktop' && process.platform !== 'darwin') throw new Error('desktop requires macOS. Use dev for the browser lab.');

@@ -1,6 +1,6 @@
 /** Credential-free renderer adapter. Native host remains the security/consent boundary. */
 import { makeRequest, parseResult } from '../core/model.ts';
-import type { CorrectionRequest, CorrectionResult, CorrectionTransport } from '../core/model.ts';
+import type { CorrectionRequest, CorrectionResult, CorrectionTransport, ExplanationLanguage } from '../core/model.ts';
 
 export const BRIDGE_VERSION = 1;
 export const MAX_BRIDGE_BYTES = 128_000;
@@ -12,6 +12,7 @@ export interface NativeEndpoint {
 export interface BridgeCapabilities {
   providerName: string;
   perRequestConsent: true;
+  explanationLanguages?: ExplanationLanguage[];
 }
 interface Pending {
   kind: 'hello' | 'correct';
@@ -55,10 +56,14 @@ export class NativeCorrectionTransport implements CorrectionTransport {
     this.unsubscribe = endpoint.subscribe(json => this.receive(json));
   }
 
+  get explanationLanguages(): readonly ExplanationLanguage[] {
+    return [...(this.capabilities?.explanationLanguages ?? [])];
+  }
+
   async connect(signal: AbortSignal): Promise<BridgeCapabilities> {
     if (this.closed) throw new Error('Bridge is closed.');
     if (signal.aborted) throw abortError();
-    if (this.capabilities) return { ...this.capabilities };
+    if (this.capabilities) return structuredClone(this.capabilities);
     if (this.connecting) throw new Error('Bridge handshake is already pending.');
     this.connecting = true;
     try {
@@ -66,7 +71,7 @@ export class NativeCorrectionTransport implements CorrectionTransport {
       if (this.closed) throw new Error('Bridge is closed.');
       if (signal.aborted) throw abortError();
       this.capabilities = capabilities;
-      return { ...capabilities };
+      return structuredClone(capabilities);
     } finally { this.connecting = false; }
   }
 
@@ -75,6 +80,9 @@ export class NativeCorrectionTransport implements CorrectionTransport {
     if (signal.aborted) throw abortError();
     if (!this.capabilities) throw new Error('Native provider is not connected.');
     const request = validatedRequest(value);
+    if (request.policy.explanationLanguage && !this.explanationLanguages.includes(request.policy.explanationLanguage)) {
+      throw new Error('Native host does not support the requested explanation language.');
+    }
     if (this.pending.size >= 4) throw new Error('Too many pending corrections.');
     return await this.exchange('correct', request, signal) as CorrectionResult;
   }
@@ -138,11 +146,16 @@ export class NativeCorrectionTransport implements CorrectionTransport {
       if (pending.kind === 'hello' && message.kind === 'capabilities' &&
           only(message, ['bridgeVersion', 'sessionID', 'requestID', 'kind', 'capabilities'])) {
         const c = message.capabilities;
-        if (!record(c) || !only(c, ['providerName', 'perRequestConsent', 'operations']) ||
+        if (!record(c) || !only(c, ['providerName', 'perRequestConsent', 'operations', 'explanationLanguages']) ||
             typeof c.providerName !== 'string' || !c.providerName.trim() || c.providerName.length > 80 ||
             c.perRequestConsent !== true || !Array.isArray(c.operations) || c.operations.length !== 2 ||
             !c.operations.includes('correct') || !c.operations.includes('cancel')) throw new Error();
-        result = { providerName: c.providerName.trim(), perRequestConsent: true };
+        if ('explanationLanguages' in c && (!Array.isArray(c.explanationLanguages) ||
+            c.explanationLanguages.length < 1 || c.explanationLanguages.length > 2 ||
+            new Set(c.explanationLanguages).size !== c.explanationLanguages.length ||
+            !c.explanationLanguages.every(language => language === 'ko' || language === 'en'))) throw new Error();
+        result = { providerName: c.providerName.trim(), perRequestConsent: true,
+          ...('explanationLanguages' in c ? { explanationLanguages: [...c.explanationLanguages as ExplanationLanguage[]] } : {}) };
       } else if (pending.kind === 'correct' && message.kind === 'result' &&
           only(message, ['bridgeVersion', 'sessionID', 'requestID', 'kind', 'result'])) {
         const parsed = parseResult(message.result, pending.original!);

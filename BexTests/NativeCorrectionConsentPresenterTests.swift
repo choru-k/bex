@@ -7,10 +7,12 @@ import NativeBridgeCore
 /// requires a separately authorized macOS test session. They have NOT been run.
 @MainActor
 final class NativeCorrectionConsentPresenterTests: XCTestCase {
-  private func request(_ exactText: String? = nil) throws -> BridgeRequest {
+  private func request(_ exactText: String? = nil, explanationLanguage: String? = nil) throws -> BridgeRequest {
+    var policy: [String: Any] = ["vocabulary": "stretch", "maxNotes": 2, "alternatives": true, "focus": "general"]
+    if let explanationLanguage { policy["explanationLanguage"] = explanationLanguage }
     let data = try JSONSerialization.data(withJSONObject: [
       "protocolVersion": 1, "text": exactText ?? ("<b>Exact</b>\nI is ready.\n" + String(repeating: "z", count: 2_000)),
-      "policy": ["vocabulary": "stretch", "maxNotes": 2, "alternatives": true, "focus": "general"],
+      "policy": policy,
       "source": ["title": "<script>not markup</script>", "section": "1.2", "excerpt": "Reference\nexact excerpt"],
     ])
     return try JSONDecoder().decode(BridgeRequest.self, from: data)
@@ -47,7 +49,7 @@ final class NativeCorrectionConsentPresenterTests: XCTestCase {
     let window = makeWindow()
     let consent = try presenter(window)
     defer { consent.close(); window.close() }
-    let input = try request()
+    let input = try request(explanationLanguage: "en")
     let task = Task { try await consent.requestConsent(for: input, providerName: "Provider") }
     try await waitUntil { window.attachedSheet != nil }
     let sheet = try XCTUnwrap(window.attachedSheet)
@@ -57,6 +59,7 @@ final class NativeCorrectionConsentPresenterTests: XCTestCase {
                   "Provider", "https://native.example/api/account-A", "native-model"] {
       XCTAssertTrue(texts.contains { $0.string == exact })
     }
+    XCTAssertTrue(texts.contains { $0.string.contains("Explanation language: en") && $0.string.contains("necessary errors only") && $0.string.contains("separate notes only") })
     XCTAssertTrue(texts.allSatisfy { !$0.isEditable && !$0.isRichText })
     content.layoutSubtreeIfNeeded()
     let outer = try XCTUnwrap(descendants(content, as: NSScrollView.self)

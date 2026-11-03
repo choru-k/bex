@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import type { ComponentType } from 'react';
 import type { PolicyStorage, StudySource } from '../core/model.ts';
 import { MAX_EXCERPT, MAX_SOURCE_TITLE } from '../core/model.ts';
 import { addStudyMaterial, addStudySection, clearStudyLibrary, emptyStudyLibrary, loadStudyLibrary,
@@ -20,11 +21,13 @@ export interface StudyMaterialsPanelProps {
   selectionResetKey?: number;
   /** Optional local-only storage adapter. Native mode never accesses it. */
   storage?: PolicyStorage;
+  /** Browser entry injection: no PDF parser or worker enters the native dependency graph. */
+  DocumentImport?: ComponentType<{ onAdd: (source: StudySource) => void }>;
 }
 
 /** Local manual excerpts. No automatic loads, external requests, file access, or provider invocation. */
 export function StudyMaterialsPanel({ mode = 'fixture', providerName = '제공자', onSourceChange,
-  selectionResetKey = 0, storage }: StudyMaterialsPanelProps) {
+  selectionResetKey = 0, storage, DocumentImport }: StudyMaterialsPanelProps) {
   const [library, setLibrary] = useState<StudyLibrary>(emptyStudyLibrary);
   const [materialID, setMaterialID] = useState('');
   const [active, setActive] = useState<StudySelection | null>(null);
@@ -75,6 +78,19 @@ export function StudyMaterialsPanel({ mode = 'fixture', providerName = '제공�
       setEditor(null);
     } catch (cause) { setError(cause instanceof Error ? cause.message : '자료를 저장하지 못했습니다. 입력을 확인하세요.'); }
   }
+  function addImportedPassage(source: StudySource) {
+    if (native || locked) throw new Error('편집 또는 삭제 확인을 먼저 마치세요.');
+    clearMessages();
+    let next = library;
+    const existing = library.materials.find(item => item.title === source.title);
+    const id = existing?.id ?? crypto.randomUUID();
+    if (!existing) next = addStudyMaterial(next, id, source.title);
+    if (existing?.sections.some(section => section.label === source.section && section.excerpt === source.excerpt)) {
+      setMaterialID(id); return; // Repeated clicks do not duplicate identical passages.
+    }
+    next = addStudySection(next, id, { id: crypto.randomUUID(), label: source.section, excerpt: source.excerpt });
+    commit(next); setMaterialID(id); // Never auto-select or dispatch an imported passage.
+  }
   function toggleRemember(enabled: boolean) {
     if (native) return;
     clearMessages();
@@ -114,8 +130,9 @@ export function StudyMaterialsPanel({ mode = 'fixture', providerName = '제공�
   }
   return <section className="study-materials" aria-labelledby="study-materials-title">
     <h3 id="study-materials-title">내 학습 자료</h3>
-    <p className="hint">책이나 학습 자료에서 직접 고른 짧은 발췌문을 단원별로 관리하세요. PDF·EPUB 가져오기, 전체 책 검색, 자동 검색은 지원하지 않습니다.</p>
+    <p className="hint">책이나 학습 자료에서 직접 고른 짧은 발췌문을 단원별로 관리하세요. 자동 검색·추천은 하지 않습니다. {native || !DocumentImport ? '이 화면은 PDF·EPUB 가져오기를 제공하지 않습니다.' : '아래에서 로컬 PDF·EPUB의 텍스트를 검색하고 필요한 발췌문만 추가할 수 있습니다.'}</p>
     <p className="hint">{native ? `선택한 한 단원의 제목·단원·발췌문만 다음 교정 요청에 포함합니다. ${providerName} 전송에는 요청별 네이티브 동의가 필요합니다. 자료를 추가하거나 선택하는 동작만으로 전송하지 않습니다.` : '선택한 한 단원만 요청 미리보기에 포함합니다. 샘플 피드백에는 적용되지 않으며, 자료 관리 동작으로 외부 전송하지 않습니다.'}</p>
+    {!native && DocumentImport && <DocumentImport onAdd={addImportedPassage} />}
     <div className="study-actions">
       <button className="button secondary" type="button" disabled={locked} onClick={() => { clearMessages(); setEditor({ kind: 'material', id: null, title: '' }); }}>자료 추가</button>
       {!native && <button className="text-button" type="button" disabled={locked || library.materials.length > 0} onClick={restore}>기기 자료 불러오기</button>}

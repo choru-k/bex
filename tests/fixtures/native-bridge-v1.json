@@ -168,6 +168,68 @@
         "provenance": "fixture"
       },
       "acceptResult": false
+    },
+    {
+      "name": "explicit ko explanation language",
+      "request": {
+        "protocolVersion": 1,
+        "text": "The tests passes.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general",
+          "explanationLanguage": "ko"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "The tests passes.",
+        "corrected": "The tests pass.",
+        "notes": [
+          {
+            "kind": "correction",
+            "category": "verb-forms",
+            "before": "passes",
+            "after": "pass",
+            "reason": "복수 주어 tests에는 pass를 씁니다."
+          }
+        ],
+        "provenance": "provider"
+      },
+      "acceptResult": true
+    },
+    {
+      "name": "explicit en explanation language",
+      "request": {
+        "protocolVersion": 1,
+        "text": "The tests passes.",
+        "policy": {
+          "vocabulary": "familiar",
+          "maxNotes": 1,
+          "alternatives": true,
+          "focus": "general",
+          "explanationLanguage": "en"
+        },
+        "source": null
+      },
+      "result": {
+        "protocolVersion": 1,
+        "original": "The tests passes.",
+        "corrected": "The tests pass.",
+        "notes": [
+          {
+            "kind": "correction",
+            "category": "verb-forms",
+            "before": "passes",
+            "after": "pass",
+            "reason": "Use pass with the plural subject tests."
+          }
+        ],
+        "provenance": "provider"
+      },
+      "acceptResult": true
     }
   ]
 }

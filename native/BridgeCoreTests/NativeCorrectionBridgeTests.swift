@@ -69,6 +69,32 @@ final class NativeCorrectionBridgeTests: XCTestCase {
         XCTAssertEqual(h.replies.count, 2)
     }
 
+    @MainActor func testOptionalExplanationLanguagePreservesLegacyAndRejectsUnknowns() async throws {
+        let h = try Harness(); h.hello()
+        let capabilities = try XCTUnwrap(h.replies.last?["capabilities"] as? [String: Any])
+        XCTAssertEqual(capabilities["explanationLanguages"] as? [String], ["ko", "en"])
+        func decode(_ request: [String: Any]) throws -> BridgeRequest {
+            try JSONDecoder().decode(BridgeRequest.self, from: JSONSerialization.data(withJSONObject: request))
+        }
+        XCTAssertNil(try decode(h.request()).policy.explanationLanguage)
+        for language in ["ko", "en"] {
+            var request = h.request()
+            var policy = try XCTUnwrap(request["policy"] as? [String: Any])
+            policy["explanationLanguage"] = language; request["policy"] = policy
+            XCTAssertEqual(try decode(request).policy.explanationLanguage, language)
+        }
+        for invalid in [NSNull(), "fr", "EN", true, 1, ["en"]] as [Any] {
+            var request = h.request()
+            var policy = try XCTUnwrap(request["policy"] as? [String: Any])
+            policy["explanationLanguage"] = invalid; request["policy"] = policy
+            XCTAssertThrowsError(try decode(request))
+        }
+        var request = h.request()
+        var policy = try XCTUnwrap(request["policy"] as? [String: Any])
+        policy["explanationLanguage"] = "en"; policy["languagePrompt"] = "untrusted"
+        request["policy"] = policy; XCTAssertThrowsError(try decode(request))
+    }
+
     @MainActor func testStrictInputAndBounds() async throws {
         let h = try Harness(); h.hello()
         var cases = [[String: Any]]()
