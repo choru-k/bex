@@ -22,6 +22,8 @@
 		A0000000000000000000005D /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000066 /* CryptoKit.framework */; };
 		A0000000000000000000005E /* bex-hook in Embed Helpers */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* bex-hook */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A0000000000000000000005F /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006A /* UserNotifications.framework */; };
+		B10000000000000000000001 /* NativeBridgeCore in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000003 /* NativeBridgeCore */; };
+		B10000000000000000000004 /* NativeBridgeCore in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* NativeBridgeCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -98,6 +100,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000001 /* NativeBridgeCore in Frameworks */,
 				A00000000000000000000051 /* AppKit.framework in Frameworks */,
 				A00000000000000000000052 /* SwiftUI.framework in Frameworks */,
 				A00000000000000000000053 /* Foundation.framework in Frameworks */,
@@ -115,6 +118,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000004 /* NativeBridgeCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -203,6 +207,7 @@
 			);
 			name = Bex;
 			packageProductDependencies = (
+				B10000000000000000000003 /* NativeBridgeCore */,
 			);
 			productName = Bex;
 			productReference = A00000000000000000000021 /* Bex.app */;
@@ -226,6 +231,7 @@
 			);
 			name = BexTests;
 			packageProductDependencies = (
+				B10000000000000000000005 /* NativeBridgeCore */,
 			);
 			productName = BexTests;
 			productReference = A00000000000000000000022 /* BexTests.xctest */;
@@ -313,6 +319,9 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A00000000000000000000003 /* Products */;
+			packageReferences = (
+				B10000000000000000000002 /* XCLocalSwiftPackageReference "native" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -410,6 +419,24 @@
 			targetProxy = A00000000000000000000035 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B10000000000000000000002 /* XCLocalSwiftPackageReference "native" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = native;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B10000000000000000000003 /* NativeBridgeCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NativeBridgeCore;
+		};
+		B10000000000000000000005 /* NativeBridgeCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NativeBridgeCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A00000000000000000000111 /* Debug */ = {

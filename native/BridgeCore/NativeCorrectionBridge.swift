@@ -93,15 +93,27 @@ public final class NativeCorrectionBridge {
         if entry.stage == .cancelled { pending.removeValue(forKey: job.requestID); return }
         guard !closed, entry.stage == .provider else { return }
         pending.removeValue(forKey: job.requestID)
-        guard resultJSON.utf8.count <= Self.maximumBytes,
-              let data = resultJSON.data(using: .utf8),
-              let result = try? JSONDecoder().decode(BridgeResult.self, from: data),
-              result.matches(entry.request.text),
-              let encoded = try? JSONEncoder().encode(result),
+        guard let canonical = try? Self.validateResultJSON(resultJSON, original: entry.request.text),
+              let encoded = canonical.data(using: .utf8),
               let object = try? JSONSerialization.jsonObject(with: encoded) else {
             failure(job.requestID, code: "provider-failed"); return
         }
         reply(job.requestID, payload: ["kind": "result", "result": object])
+    }
+
+    /// Shared wire validation for native provider adapters. This proves schema and
+    /// exact-text correspondence, not consent, account binding, or semantic quality.
+    public static func validateResultJSON(_ json: String, original: String) throws -> String {
+        guard json.utf8.count <= maximumBytes, let data = json.data(using: .utf8) else {
+            throw BridgeValidation.invalid
+        }
+        let result = try JSONDecoder().decode(BridgeResult.self, from: data)
+        guard result.matches(original) else { throw BridgeValidation.invalid }
+        let encoded = try JSONEncoder().encode(result)
+        guard encoded.count <= maximumBytes, let canonical = String(data: encoded, encoding: .utf8) else {
+            throw BridgeValidation.invalid
+        }
+        return canonical
     }
 
     public func fail(_ job: Job) {

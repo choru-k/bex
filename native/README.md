@@ -1,9 +1,12 @@
 # Isolated native correction bridge core
 
 This Foundation-only SwiftPM package implements the native-side wire validation and
-request state machine for `web/src/bridge/nativeTransport.ts`. It is not linked into
-the Bex app, the WKWebView development shell, or the Vite fixture lab. It has no
-credentials, networking, provider calls, OS hooks, project-file edits, or dependencies.
+request state machine for `web/src/bridge/nativeTransport.ts`. The local package is
+linked into Bex and BexTests for the structured adapter, but no composition root
+activates it. It is not imported by the WKWebView development shell or Vite lab.
+The package itself has no credentials, networking, provider calls, OS hooks or
+external dependencies. See `docs/native-provider-adapter.md` for the separate
+production-type adapter and its mandatory activation gates.
 
 ## Test
 
@@ -17,10 +20,12 @@ The XCTest suite also reads `tests/fixtures/native-bridge-v1.json`, shared with 
 renderer tests. Run from a full repository checkout so that this file is present.
 Swift was unavailable in the implementation cloud container; these tests have not
 been compiled or run there. Node tests of the same fixtures are not Swift evidence.
-Exact base commit `4fc57ce` was later verified in a separately authorized isolated
-macOS checkout: 12 XCTest methods, Swift 6 library build and development-shell
-typechecking passed, without running the app/UI or any provider. The subsequent
-coordinator below is new code and is not covered by that base-commit evidence.
+Exact base commit `1981b2d` was later verified in a separately authorized isolated
+macOS checkout: all 25 XCTest methods passed in default and Swift 6 modes, with
+compilation successful. Test-code and SwiftPM language-mode warnings remained.
+The earlier `4fc57ce` development shell also passed AppKit/WebKit typechecking.
+No app/UI or provider ran. Later adapter/validator changes are not covered by
+these exact-commit results and require their own compilation and tests.
 
 ## Host contract before any activation
 

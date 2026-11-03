@@ -8,8 +8,9 @@ There is no live provider, credential access, or native service wiring in this s
 ## Native core implementation (not activated)
 
 `native/` contains a standalone, dependency-free Swift package implementing the
-host-side wire parser and consent/job state machine. It is not part of the Bex
-Xcode project and is not imported by the development shell. See
+host-side wire parser and consent/job state machine. It is linked locally into the
+Bex Xcode app/test targets for adapter compilation, but is not activated or imported
+by the development shell. See
 `native/README.md` for the embedding contract and remaining activation gates.
 
 The core accepts one session, validates request fields independently, bounds
@@ -25,7 +26,9 @@ by renderer tests and Swift test sources, including exact Unicode correlation.
 The renderer tests run in the cloud. Exact base commit `4fc57ce` subsequently passed
 12 XCTest methods, a Swift 6 library build and development-shell typechecking in a
 separately authorized isolated macOS checkout. No app/UI or provider ran. Those
-results do not cover the later async coordinator added below. The cloud executor
+results were followed by 25/25 XCTest passes in default and Swift 6 modes for
+exact coordinator commit `1981b2d`, with test/language-mode warnings. These do not
+cover subsequent provider-adapter changes. The cloud executor
 has no Swift toolchain; new Swift changes require their own compilation/test run.
 Static review and passing JavaScript vectors do not establish Swift runtime parity. Run
 `swift test --package-path native` in an authorized Swift environment before
@@ -98,7 +101,9 @@ not authentication or proof of actual consent. Renderer checks do not replace:
 Neither parseResult nor this transport proves semantic quality, instruction safety,
 source attribution, or technical-token preservation. Those require the existing
 native protections and separately authorized provider evaluations. No helper lifecycle,
-installed paths, permissions, signing, or native app project files change here.
+installed paths, permissions or signing change here. The structured provider-adapter
+follow-up adds local Swift package linkage to the app/test project only; see
+`docs/native-provider-adapter.md` for its unactivated implementation and constraints.
 
 ## Verification scope
 

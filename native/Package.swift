@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-// Isolated validation package. Not linked into the Bex application or dev shell.
+// Foundation core linked for native adapter compilation; no runtime activation or dev-shell wiring.
 let package = Package(
     name: "NativeBridgeCore",
     platforms: [.macOS(.v13)],
