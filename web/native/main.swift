@@ -51,8 +51,8 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
     NSApp.mainMenu = menu
 
     if smoke {
-      DispatchQueue.main.asyncAfter(deadline: .now() + 30) {
-        print("BEX_WEB_LAB_SMOKE FAIL: timed out waiting for the actual WebView result")
+      DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak webView] in
+        print("BEX_WEB_LAB_SMOKE FAIL: timed out; URL=\(webView?.url?.absoluteString ?? "nil"), loading=\(webView?.isLoading ?? false)")
         fflush(stdout)
         exit(1)
       }
@@ -69,7 +69,12 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
     guard let url = action.request.url, url.scheme == origin.scheme,
       url.host == origin.host, url.port == origin.port,
       url.user == nil, url.password == nil, action.targetFrame?.isMainFrame == true
-    else { decisionHandler(.cancel); return }
+    else {
+      if smoke { print("BEX_WEB_LAB_SMOKE navigation denied: \(action.request.url?.absoluteString ?? "nil")"); fflush(stdout) }
+      decisionHandler(.cancel)
+      return
+    }
+    if smoke { print("BEX_WEB_LAB_SMOKE navigation allowed: \(url.absoluteString)"); fflush(stdout) }
     decisionHandler(.allow)
   }
 
@@ -92,6 +97,8 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     guard smoke, !smokeStarted else { return }
     smokeStarted = true
+    print("BEX_WEB_LAB_SMOKE document loaded")
+    fflush(stdout)
     pollSmoke(webView)
   }
 
@@ -119,6 +126,8 @@ final class WebLabDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegat
         }
       } else if value as? Bool == true {
         self.smokeSubmitted = true
+        print("BEX_WEB_LAB_SMOKE sample submitted")
+        fflush(stdout)
       }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self, weak webView] in
         guard let self, let webView else { return }

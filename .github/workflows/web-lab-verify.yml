@@ -59,10 +59,8 @@ jobs:
       - name: Install browser engines (macOS)
         if: runner.os == 'macOS'
         run: npx playwright install chromium webkit
-      - name: Real HMR, production rendering and native smoke
+      - name: Real HMR and production rendering
         timeout-minutes: 3
-        env:
-          BEX_WEB_LAB_NATIVE: ${{ runner.os == 'macOS' && 'verification/BexWebLab' || '' }}
         run: |
           set -o pipefail
           node tests/smoke.mjs 2>&1 | tee verification/smoke.log
@@ -71,6 +69,15 @@ jobs:
         run: |
           set -o pipefail
           npm run test:e2e 2>&1 | tee verification/browser-tests.log
+      - name: Run actual one-command macOS app bundle
+        if: runner.os == 'macOS' && !cancelled()
+        timeout-minutes: 3
+        env:
+          BEX_WEB_LAB_SMOKE: '1'
+        run: |
+          set -o pipefail
+          node ../scripts/bex-web.mjs desktop 2>&1 | tee verification/native-smoke.log
+          grep -F 'BEX_WEB_LAB_SMOKE PASS' verification/native-smoke.log
       - name: Ensure smoke restored source files
         if: always()
         run: git diff --exit-code -- src native ../scripts package-lock.json
