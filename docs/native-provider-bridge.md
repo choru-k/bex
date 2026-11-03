@@ -22,11 +22,22 @@ the package. These events must be connected to real native protections before us
 
 Shared synthetic wire vectors in `tests/fixtures/native-bridge-v1.json` are consumed
 by renderer tests and Swift test sources, including exact Unicode correlation.
-The renderer tests run in the cloud; the Swift package is **uncompiled and its
-tests unexecuted here because a Swift toolchain is unavailable**. Static review
-and passing JavaScript vectors do not establish Swift runtime parity. Run
+The renderer tests run in the cloud. Exact base commit `4fc57ce` subsequently passed
+12 XCTest methods, a Swift 6 library build and development-shell typechecking in a
+separately authorized isolated macOS checkout. No app/UI or provider ran. Those
+results do not cover the later async coordinator added below. The cloud executor
+has no Swift toolchain; new Swift changes require their own compilation/test run.
+Static review and passing JavaScript vectors do not establish Swift runtime parity. Run
 `swift test --package-path native` in an authorized Swift environment before
 considering any activation, and separately validate the actual macOS host.
+
+`NativeCorrectionCoordinator` adds concrete task ownership around that core: it
+invokes injected native consent/provider services, schedules independent phase
+deadlines, cancels operations and waits for real async termination before releasing
+cancelled capacity. `closeAndWait()` is the required replacement barrier. Actual
+native consent UI, immutable provider binding, technical-span-aware coaching
+implementation and authenticated packaged-frame wiring remain host obligations.
+This coordinator does not activate the lab or call any live provider.
 
 ## Lifecycle
 

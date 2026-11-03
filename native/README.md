@@ -17,6 +17,10 @@ The XCTest suite also reads `tests/fixtures/native-bridge-v1.json`, shared with 
 renderer tests. Run from a full repository checkout so that this file is present.
 Swift was unavailable in the implementation cloud container; these tests have not
 been compiled or run there. Node tests of the same fixtures are not Swift evidence.
+Exact base commit `4fc57ce` was later verified in a separately authorized isolated
+macOS checkout: 12 XCTest methods, Swift 6 library build and development-shell
+typechecking passed, without running the app/UI or any provider. The subsequent
+coordinator below is new code and is not covered by that base-commit evidence.
 
 ## Host contract before any activation
 
@@ -77,3 +81,45 @@ prevent replay. At 4,096 total request IDs per session including hello, the next
 closes the bridge fail-safe; a trusted host must create a fresh document/channel rather
 than allowing renderer hello messages to reset replay accounting. Invalid input and
 unknown or late IDs are dropped without reflecting untrusted text.
+
+## Async execution coordinator (still isolated, not activated)
+
+`NativeCorrectionCoordinator` now consumes those core events and actually owns the
+consent/provider Tasks, two independent native deadlines (30 seconds each by default),
+cancellation and terminal cleanup. Inject a `NativeCorrectionConsentService` and a
+`NativeCorrectionProviderService`; there are deliberately no concrete UI, network,
+credentials, existing GrammarService calls or production app bindings in this package.
+The full validated `BridgeRequest`, including all policy/source fields, is passed
+unchanged to both services. Provider JSON is still validated by the core.
+
+The trusted host must authenticate the packaged main frame before forwarding to
+`receiveTrustedDocumentMessage`. The method name is not authentication. Consent must
+be a real native disclosure and user decision. The provider service must bind its
+account/destination immutably for its lifetime, matching the trusted displayed name;
+separate class instances or a constant display name do not prove that an implementation
+cannot change its own destination. There is no rebinding API on this coordinator.
+
+On navigation, account switch or teardown, call `close()` immediately to revoke
+admission/delivery, dismiss/cancel work, and release idle service and emitter references.
+Use `await closeAndWait()` before constructing a replacement coordinator. It waits for
+all owned async operations to return, even when they ignore cancellation. This is the
+required host barrier against accumulating old work across document/account changes.
+A service that never terminates deliberately blocks replacement; a deadline revokes
+permission to deliver but cannot forcibly terminate an arbitrary service or prove that
+remote billing stopped. Dropping the coordinator also requests task cancellation, but
+is not proof of quiescence and is not a replacement for the explicit lifecycle barrier.
+
+The service contract requires cancellation-aware dismissal/cancellation and forbids
+returning before its own child work has stopped. The coordinator never acknowledges
+cancellation just because `Task.cancel()` was sent. All four slots remain occupied by
+noncooperative services until their async calls actually return. Native timers are
+cooperative `Task.sleep` work, cancelled on every phase transition and terminal path.
+Host timeout configuration is bounded to 1 ns through 5 minutes; the internal manual
+scheduler seam is only for deterministic tests and is not part of the public API.
+
+The coordinator tests use synthetic continuation-controlled services that intentionally
+ignore cancellation, with manual deadlines and task-completion barriers. They cover
+full request forwarding, independent phase deadlines, late results/grants, errors,
+capacity retention, cancel-before-start, teardown, replay/session rejection and timer
+cleanup. Cloud inspection/diff checks are not compilation or XCTest evidence. No Mac,
+provider or production-app execution was performed for this coordinator slice.
