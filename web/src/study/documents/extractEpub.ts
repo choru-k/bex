@@ -49,7 +49,13 @@ function resolvePackagePath(packagePath: string, href: string): string {
 function chapterText(document: Document): string {
   const bodies = descendants(document, NS_XHTML, 'body'); if (bodies.length !== 1) throw new SafeDocumentError('EPUB 본문 구조를 확인하지 못했습니다.');
   const ignored = new Set(['script', 'style', 'noscript', 'svg', 'math', 'iframe', 'object', 'audio', 'video', 'canvas']);
-  const blocks = new Set(['p', 'div', 'section', 'article', 'h1', 'h2', 'h3', 'li', 'br', 'tr']);
+  // Structural boundaries separate visible words; inline styling never invents a space.
+  // This is plain-text separation, not CSS layout or table reconstruction.
+  const blocks = new Set(['address', 'article', 'aside', 'blockquote', 'br', 'caption',
+    'dd', 'details', 'dialog', 'div', 'dl', 'dt', 'fieldset', 'figcaption', 'figure',
+    'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hgroup', 'hr',
+    'legend', 'li', 'main', 'menu', 'nav', 'ol', 'p', 'pre', 'section', 'summary',
+    'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'ul']);
   const stack: Array<Node | string> = [bodies[0]!]; const output: string[] = []; let length = 0;
   while (stack.length) {
     const node = stack.pop()!;

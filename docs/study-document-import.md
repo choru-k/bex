@@ -41,6 +41,32 @@ with deterministic boundaries. Whitespace/control characters are normalized, and
 layout is not preserved. Users must check extracted text against the original,
 especially for multi-column PDFs, tables, ligatures, and non-embedded/CJK fonts.
 
+### Text boundaries, not visual reconstruction
+
+EPUB text adds a separator at accepted structural elements, including table
+headers/cells, all heading levels, definition terms/descriptions, captions and
+other block containers. Adjacent cells such as `child` / `children` therefore
+remain searchable as two words. Inline elements such as `em`, `strong`, `span`
+and `code` do not insert spaces inside words or punctuation. A `wbr` soft break
+also leaves its source word intact. Hidden and active content stays excluded.
+These are text boundaries only; table columns, CSS display overrides and visual
+layout are not reconstructed.
+
+PDF text preserves PDF.js's explicit whitespace and end-of-line markers, including
+empty text items used for line endings. It removes the formerly unconditional
+space between two runs only when their geometry shows a clearly contiguous,
+horizontal left-to-right continuation on the same baseline with compatible scale
+and height. Font changes can then preserve `gram` + `mar` as `grammar`. Position
+roundoff tolerance is at most 0.01 PDF units and shrinks relative to small runs.
+Gaps, meaningful overlaps, missing/invalid geometry, different sizes, rotated or
+skewed text and right-to-left/vertical runs retain a conservative separator.
+
+Source item order is preserved, never coordinate-sorted. Unsupported layouts or
+fragmented words in rotated/RTL text can still extract imperfectly. This change
+does not infer missing words, repair hyphenation, reconstruct columns/tables, or
+provide OCR. The real-parser regressions check both exact extracted text and
+keyword retrieval, not only mocked item assembly.
+
 ## Supported subset and resource limits
 
 - File input: nonempty, at most 8 MiB, valid expected format marker.

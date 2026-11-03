@@ -94,3 +94,43 @@ test('PDF worker wrapper denies both fetch and XMLHttpRequest rather than relyin
   assert.equal(Object.getOwnPropertyDescriptor(context, 'fetch').writable, false);
   assert.equal(Object.getOwnPropertyDescriptor(context, 'XMLHttpRequest').writable, false);
 });
+
+const run = (str, x, changes = {}) => ({ str, dir: 'ltr', width: 10, height: 12, transform: [12, 0, 0, 12, x, 720], hasEOL: false, ...changes });
+async function readRuns(items) {
+  return (await readPdfText({ numPages: 1, async getPage() { return { async getTextContent() { return { items }; }, cleanup() {} }; } })).units[0].text;
+}
+test('PDF joins only compatible contiguous horizontal runs including tiny numerical roundoff', async () => {
+  assert.equal(await readRuns([run('gram', 72, { fontName: 'regular' }), run('mar', 82 - 1e-12, { fontName: 'bold' })]), 'grammar');
+  assert.equal(await readRuns([run('Hello', 72), run(',', 82)]), 'Hello,');
+});
+for (const [name, previous, next] of [
+  ['word gap', run('hello', 72), run('world', 85)],
+  ['column gap', run('left', 72), run('right', 300)],
+  ['different baseline', run('first', 72), run('second', 82, { transform: [12, 0, 0, 12, 82, 700] })],
+  ['explicit EOL', run('first', 72, { hasEOL: true }), run('second', 82)],
+  ['overlap beyond roundoff', run('first', 72), run('second', 80)],
+  ['RTL direction', run('first', 72, { dir: 'rtl' }), run('second', 82, { dir: 'rtl' })],
+  ['vertical direction', run('first', 72, { dir: 'ttb' }), run('second', 82, { dir: 'ttb' })],
+  ['rotation', run('first', 72, { transform: [0, 12, -12, 0, 72, 720] }), run('second', 82)],
+  ['skew', run('first', 72, { transform: [12, 0, 1, 12, 72, 720] }), run('second', 82)],
+  ['mixed font size', run('first', 72), run('second', 82, { height: 10, transform: [10, 0, 0, 10, 82, 720] })],
+  ['missing geometry', { str: 'first' }, { str: 'second' }],
+  ['nonfinite geometry', run('first', 72, { width: Infinity }), run('second', 82)],
+  ['tiny meaningful gap', run('first', 72, { width: 0.00001, height: 0.00001, transform: [0.00001, 0, 0, 0.00001, 72, 720] }), run('second', 72.00002, { width: 0.00001, height: 0.00001, transform: [0.00001, 0, 0, 0.00001, 72.00002, 720] })],
+  ['tiny overlapping text', run('first', 72, { width: 0.00001, height: 0.00001, transform: [0.00001, 0, 0, 0.00001, 72, 720] }), run('second', 72, { width: 0.00001, height: 0.00001, transform: [0.00001, 0, 0, 0.00001, 72, 720] })],
+  ['negative width', run('first', 72, { width: -10 }), run('second', 62)],
+]) test(`PDF keeps a conservative separator for ${name}`, async () => {
+  assert.equal(await readRuns([previous, next]), `${previous.str} ${next.str}`);
+});
+test('PDF explicit spaces and empty EOL markers survive run assembly', async () => {
+  assert.equal(await readRuns([run('hello', 72), { str: ' ' }, run('world', 82)]), 'hello world');
+  assert.equal(await readRuns([run('hello ', 72), run('world', 82)]), 'hello world');
+  assert.equal(await readRuns([run('hello', 72), run(' world', 82)]), 'hello world');
+  assert.equal(await readRuns([run('first', 72), { str: '', hasEOL: true }, run('second', 82)]), 'first second');
+});
+test('PDF source order is retained rather than sorting by page position', async () => {
+  assert.equal(await readRuns([run('second', 300), run('first', 72)]), 'second first');
+});
+test('inserted PDF boundaries count toward the existing text limit', async () => {
+  await assert.rejects(readRuns([{ str: 'a'.repeat(DOCUMENT_LIMITS.textCharacters) }, { str: '', hasEOL: true }]));
+});

@@ -1,91 +1,46 @@
-# Bex web-first migration: executable first slice
+# Bex web-first migration: implemented source and acceptance gates
 
-## Goal and scope
+## Goal
 
-Make everyday UI/learning changes testable without rebuilding or reinstalling host hooks.
-Keep the working native integration code while moving frequently changing UI and policy
-into a browser-testable module. This first PR adds an isolated lab, not a production switch.
+Make UI, learning-policy and document work testable in the cloud without repeatedly rebuilding or reinstalling host integration. Keep credentials, provider transmission, signing and system permissions native. This draft is not a production switch or release.
 
-## Present boundary
+## Current implementation
 
-```text
-React UI -> core request/policy/presentation -> CorrectionTransport
-                                                  |
-                                         FixtureTransport only
+- **Default browser workbench:** React UI, validated policy/request/result model and honest fixture transport. Unknown free text is rejected. Learning-material management, local PDF/EPUB extraction, attributed passage search, personalization and a simulated nonblocking host flow are implemented.
+- **Native renderer candidate:** a separate three-file local bundle with restrictive CSP and explicit capability handshake. The default browser build is not privileged. Native mode excludes the document parser/importer/worker and does not fall back to fixtures.
+- **Native host/provider source:** origin/document admission, disclosure/consent, bounded transport, cancellation/drain and account mutation coordination are implemented but activation is gated. Cloud source checks do not establish real provider, security-dialog or WKWebView behavior.
+- **Cross-app safety:** generic capture is read-only with explicit Copy/manual replacement, not automatic Paste/Return. Authenticated managed-host staging remains distinct from actual submission.
+- **Stable helper work:** existing terminal `bex-hook` has explicit signed compatibility/reviewed lifecycle source. A separate read-only Accessibility host, signed peer contract, asynchronous client and dormant coordinator/view-model integration also exist. These are different helpers. Production supplies no independent Accessibility backend; it is neither embedded in nor a dependency of the main app. Stable TCC attribution/persistence is unverified.
+- **Packaging:** exact resource/CSP audit, offline package verification, default-OFF native resource build inputs and explicit source-bound preparation are implemented. Declared-input continuity is not authenticity, hermeticity or trusted build provenance.
 
-optional WKWebView development shell (no privileges, no production services)
-```
+The original first-slice statement that this PR changes no Swift/project files is no longer true. Production source has changed, even where new selection branches remain inactive. Historical commit-specific verification does not verify later changes.
 
-A change to `web/src` does not change BexHook sources, the installed helper path, Codex or
-Claude configuration, the Xcode project, or the existing release workflow. This property
-of the new lab does **not** fix the existing production helper upgrade mechanism yet.
+## What cloud verification establishes
 
-## Next implementation slices
+A committed lockfile supports fresh `npm ci`. Installed TypeScript, browser and native-web builds, Node domain/source checks, actual document parsers and React/JSDOM lifecycle tests have passed in the cloud. Synthetic fixtures cover cancellation, malformed data and policy behavior; they do not measure live-model teaching quality. Static chunk graphs confirm browser PDF code is deferred and excluded from the native entry; they are not browser timing/network traces.
 
-1. **Complete the verification baseline.** Install dependencies, create a reviewed
-   lockfile, pass full typecheck/build and both Playwright projects. Run the isolated
-   WKWebView shell on a Mac. Measure the edit/run loop rather than assume it is faster.
-2. **Native provider adapter.** Connect one opt-in native correction operation to the
-   web request/result contract. Keep credentials and provider networking native.
-   Preserve existing outbound consent, masking, technical-token validation and cancellation.
-   Render UI with the same modules; do not silently make the prototype production-default.
-3. **Stable observation adapter.** Remove language/teaching decisions from the hook
-   helper. Keep a versioned event contract and backwards-compatible core. Distinguish
-   signed-helper integrity from whether an app upgrade requires replacing it. Add a
-   nonblocking learning mode; keep explicit Fix & Send review a separate workflow.
-   Real helper/permission changes still require the host's legitimate approval.
-4. **Learning material ingestion.** Start with user-provided attributed excerpts.
-   Only then add file import, extraction, retrieval and source-grounded suggestions.
-5. **Distribution.** Add an app update channel and signed delivery after deciding the
-   native shell packaging. No update changes are shipped in this first PR.
+Native source assertions and unexecuted XCTest files are not Swift compilation or runtime evidence. No current native app, signed helper/XPC, launchd/TCC or privileged WebKit activation is claimed. Browser launches remain blocked in the current cloud environment; no alternative route bypassed that restriction.
 
-## Bridge contract for the next slice
+## Remaining acceptance gates
 
-`CorrectionRequest` / `CorrectionResult` in `web/src/core/model.ts` version the **web
-correction operation**, not the existing host-hook protocol. Do not reuse host-helper
-version numbers as if they were the same protocol.
+1. **Permitted browser runtime:** Chromium/WebKit UI, keyboard, clipboard, dynamic PDF chunk/worker loading, error and cancellation behavior, and accessibility checks. Do not interpret Playwright WebKit as Apple's WKWebView.
+2. **Separately authorized native build:** compile the exact source and mock tests with the supported SDK/Swift modes; inspect actual Info.plist, LaunchAgent and resource packaging. Build/registration side effects must be reviewed before running native commands.
+3. **Native security/runtime:** exact signed peer rejection, spoofed service/handshake handling, session replacement and stop/drain, navigation/main-frame enforcement, offline resource admission and consent dialogs. A source-level signing requirement does not prove its runtime enforcement.
+4. **Explicit helper setup/permission validation:** only after approval, inspect independent host registration, actual TCC attribution, revocation, reconnect and update persistence. Do not silently migrate, request the main app's AX permission as fallback, or infer permission persistence from bundle identity alone.
+5. **Provider evaluation:** authorize bounded real-provider calls with specific transmitted data and cost limits; measure correction accuracy, minimal edits, protected technical spans, vocabulary level, explanation language and source-grounding on the real corpus. Offline fixtures are not this evaluation.
+6. **Production selection:** only after the above, review an explicit activation change. Preserve unavailable/not-enrolled states and existing safe behavior. No UI or policy update should silently install/replace a helper or broaden permissions.
+7. **Distribution/update/rollback:** choose a release channel and trusted signing/update mechanism, then validate signed packaging, compatibility, atomic replacement/rollback and required user actions on native systems. This draft has no enabled app updater or release. Do not invent signing keys or a trust root to fill the gap.
 
-The adapter must add request IDs, strict origin/main-frame validation, request size
-bounds, cancellation, a capability handshake and response correlation. Native code must
-validate input independently of renderer validation. Do not accept arbitrary shell
-commands, URLs, model endpoints, filesystem paths or tokens from the renderer. Do not
-add the provider bridge to the Vite-hosted dev shell with production credentials.
+## Invariants to retain
 
-`buildCoachContext` keeps study text separate from system instructions, but this alone
-is not an LLM prompt-injection security boundary. Reference material is untrusted.
-`parseResult` validates shape and grounding of short feedback phrases; it does not prove
-semantic correctness or preservation of every technical token. Preserve the native
-mask/restore checks and add a real-corpus eval when enabling actual provider results.
+- Keep credentials, model endpoints, arbitrary file paths and command execution outside renderer messages.
+- Treat imported/reference text as untrusted data, never system instructions. Shape validation cannot prove semantic correctness.
+- Disclose selected source title/section/excerpt together with writing and policy before native provider transmission; imported files/full books are never automatically uploaded.
+- Edits, cancellation and session changes must reject stale success and failure responses before side effects.
+- Feedback budgets limit notes, not necessary edits in the complete corrected text.
+- Preserve user history, preferences, accounts and host configuration through explicit, reviewed migrations.
+- Separate app source implementation, compile evidence, runtime evidence, permission approval and release readiness in every report.
 
-## Acceptance criteria before replacing a production screen
+## Developer entry points
 
-- Complete web build/typecheck and browser E2E are green with a committed lockfile.
-- The native shell compiles and renders on the supported macOS baseline.
-- Same origin, new-window navigation and native message validation fail safely.
-- No raw key, OAuth token, hook-management or general filesystem capability reaches JS.
-- Model calls need explicit disclosed consent; imported text is never auto-uploaded.
-- Cancellation/new edits cannot display an old response under a new draft.
-- Feedback budget does not remove necessary edits from the full corrected output.
-- Existing Bex history, preferences, credentials and host configurations remain unchanged.
-- A UI/policy-only release does not require replacing the host helper.
-- Accessibility keyboard navigation, paste and copy work in both browser and WKWebView.
-
-## Review/run handoff
-
-```sh
-node scripts/bex-web.mjs test
-node scripts/bex-web.mjs check
-node scripts/bex-web.mjs e2e
-node scripts/bex-web.mjs desktop
-```
-
-No automatic merge, release, production data migration or integration reinstallation is
-part of this work. Record actual platform/version and passed checks before promotion.
-
-## Renderer transport follow-up
-
-The opt-in renderer-side native transport and its tested message contract are now
-implemented; see [native-provider-bridge.md](native-provider-bridge.md). It is not
-installed in the fixture lab or native development shell. Native service wiring,
-independent native validation and actual disclosed provider consent remain required
-before activation. No live provider connection is claimed.
+See [web/README.md](../web/README.md) for current setup and commands. Focused designs and boundaries are documented in [native provider bridge](native-provider-bridge.md), [inactive app composition](inactive-app-composition.md), [independent Accessibility agent](independent-accessibility-agent.md), [document import](study-document-import.md), [source freshness](native-source-freshness.md) and [native build inputs](native-build-input-integration.md).
