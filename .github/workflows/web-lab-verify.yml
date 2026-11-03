@@ -1,0 +1,80 @@
+name: Web Lab verification
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'scripts/bex-web.mjs'
+      - '.github/workflows/web-lab-verify.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-lab-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: web
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Record environment
+        run: |
+          mkdir -p verification
+          { node --version; npm --version; uname -a; } | tee verification/environment.log
+      - name: Install dependencies and capture lockfile
+        run: |
+          set -o pipefail
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund 2>&1 | tee verification/install.log
+          else
+            npm install --no-audit --no-fund --fetch-retries=2 2>&1 | tee verification/install.log
+          fi
+      - name: Typecheck, core tests and production build
+        run: |
+          set -o pipefail
+          npm run check 2>&1 | tee verification/check.log
+      - name: Install browser engines (Linux)
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium webkit
+      - name: Install browser engines (macOS)
+        if: runner.os == 'macOS'
+        run: npx playwright install chromium webkit
+      - name: Browser integration tests
+        run: |
+          set -o pipefail
+          npm run test:e2e 2>&1 | tee verification/browser-tests.log
+      - name: Compile actual macOS WebKit shell
+        if: runner.os == 'macOS' && !cancelled()
+        run: |
+          set -o pipefail
+          xcrun swiftc -swift-version 5 native/main.swift -o verification/BexWebLab -framework AppKit -framework WebKit 2>&1 | tee verification/native-build.log
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-lab-${{ matrix.os }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            web/verification/*.log
+            web/package-lock.json
+            web/playwright-report/
+            web/test-results/
