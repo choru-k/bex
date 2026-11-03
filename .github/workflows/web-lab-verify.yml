@@ -13,7 +13,7 @@ permissions:
 
 concurrency:
   group: web-lab-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   verify:
@@ -51,21 +51,32 @@ jobs:
         run: |
           set -o pipefail
           npm run check 2>&1 | tee verification/check.log
+      - name: Compile actual macOS WebKit shell
+        if: runner.os == 'macOS' && !cancelled()
+        run: |
+          set -o pipefail
+          xcrun swiftc -swift-version 5 native/main.swift -o verification/BexWebLab -framework AppKit -framework WebKit 2>&1 | tee verification/native-build.log
       - name: Install browser engines (Linux)
         if: runner.os == 'Linux'
         run: npx playwright install --with-deps chromium webkit
       - name: Install browser engines (macOS)
         if: runner.os == 'macOS'
         run: npx playwright install chromium webkit
+      - name: Real HMR, production rendering and native smoke
+        timeout-minutes: 3
+        env:
+          BEX_WEB_LAB_NATIVE: ${{ runner.os == 'macOS' && 'verification/BexWebLab' || '' }}
+        run: |
+          set -o pipefail
+          node tests/smoke.mjs 2>&1 | tee verification/smoke.log
       - name: Browser integration tests
+        timeout-minutes: 6
         run: |
           set -o pipefail
           npm run test:e2e 2>&1 | tee verification/browser-tests.log
-      - name: Compile actual macOS WebKit shell
-        if: runner.os == 'macOS' && !cancelled()
-        run: |
-          set -o pipefail
-          xcrun swiftc -swift-version 5 native/main.swift -o verification/BexWebLab -framework AppKit -framework WebKit 2>&1 | tee verification/native-build.log
+      - name: Ensure smoke restored source files
+        if: always()
+        run: git diff --exit-code -- src native ../scripts
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -75,6 +86,8 @@ jobs:
           if-no-files-found: warn
           path: |
             web/verification/*.log
+            web/verification/*.json
+            web/verification/*.png
             web/package-lock.json
             web/playwright-report/
             web/test-results/
