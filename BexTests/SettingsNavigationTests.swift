@@ -7,6 +7,46 @@ import XCTest
 
 @MainActor
 final class SettingsNavigationTests: XCTestCase {
+  func testInjectedSettingsChecksOnlyHelperAndNeverRequestsMainAppAccess() async throws {
+    let fixture = SettingsFixture()
+    defer { fixture.remove() }
+    let client = CompositionAXClient()
+    client.failure = .unavailable
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: CompositionCopyRecorder())
+    fixture.target.grantsOnRequest = true
+    let viewModel = fixture.makeViewModel(independentTargetService: helper)
+    viewModel.requestAccessibility()
+    for _ in 0..<1_000 {
+      if viewModel.accessibilityStatusMessage?.contains("unavailable") == true { break }
+      await Task.yield()
+    }
+    XCTAssertEqual(fixture.target.requestCount, 0)
+    XCTAssertFalse(viewModel.accessibilityTrusted)
+    XCTAssertEqual(viewModel.accessibilityActionLabel, "Check Capture Service")
+    XCTAssertTrue(viewModel.accessibilityStatusMessage?.contains("unavailable") == true)
+    await helper.stop()
+  }
+
+  func testClosedSettingsRejectsLateHelperStatusWithoutCancellingSharedTransport() async throws {
+    let fixture = SettingsFixture()
+    defer { fixture.remove() }
+    let client = CompositionAXClient()
+    client.pauseStatus = true
+    let session = client.currentSession
+    let helper = IndependentAccessibilityTargetService(client: client, pasteboard: CompositionCopyRecorder())
+    let viewModel = fixture.makeViewModel(independentTargetService: helper)
+    viewModel.refreshAccessibilityState()
+    for _ in 0..<1_000 { if client.statusCount == 1 { break }; await Task.yield() }
+    XCTAssertEqual(client.statusCount, 1)
+    viewModel.cancelIndependentAccessibilityStatus()
+    client.resumeStatus()
+    for _ in 0..<30 { await Task.yield() }
+    XCTAssertFalse(viewModel.accessibilityTrusted)
+    XCTAssertNil(viewModel.accessibilityStatusMessage)
+    XCTAssertEqual(client.currentSession, session)
+    await helper.stop()
+  }
+
   func testApplicationMenuKeepsTaskFallbacksAndNativeCommands() throws {
     let fixAndSendChord = KeyChord(
       keyCode: UInt32(kVK_ANSI_J),
@@ -216,7 +256,7 @@ final class SettingsNavigationTests: XCTestCase {
     XCTAssertTrue(viewModel.showsAccessibilityRequest)
     XCTAssertEqual(
       viewModel.accessibilityStatusMessage,
-      "Accessibility was revoked. Fix & Send will use copy-only fallback for manual capture."
+      "Accessibility was revoked. Enter your draft in Fix & Send; approved corrections are still copied for manual replacement."
     )
 
     fixture.target.isAccessibilityTrusted = true
@@ -379,11 +419,19 @@ final class SettingsNavigationTests: XCTestCase {
       Set(configurations.map(\.frameAutosaveName)),
       Set(["Bex.MainWindow", "Bex.WelcomeWindow"])
     )
-    for configuration in configurations {
+    for productionConfiguration in configurations {
+      let configuration = WindowCoordinator.StandardWindowConfiguration(
+        title: productionConfiguration.title,
+        defaultContentSize: productionConfiguration.defaultContentSize,
+        minimumContentSize: productionConfiguration.minimumContentSize,
+        frameAutosaveName: "BexTests.Window.\(UUID().uuidString)"
+      )
+      defer { NSWindow.removeFrame(usingName: configuration.frameAutosaveName) }
       let controller = WindowCoordinator.makeWindowController(
         configuration: configuration,
         rootView: EmptyView()
       )
+      defer { controller.close() }
       let window = try XCTUnwrap(controller.window)
       XCTAssertEqual(window.frameAutosaveName, configuration.frameAutosaveName)
       XCTAssertEqual(window.contentMinSize, configuration.minimumContentSize)
@@ -440,6 +488,7 @@ private final class SettingsFixture {
 
   func makeViewModel(
     setupOrigin: SettingsSetupOrigin? = nil,
+    independentTargetService: IndependentAccessibilityTargetService? = nil,
     connectionSucceeds: Bool = false,
     updateShortcut: @escaping @MainActor (BexShortcut, KeyChord) throws -> Void = { _, _ in },
     onDeleteSavedDraft: @escaping @MainActor () -> Void = {},
@@ -453,6 +502,7 @@ private final class SettingsFixture {
       grammar: SettingsGrammarStub(connectionSucceeds: connectionSucceeds),
       codexOAuth: CodexOAuthService(keychain: keychain, transport: transport),
       promptTarget: target,
+      independentTargetService: independentTargetService,
       hookManager: hooks,
       applyAppearance: { _ in },
       setupOrigin: setupOrigin,
@@ -580,6 +630,10 @@ private final class SettingsPromptTargetStub: PromptTargetServicing {
     return isAccessibilityTrusted
   }
 
+  func makeStandaloneTarget() throws -> PromptTarget { fatalError("Not used") }
+  func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws {
+    guard target.availableDeliveryActions.contains(action) else { throw BexError.stalePromptTarget }
+  }
   func captureFrontmostTarget() throws -> PromptCapture { fatalError("Not used") }
   func target(for hookRequest: HookReviewRequest) throws -> PromptTarget { fatalError("Not used") }
 

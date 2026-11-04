@@ -5,6 +5,12 @@ import SwiftUI
 @MainActor
 final class WindowCoordinator: NSObject, NSWindowDelegate {
   private let services: AppServices
+  // Immutable injection only. Production construction never supplies this backend.
+  private let independentTargetService: IndependentAccessibilityTargetService?
+  private var independentCaptureGeneration = UUID()
+  private var independentCaptureTasks: [UUID: Task<Void, Never>] = [:]
+  private var independentStopped = false
+  var usesIndependentAccessibility: Bool { independentTargetService != nil }
   static let currentWelcomeVersion = 1
   private var promptGatePanelController: PromptGatePanelController?
   private var promptGateViewModel: PromptGateViewModel?
@@ -67,12 +73,31 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     frameAutosaveName: "Bex.MainWindow"
   )
 
-  init(services: AppServices) {
+  init(services: AppServices, independentTargetService: IndependentAccessibilityTargetService? = nil) {
     self.services = services
+    self.independentTargetService = independentTargetService
     super.init()
   }
 
+  // Deliberately unreachable until native security, resource packaging and UI
+  // validation are authorized and completed. No build flag or runtime toggle can
+  // enable this literal false branch; there is no menu, shortcut or URL route.
+  #if false
+    func showPackagedCorrection() {
+      services.packagedCorrectionWindows.requestOpen()
+    }
+  #endif
+
   func showPromptGate() {
+    if independentTargetService != nil {
+      guard !independentStopped else { return }
+      if let promptGateViewModel, promptGateViewModel.phase != .closed,
+        pendingManualFixAndSendDraft == nil {
+        retireIndependentCaptures()
+        promptGatePanelController?.show()
+      } else { captureIndependentPromptGate() }
+      return
+    }
     if pendingManualFixAndSendDraft != nil {
       reinvokeManualFixAndSend()
       return
@@ -98,6 +123,86 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     }
   }
 
+  /// Helper-only async capture. The legacy entry above remains synchronous.
+  private func captureIndependentPromptGate() {
+    guard let helper = independentTargetService, !independentStopped else { return }
+    // Coalesce a second hotkey rather than cancel/reconnect while XPC is draining.
+    guard independentCaptureTasks.isEmpty else { return }
+    retireIndependentCaptures()
+    let requestID = UUID()
+    let generation = independentCaptureGeneration
+    let pendingDraft = pendingManualFixAndSendDraft
+    let previousSession = promptGateViewModel?.session?.id
+    let previousDraft = promptGateViewModel?.draft
+    independentCaptureTasks[requestID] = Task { @MainActor [weak self, helper] in
+      defer { self?.independentCaptureTasks.removeValue(forKey: requestID) }
+      do {
+        let capture = try await helper.captureFrontmostTarget()
+        guard let self, !Task.isCancelled, !self.independentStopped,
+          self.independentCaptureGeneration == generation,
+          self.promptGateViewModel?.session?.id == previousSession,
+          Self.sameDraft(self.promptGateViewModel?.draft, previousDraft),
+          Self.sameDraft(self.pendingManualFixAndSendDraft, pendingDraft)
+        else { helper.discard(capture.target); return }
+        let session = PromptGateSession(initialDraft: pendingDraft ?? capture.draft,
+          target: capture.target, source: capture.source)
+        // Do not overwrite a still-open review, including a manual draft with edits.
+        guard self.promptGateViewModel?.phase == nil || self.promptGateViewModel?.phase == .closed else {
+          helper.discard(capture.target)
+          return
+        }
+        if self.showPromptGate(session: session) { self.pendingManualFixAndSendDraft = nil }
+      } catch {
+        guard let self, !Task.isCancelled, !self.independentStopped,
+          self.independentCaptureGeneration == generation,
+          self.promptGateViewModel?.session?.id == previousSession,
+          Self.sameDraft(self.promptGateViewModel?.draft, previousDraft),
+          Self.sameDraft(self.pendingManualFixAndSendDraft, pendingDraft) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Independent capture service unavailable"
+        alert.informativeText = "No draft was replaced. Check the separately installed Bex Accessibility service, or choose Fix & Send to enter a draft manually. Bex will not request main-app Accessibility permission or switch capture services."
+        alert.addButton(withTitle: "Keep Current")
+        alert.runModal()
+      }
+    }
+  }
+
+  private static func sameDraft(_ left: String?, _ right: String?) -> Bool {
+    switch (left, right) {
+    case (.none, .none): return true
+    case (.some(let left), .some(let right)): return left.utf8.elementsEqual(right.utf8)
+    default: return false
+    }
+  }
+
+  private func retireIndependentCaptures() {
+    guard independentTargetService != nil else { return }
+    independentCaptureGeneration = UUID()
+    for task in independentCaptureTasks.values { task.cancel() }
+  }
+
+  /// Synchronous admission close precedes any termination-task suspension.
+  func closeIndependentAccessibilityAdmission() {
+    guard let independentTargetService, !independentStopped else { return }
+    independentStopped = true
+    retireIndependentCaptures()
+    if let pendingPromptGateSession { independentTargetService.discard(pendingPromptGateSession.target) }
+    pendingPromptGateSession = nil
+    promptGateViewModel?.invalidateIndependentSession()
+    mainWindowModel?.settings.cancelIndependentAccessibilityStatus()
+    independentTargetService.closeAdmission()
+  }
+
+  /// Terminal shutdown for the injected backend only; nil/default has no work.
+  func shutdownIndependentAccessibility() async {
+    guard let independentTargetService else { return }
+    closeIndependentAccessibilityAdmission()
+    let captures = Array(independentCaptureTasks.values)
+    await independentTargetService.stop()
+    for task in captures { await task.value }
+    await promptGateViewModel?.waitForCurrentWork()
+  }
+
   private func reinvokeManualFixAndSend() {
     guard let draft = pendingManualFixAndSendDraft else { return }
     do {
@@ -113,6 +218,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         _ = showPromptGate(session: newSession)
         return
       }
+      if let pendingPromptGateSession { services.promptTarget.discard(pendingPromptGateSession.target) }
       pendingPromptGateSession = newSession
       promptGateViewModel.cancel()
     } catch {
@@ -123,8 +229,12 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   }
 
   func showPromptGate(hookRequest: HookReviewRequest) -> Bool {
+    if independentTargetService != nil, independentStopped { return false }
+    retireIndependentCaptures()
     do {
-      let target = try services.promptTarget.target(for: hookRequest)
+      let target: PromptTarget
+      if let independentTargetService { target = try independentTargetService.target(for: hookRequest) }
+      else { target = try services.promptTarget.target(for: hookRequest) }
       let session = PromptGateSession(
         initialDraft: hookRequest.prompt,
         target: target,
@@ -142,13 +252,15 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   }
 
   func closePromptGate() {
+    retireIndependentCaptures()
     promptGatePanelController?.orderOut()
     guard pendingPromptGateSession != nil else { return }
     Task { @MainActor [weak self] in
       await Task.yield()
       guard let self,
         let pendingPromptGateSession,
-        promptGateViewModel?.phase == .closed
+        promptGateViewModel?.phase == .closed,
+        independentTargetService == nil || !independentStopped
       else { return }
       self.pendingPromptGateSession = nil
       _ = showPromptGate(session: pendingPromptGateSession)
@@ -180,7 +292,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             makeKey: { [weak self] in
               self?.microDrillPanelController?.activateForAnswering()
             },
-            dismiss: { [weak self] in self?.microDrillPanelController?.close() }
+            dismiss: { [weak self] in self?.microDrillPanelController?.close() },
+            permitsExternalFocus: services.runtimeEffects.permitsExternalFocus
           )
         )
       )
@@ -206,7 +319,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             self?.showSettings(origin: .fixAndSend)
           }
         ),
-        delegate: self
+        delegate: self,
+        persistsWindowFrames: services.runtimeEffects.persistsWindowFrames
       )
     }
     show(welcomeWindowController)
@@ -218,6 +332,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   /// site funnels through here, so "open Bex at Writing Styles" and "the owner clicked
   /// Writing Styles in the sidebar" are the same operation and cannot drift apart.
   func showMain(_ page: MainWindowPage) {
+    if independentTargetService != nil, independentStopped { return }
+    retireIndependentCaptures()
     if mainWindowController == nil {
       let model = MainWindowModel(
         page: page,
@@ -251,7 +367,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           model: model,
           openFixAndSend: { [weak self] in self?.showStandaloneFixAndSend() }
         ),
-        delegate: self
+        delegate: self,
+        persistsWindowFrames: services.runtimeEffects.persistsWindowFrames
       )
       observeMainWindowPage(model)
     }
@@ -305,13 +422,19 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     draft: String = "",
     usesDraftPersistence: Bool = true
   ) {
+    if independentTargetService != nil, independentStopped { return }
+    retireIndependentCaptures()
+    let target: PromptTarget
+    do {
+      if let independentTargetService { target = try independentTargetService.makeStandaloneTarget() }
+      else { target = try services.promptTarget.makeStandaloneTarget() }
+    } catch {
+      NSAlert(error: error).runModal()
+      return
+    }
     let session = PromptGateSession(
       initialDraft: draft,
-      target: PromptTarget(
-        kind: .copyOnly,
-        applicationName: "Bex",
-        guidance: "Fix & Send will copy the approved correction for use wherever you need it."
-      ),
+      target: target,
       source: .standalone,
       usesDraftPersistence: usesDraftPersistence
     )
@@ -321,10 +444,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       return
     }
     guard confirmFixAndSendReplacement() else {
+      if let independentTargetService { independentTargetService.discard(session.target) }
+      else { services.promptTarget.discard(session.target) }
       promptGatePanelController?.show()
       return
     }
     mainWindowController?.close()
+    if let pendingPromptGateSession {
+      if let independentTargetService { independentTargetService.discard(pendingPromptGateSession.target) }
+      else { services.promptTarget.discard(pendingPromptGateSession.target) }
+    }
     pendingPromptGateSession = session
     promptGateViewModel.cancel()
     if promptGateViewModel.showsDiscardConfirmation {
@@ -348,6 +477,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   }
 
   func showSettings(origin: SettingsSetupOrigin? = nil) {
+    retireIndependentCaptures()
     if origin == .fixAndSend {
       promptGatePanelController?.orderOut()
     }
@@ -373,6 +503,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       grammar: services.grammar,
       codexOAuth: services.codexOAuth,
       promptTarget: services.promptTarget,
+      independentTargetService: independentTargetService,
       hookManager: services.hookManager,
       applyAppearance: { [weak self] appearance in
         self?.applyAppearance(appearance)
@@ -393,11 +524,33 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       },
       onRunBackgroundAgent: { [weak self] in
         self?.onRunBackgroundAgent?()
-      }
+      },
+      openAuthorizationURL: services.runtimeEffects.openAuthorizationURL,
+      pasteboard: services.pasteboard,
+      initialWorkingDirectory: services.runtimeEffects.settingsWorkingDirectory,
+      initialOMPExecutablePath: services.runtimeEffects.settingsOMPExecutablePath
     )
   }
 
   private func handleSettingsRoute(_ intent: SettingsRouteIntent) {
+    if independentTargetService != nil, independentStopped { return }
+    retireIndependentCaptures()
+    if independentTargetService != nil {
+      // Keep the existing draft/review. Never activate an external process or silently
+      // recapture it as a permission-recovery side effect on the helper path.
+      mainWindowController?.close()
+      guard let viewModel = promptGateViewModel, let session = viewModel.session else {
+        showStandaloneFixAndSend()
+        return
+      }
+      Task { @MainActor [weak self, weak viewModel] in
+        await viewModel?.refreshConfigurationAfterSettings()
+        guard let self, let viewModel, !self.independentStopped,
+          viewModel.session?.id == session.id, viewModel.phase != .closed else { return }
+        self.promptGatePanelController?.show()
+      }
+      return
+    }
     mainWindowController?.close()
     switch intent {
     case .returnToFixAndSendTarget:
@@ -415,7 +568,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       pendingManualFixAndSendDraft = promptGateViewModel.draft
       promptGateViewModel.cancel()
       if let processID = session.target.processID {
-        NSRunningApplication(processIdentifier: processID)?.activate()
+        services.runtimeEffects.activateExternalApplication(processID)
       }
     }
   }
@@ -443,6 +596,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   }
 
   func windowWillClose(_ notification: Notification) {
+    retireIndependentCaptures()
     guard let window = notification.object as? NSWindow else { return }
     if window === welcomeWindowController?.window {
       Task {
@@ -452,6 +606,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       return
     }
     if window === mainWindowController?.window {
+      mainWindowModel?.settings.cancelIndependentAccessibilityStatus()
       mainWindowController = nil
       mainWindowModel = nil
       mainWindowPageCancellable = nil
@@ -465,6 +620,10 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
 
   @discardableResult
   private func showPromptGate(session: PromptGateSession) -> Bool {
+    if let independentTargetService, independentStopped {
+      independentTargetService.discard(session.target)
+      return false
+    }
     if promptGatePanelController == nil {
       let viewModel = PromptGateViewModel(
         preferences: services.preferences,
@@ -473,6 +632,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         grammar: services.grammar,
         data: services.data,
         targetService: services.promptTarget,
+        independentTargetService: independentTargetService,
         approvalStore: services.approvalStore,
         hookManager: services.hookManager,
         hookResponder: services.promptGateIPC,
@@ -490,7 +650,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         rootView: AnyView(
           PromptGateView(viewModel: viewModel, askThread: makeAskThread())
         ),
-        cancelAction: { [weak viewModel] in viewModel?.cancel() }
+        cancelAction: { [weak viewModel] in viewModel?.cancel() },
+        frameAutosaveName: services.runtimeEffects.persistsWindowFrames
+          ? PromptGatePanelController.frameAutosaveName : nil
       )
       promptGatePhaseCancellable = viewModel.$phase
         .removeDuplicates()
@@ -498,8 +660,16 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           promptGatePanelController?.accommodate(phase)
         }
     }
-    guard let promptGateViewModel else { return false }
+    guard let promptGateViewModel else {
+      if let independentTargetService { independentTargetService.discard(session.target) }
+      else { services.promptTarget.discard(session.target) }
+      return false
+    }
     let began = promptGateViewModel.begin(session)
+    if !began {
+      if let independentTargetService { independentTargetService.discard(session.target) }
+      else { services.promptTarget.discard(session.target) }
+    }
     promptGatePanelController?.show()
     return began
   }
@@ -507,7 +677,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   static func makeWindowController<Content: View>(
     configuration: StandardWindowConfiguration,
     rootView: Content,
-    delegate: (any NSWindowDelegate)? = nil
+    delegate: (any NSWindowDelegate)? = nil,
+    persistsWindowFrames: Bool = true
   ) -> NSWindowController {
     // The root view carries the window's size, as an *ideal* rather than a maximum.
     //
@@ -535,8 +706,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     window.isReleasedWhenClosed = false
     window.delegate = delegate
     let controller = NSWindowController(window: window)
-    let restoredSavedFrame = window.setFrameUsingName(configuration.frameAutosaveName)
-    _ = window.setFrameAutosaveName(configuration.frameAutosaveName)
+    var restoredSavedFrame = false
+    if persistsWindowFrames {
+      restoredSavedFrame = window.setFrameUsingName(configuration.frameAutosaveName)
+      _ = window.setFrameAutosaveName(configuration.frameAutosaveName)
+    }
     if !restoredSavedFrame {
       window.center()
     }

@@ -55,7 +55,7 @@ Bex runs as a small icon in the macOS menu bar rather than in the Dock.
 1. Open **Settings** from the Bex menu and select a provider and model.
 2. Add the provider credential, connect OpenAI Codex, or configure the local Ollama URL.
 3. Press `⇧⌘P` from any app to open **Fix & Send**. If a supported editable field is focused, Bex captures that field as the delivery target. Otherwise, type or paste into the standalone composer.
-4. Run the correction, review the word-level diff and explanation, then approve the target-appropriate action: send, paste, or copy.
+4. Run the correction, review the word-level diff and explanation, then approve Copy for manual replacement, or Stage for a supported managed hook.
 
 You can also choose **Fix & Send** from the Bex menu whenever you want a standalone correction rather than capturing the focused app.
 
@@ -105,22 +105,24 @@ Reasoning-capable providers use the Settings **effort** control (reasoning depth
 
 ## Fix & Send
 
-Fix & Send corrects English while leaving protected technical text untouched. It shows you the full before/after diff and delivers only the correction you explicitly approve.
+Fix & Send corrects English while leaving protected technical text untouched. It shows you the full before/after diff and copies only the correction you explicitly approve. Supported host-managed hooks can stage the correction for explicit replay.
 
 ### Focused app flow
 
 1. Focus the original text in its destination app and press `⇧⌘P`.
 2. If macOS asks, grant Bex Accessibility access. Review the target and provider disclosure, then continue.
 3. Review every change. You can edit the correction; Bex recomputes the diff before approval.
-4. Choose **Send Corrected**, **Paste Corrected**, or **Copy** (see the table below). Bex never sends the original.
+4. Choose **Copy Correction**, then select the intended destination, replace its draft, and submit manually. A supported managed hook offers **Stage** instead. Bex never submits through Accessibility or global keystrokes.
 
 Delivery depends on the captured target:
 
 | Target | How you provide the text | Delivery after approval |
 | --- | --- | --- |
-| Standard, editable macOS text field or text area | Bex captures and later revalidates the exact field | **Send Corrected** replaces the field with the correction. With **Send after approval** enabled, Bex presses Return only after confirming the field still holds the exact correction. |
-| Browser, terminal, rich composer, unsupported field, or empty field | Type or paste the original into Bex's standalone composer | **Copy** places the correction on the clipboard; paste it into the destination manually. |
+| Standard, editable macOS text field or text area | Bex captures the field and rechecks its process, field identity and observed text before copying | **Copy Correction** updates the clipboard once. Select the intended destination, replace its draft, and submit manually. |
+| Unsupported field, unknown process identity, or empty field | Type or paste the original into Bex's standalone composer | **Copy Correction** places the correction on the clipboard for manual replacement. |
 | Accessibility unavailable or target cannot be revalidated | Type or paste the original into Bex | **Copy** places the correction on the clipboard for manual replacement. |
+
+**Cross-app safety change:** generic Accessibility capture no longer offers automatic paste or Return. Checking focus and text cannot make a later global keystroke atomic: another app, field, or draft can change in between. Bex therefore uses explicit Copy even when Accessibility is enabled, and does not claim to detect edits that changed back between observations. It never changes focus, selects external text, pastes, or submits through this adapter. Copy uses one issued review target once; an uncertain clipboard write disables retry. Unknown, expired, discarded or changed targets require a new review. The authenticated Oh My Pi staging and explicit replay path is unchanged.
 
 Before correction, Bex masks technical-looking spans: fenced and inline code, templates (`${…}`, `{{…}}`), tags (`<…>`), URLs, paths, command flags, variables (`$VAR`), and mentions (`@name`). Every masked token must reappear exactly once, in order, in the correction; if any is missing, duplicated, or reordered, Fix & Send refuses delivery.
 
@@ -142,7 +144,7 @@ The three clients differ only in setup and delivery:
 
 | Client | Approval after Apply | Delivery after approval | On helper failure |
 | --- | --- | --- | --- |
-| Claude Code | None — `/hooks` is inspection-only | Bex pastes → focus the composer and press Return; or Bex copies → replace the retained original with the correction, then press Return | May fail open |
+| Claude Code | None — `/hooks` is inspection-only | Bex copies → select the intended composer, replace the retained original with the correction, then press Return | May fail open |
 | Codex | Open `/hooks` and trust the Bex handler | Same as Claude Code | May fail open |
 | OMP | None — uses the reviewed native `prompt-gate-v1` protocol, no marketplace extension | Bex resubmits the correction once through the native gate | Fails closed |
 
@@ -214,18 +216,20 @@ Or drag `Bex.app` from `/Applications` to the Trash. To also erase local data, d
 
 Open `Bex.xcodeproj` in Xcode 26 or build from the repository root.
 
-Run the deterministic unit and UI test suites:
+UI validation uses the dedicated `UITesting` build configuration and `BexUIValidation.app`, never an ordinary Debug app selected only by launch flags. Both shared scheme TestActions use this configuration; Run/Archive remain ordinary Debug/Release. App-hosted tests reject a Debug/Release configuration override at compile time.
+
+After explicit approval of the Mac build/test setup, prepare and inspect a fresh artifact:
 
 ```sh
-xcodebuild \
-  -project Bex.xcodeproj \
-  -scheme Bex \
-  -destination 'platform=macOS' \
-  -derivedDataPath build/DerivedData.noindex \
-  test
+node scripts/bex-ui-test-artifact.mjs build
+node scripts/bex-ui-test-artifact.mjs inspect /absolute/path/from-build/receipt.json
 ```
 
-CI runs only the unit suite (`-only-testing:BexTests`); the command above also runs the UI tests locally.
+Only `UITesting` uses fixed teamless ad-hoc signing; ordinary Debug/Release signing is unchanged. Preparation validates the effective signing settings for the app, helper and both test targets, and inspection verifies each project product's ad-hoc signature without executing or re-signing it. No certificate, provisioning update or unsigned fallback is used.
+
+After reviewing the setup and approving native execution, the same script's `test` command runs only the named entry/relaunch regression allowlist. Preparation can still invoke Xcode app registration and execution-policy exception tooling; a temporary build directory does not imply zero system changes. LaunchServices registration approval does not authorize an execution-policy exception, so native builds remain held until any required security-policy change is approved. Do not disable security tooling to work around the hold. The inspection is not a sandbox or cryptographic attestation.
+
+See [UI validation isolation](docs/ui-validation-isolation.md) for the compiled artifact contract, exact workflow, native evidence limits, fixture boundary and separately authorized manual system-target lane. Do not manually assemble a normal Debug binary into a validation `.app` or reuse an old `.xctestrun`. Broader native unit/UI execution needs separate review; the independent Swift package tests are unaffected.
 
 Build an unsigned Release app:
 

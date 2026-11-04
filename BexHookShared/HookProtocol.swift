@@ -18,6 +18,37 @@ enum HookProtocolConstants {
   static let promptGateCapability = "prompt-gate-v1"
 }
 
+/// A signed helper's explicit reuse promise, independent of app/build version and binary hash.
+/// Bump runtimeRevision for ANY helper/shared-runtime behavior or security change, even when
+/// the IPC wire version is unchanged. UI, provider, and app-side policy changes do not bump it.
+/// Older helpers without this contract are unknown, not implicitly compatible.
+struct HookHelperContract: Codable, Equatable, Sendable {
+  let contractVersion: Int
+  let helper: String
+  let protocolVersion: Int
+  let runtimeRevision: Int
+  let maximumMessageBytes: Int
+  let capabilities: [String]
+
+  static let current = HookHelperContract(
+    contractVersion: 1,
+    helper: HookProtocolConstants.helperName,
+    protocolVersion: HookProtocolConstants.version,
+    runtimeRevision: 1,
+    maximumMessageBytes: HookProtocolConstants.maximumMessageBytes,
+    capabilities: ["review-v1", "ack-v1", "single-use-receipts-v1", "prompt-gate-v1"]
+  )
+
+  var satisfiesCurrentApp: Bool {
+    contractVersion == Self.current.contractVersion
+      && helper == Self.current.helper
+      && protocolVersion == Self.current.protocolVersion
+      && runtimeRevision == Self.current.runtimeRevision
+      && maximumMessageBytes == Self.current.maximumMessageBytes
+      && Set(Self.current.capabilities).isSubset(of: Set(capabilities))
+  }
+}
+
 /// Recognizes a prompt written in Korean, which Bex has nothing useful to say about.
 ///
 /// Two shapes have to be told apart, and counting characters cannot do it — measured on

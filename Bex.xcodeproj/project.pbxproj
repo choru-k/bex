@@ -22,6 +22,14 @@
 		A0000000000000000000005D /* CryptoKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000066 /* CryptoKit.framework */; };
 		A0000000000000000000005E /* bex-hook in Embed Helpers */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* bex-hook */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		A0000000000000000000005F /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A0000000000000000000006A /* UserNotifications.framework */; };
+		B10000000000000000000001 /* NativeBridgeCore in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000003 /* NativeBridgeCore */; };
+		B10000000000000000000004 /* NativeBridgeCore in Frameworks */ = {isa = PBXBuildFile; productRef = B10000000000000000000005 /* NativeBridgeCore */; };
+		C70000000000000000000001 /* AppKit.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000061 /* AppKit.framework */; };
+		C70000000000000000000002 /* Foundation.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000063 /* Foundation.framework */; };
+		C70000000000000000000003 /* Security.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000064 /* Security.framework */; };
+		C70000000000000000000004 /* ApplicationServices.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000069 /* ApplicationServices.framework */; };
+		C70000000000000000000005 /* ServiceManagement.framework in AX Frameworks */ = {isa = PBXBuildFile; fileRef = C70000000000000000000006 /* ServiceManagement.framework */; };
+		C70000000000000000000007 /* AX LaunchAgent in Copy LaunchAgent */ = {isa = PBXBuildFile; fileRef = C70000000000000000000008 /* AX LaunchAgent */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +71,9 @@
 		A00000000000000000000068 /* OSLog.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = OSLog.framework; path = System/Library/Frameworks/OSLog.framework; sourceTree = SDKROOT; };
 		A00000000000000000000069 /* ApplicationServices.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ApplicationServices.framework; path = System/Library/Frameworks/ApplicationServices.framework; sourceTree = SDKROOT; };
 		A0000000000000000000006A /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
+		C70000000000000000000006 /* ServiceManagement.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ServiceManagement.framework; path = System/Library/Frameworks/ServiceManagement.framework; sourceTree = SDKROOT; };
+		C70000000000000000000008 /* AX LaunchAgent */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Config/com.bex.accessibility.agent.plist; sourceTree = "<group>"; };
+		C70000000000000000000009 /* BexAccessibility.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BexAccessibility.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -91,6 +102,8 @@
 			path = BexHook;
 			sourceTree = "<group>";
 		};
+		C70000000000000000000010 /* BexAccessibilityShared */ = {isa = PBXFileSystemSynchronizedRootGroup; path = BexAccessibilityShared; sourceTree = "<group>"; };
+		C70000000000000000000011 /* BexAccessibilityHost */ = {isa = PBXFileSystemSynchronizedRootGroup; path = BexAccessibilityHost; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -98,6 +111,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000001 /* NativeBridgeCore in Frameworks */,
 				A00000000000000000000051 /* AppKit.framework in Frameworks */,
 				A00000000000000000000052 /* SwiftUI.framework in Frameworks */,
 				A00000000000000000000053 /* Foundation.framework in Frameworks */,
@@ -115,6 +129,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B10000000000000000000004 /* NativeBridgeCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -136,6 +151,12 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C70000000000000000000012 /* AX Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (C70000000000000000000001, C70000000000000000000002, C70000000000000000000003, C70000000000000000000004, C70000000000000000000005, );
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -147,6 +168,9 @@
 				A00000000000000000000043 /* BexUITests */,
 				A00000000000000000000044 /* BexHookShared */,
 				A00000000000000000000045 /* BexHook */,
+				C70000000000000000000010 /* BexAccessibilityShared */,
+				C70000000000000000000011 /* BexAccessibilityHost */,
+				C70000000000000000000008 /* AX LaunchAgent */,
 				A00000000000000000000004 /* Frameworks */,
 				A00000000000000000000003 /* Products */,
 			);
@@ -159,6 +183,7 @@
 				A00000000000000000000022 /* BexTests.xctest */,
 				A00000000000000000000023 /* BexUITests.xctest */,
 				A00000000000000000000024 /* bex-hook */,
+				C70000000000000000000009 /* BexAccessibility.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -190,6 +215,7 @@
 				A00000000000000000000081 /* Sources */,
 				A00000000000000000000071 /* Frameworks */,
 				A00000000000000000000091 /* Resources */,
+				B20000000000000000000001 /* Embed Native Resources (Explicit Opt-In) */,
 				A00000000000000000000094 /* Embed Helpers */,
 			);
 			buildRules = (
@@ -200,9 +226,11 @@
 			fileSystemSynchronizedGroups = (
 				A00000000000000000000041 /* Bex */,
 				A00000000000000000000044 /* BexHookShared */,
+				C70000000000000000000010 /* BexAccessibilityShared */,
 			);
 			name = Bex;
 			packageProductDependencies = (
+				B10000000000000000000003 /* NativeBridgeCore */,
 			);
 			productName = Bex;
 			productReference = A00000000000000000000021 /* Bex.app */;
@@ -226,6 +254,7 @@
 			);
 			name = BexTests;
 			packageProductDependencies = (
+				B10000000000000000000005 /* NativeBridgeCore */,
 			);
 			productName = BexTests;
 			productReference = A00000000000000000000022 /* BexTests.xctest */;
@@ -276,6 +305,18 @@
 			productReference = A00000000000000000000024 /* bex-hook */;
 			productType = "com.apple.product-type.tool";
 		};
+		C70000000000000000000013 /* BexAccessibility */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C70000000000000000000014;
+			buildPhases = (C70000000000000000000015, C70000000000000000000012, C70000000000000000000016, );
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (C70000000000000000000010, C70000000000000000000011, );
+			name = BexAccessibility;
+			productName = BexAccessibility;
+			productReference = C70000000000000000000009;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -313,6 +354,9 @@
 			minimizedProjectReferenceProxies = 1;
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A00000000000000000000003 /* Products */;
+			packageReferences = (
+				B10000000000000000000002 /* XCLocalSwiftPackageReference "native" */,
+			);
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -320,6 +364,7 @@
 				A00000000000000000000012 /* BexTests */,
 				A00000000000000000000013 /* BexUITests */,
 				A00000000000000000000014 /* bex-hook */,
+				C70000000000000000000013 /* BexAccessibility */,
 			);
 		};
 /* End PBXProject section */
@@ -360,7 +405,39 @@
 			name = "Embed Helpers";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C70000000000000000000016 /* Copy LaunchAgent into independent host only */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = Contents/Library/LaunchAgents;
+			dstSubfolderSpec = 1;
+			files = (C70000000000000000000007, );
+			name = "Copy LaunchAgent";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		B20000000000000000000001 /* Embed Native Resources (Explicit Opt-In) */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"$(SRCROOT)/Config/BexNativeResourceScripts.xcfilelist",
+				"$(BEX_NATIVE_RESOURCE_INPUT_FILE_LIST)",
+			);
+			name = "Embed Native Resources (Explicit Opt-In)";
+			outputPaths = (
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/BexWebUI",
+				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/native-resource-manifest.json",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "/bin/sh \"${SRCROOT}/scripts/bex-native-resource-build-phase.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A00000000000000000000081 /* Sources */ = {
@@ -391,6 +468,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		C70000000000000000000015 /* AX Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -410,6 +488,24 @@
 			targetProxy = A00000000000000000000035 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B10000000000000000000002 /* XCLocalSwiftPackageReference "native" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = native;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B10000000000000000000003 /* NativeBridgeCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NativeBridgeCore;
+		};
+		B10000000000000000000005 /* NativeBridgeCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NativeBridgeCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A00000000000000000000111 /* Debug */ = {
@@ -523,6 +619,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BEX_EMBED_NATIVE_WEB_RESOURCES = NO;
+				BEX_NATIVE_RESOURCE_INPUT_FILE_LIST = "$(SRCROOT)/Config/BexNativeResources.empty.xcfilelist";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -549,6 +647,8 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BEX_EMBED_NATIVE_WEB_RESOURCES = NO;
+				BEX_NATIVE_RESOURCE_INPUT_FILE_LIST = "$(SRCROOT)/Config/BexNativeResources.empty.xcfilelist";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				COPY_PHASE_STRIP = YES;
@@ -654,6 +754,8 @@
 				DEVELOPMENT_TEAM = ESURPGU29C;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				INFOPLIST_FILE = Config/HelperInfo.plist;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.8.5;
 				PRODUCT_NAME = "bex-hook";
@@ -673,6 +775,8 @@
 				DEVELOPMENT_TEAM = ESURPGU29C;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				INFOPLIST_FILE = Config/HelperInfo.plist;
 				MACOSX_DEPLOYMENT_TARGET = 13.0;
 				MARKETING_VERSION = 0.8.5;
 				PRODUCT_NAME = "bex-hook";
@@ -685,12 +789,247 @@
 			};
 			name = Release;
 		};
+		C70000000000000000000017 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ESURPGU29C;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AccessibilityHost-Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.accessibility;
+				PRODUCT_NAME = BexAccessibility;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		C70000000000000000000018 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = ESURPGU29C;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AccessibilityHost-Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.accessibility;
+				PRODUCT_NAME = BexAccessibility;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+		D80000000000000000000011 /* UITesting */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_KEYCHAIN = "";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = YES;
+				DEVELOPMENT_TEAM = "";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG BEX_UI_TEST_ARTIFACT $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+		};
+			name = UITesting;
+		};
+		D80000000000000000000021 /* UITesting */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_KEYCHAIN = "";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = YES;
+				DEVELOPMENT_TEAM = "";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				BEX_EMBED_NATIVE_WEB_RESOURCES = NO;
+				BEX_NATIVE_RESOURCE_INPUT_FILE_LIST = "$(SRCROOT)/Config/BexNativeResources.empty.xcfilelist";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/UITesting-Info.plist;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 0.8.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.desktop.ui-validation;
+				PRODUCT_NAME = BexUIValidation;
+				PRODUCT_MODULE_NAME = Bex;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+		};
+			name = UITesting;
+		};
+		D80000000000000000000031 /* UITesting */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_KEYCHAIN = "";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = YES;
+				DEVELOPMENT_TEAM = "";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.8.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.desktop.ui-validation.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/BexUIValidation.app/Contents/MacOS/BexUIValidation";
+		};
+			name = UITesting;
+		};
+		D80000000000000000000041 /* UITesting */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_KEYCHAIN = "";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = YES;
+				DEVELOPMENT_TEAM = "";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.8.5;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.desktop.ui-validation.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TEST_TARGET_NAME = Bex;
+		};
+			name = UITesting;
+		};
+		D80000000000000000000051 /* UITesting */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_KEYCHAIN = "";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = YES;
+				DEVELOPMENT_TEAM = "";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				CURRENT_PROJECT_VERSION = 1;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				CREATE_INFOPLIST_SECTION_IN_BINARY = YES;
+				INFOPLIST_FILE = Config/HelperInfo.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.8.5;
+				PRODUCT_NAME = "bex-hook";
+				SKIP_INSTALL = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = UITesting;
+		};
+		D80000000000000000000061 /* UITesting */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_KEYCHAIN = "";
+				CODE_SIGN_STYLE = Manual;
+				CODE_SIGNING_ALLOWED = YES;
+				CODE_SIGNING_REQUIRED = YES;
+				DEVELOPMENT_TEAM = "";
+				OTHER_CODE_SIGN_FLAGS = "";
+				PROVISIONING_PROFILE = "";
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				ENABLE_APP_SANDBOX = NO;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AccessibilityHost-Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bex.accessibility;
+				PRODUCT_NAME = BexAccessibility;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = UITesting;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		A00000000000000000000100 /* Build configuration list for PBXProject "Bex" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				D80000000000000000000011 /* UITesting */,
 				A00000000000000000000111 /* Debug */,
 				A00000000000000000000112 /* Release */,
 			);
@@ -700,6 +1039,7 @@
 		A00000000000000000000101 /* Build configuration list for PBXNativeTarget "Bex" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				D80000000000000000000021 /* UITesting */,
 				A00000000000000000000121 /* Debug */,
 				A00000000000000000000122 /* Release */,
 			);
@@ -709,6 +1049,7 @@
 		A00000000000000000000102 /* Build configuration list for PBXNativeTarget "BexTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				D80000000000000000000031 /* UITesting */,
 				A00000000000000000000131 /* Debug */,
 				A00000000000000000000132 /* Release */,
 			);
@@ -718,6 +1059,7 @@
 		A00000000000000000000103 /* Build configuration list for PBXNativeTarget "BexUITests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				D80000000000000000000041 /* UITesting */,
 				A00000000000000000000141 /* Debug */,
 				A00000000000000000000142 /* Release */,
 			);
@@ -727,9 +1069,16 @@
 		A00000000000000000000104 /* Build configuration list for PBXNativeTarget "bex-hook" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
+				D80000000000000000000051 /* UITesting */,
 				A00000000000000000000151 /* Debug */,
 				A00000000000000000000152 /* Release */,
 			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C70000000000000000000014 /* BexAccessibility configuration list */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (D80000000000000000000061, C70000000000000000000017, C70000000000000000000018, );
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};

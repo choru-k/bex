@@ -8,6 +8,7 @@ import UserNotifications
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate {
   private var services: AppServices?
+  private var packagedTerminationTask: Task<Void, Never>?
   private var windowCoordinator: WindowCoordinator?
   private var statusItem: NSStatusItem?
   private var hubController: MenuBarHubController?
@@ -42,6 +43,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   static func main() {
+    // This must precede AppKit/delegate construction on every launch, including
+    // LaunchServices/XCTest relaunches that discard all arguments and environment.
+    let process = ProcessInfo.processInfo
+    let mode = AppLaunchMode.resolve(arguments: process.arguments, environment: process.environment)
+    guard mode != .rejectedUITesting else { return }
+    if process.arguments.contains("--bex-ui-artifact-probe") {
+      #if BEX_UI_TEST_ARTIFACT
+        print(AppLaunchMode.compiledArtifactStamp)
+      #endif
+      return
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -53,11 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
 
+    let processInfo = ProcessInfo.processInfo
+    let arguments = processInfo.arguments
+    let environment = processInfo.environment
+    let launchMode = AppLaunchMode.resolve(arguments: arguments, environment: environment)
+    guard launchMode != .rejectedUITesting else {
+      // Never fall through to production on an invalid or Release test launch.
+      NSApp.terminate(nil)
+      return
+    }
     #if DEBUG
-      let processInfo = ProcessInfo.processInfo
-      let arguments = processInfo.arguments
-      let environment = processInfo.environment
-      if arguments.contains("--ui-testing") || environment["BEX_UI_TESTING"] == "1" {
+      if launchMode != .production {
         let missingCredential =
           arguments.contains("--missing-credential")
           || environment["BEX_UI_TEST_MISSING_CREDENTIAL"] == "1"
@@ -71,9 +89,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           launchDestination = UITestScenario.current.configuration.launchDestination
         }
         Task { [weak self] in
-          let services = await AppServices.uiTesting(
-            seedCredential: !missingCredential
-          )
+          let services: AppServices
+          do {
+            services = try await AppServices.uiTesting(
+              seedCredential: !missingCredential, environment: environment, mode: launchMode
+            )
+          } catch {
+            // Invalid artifact paths or capabilities must not recover into live services.
+            NSApp.terminate(nil)
+            return
+          }
           self?.finishLaunching(
             with: services,
             openFixAndSend: launchDestination == .promptGate,
@@ -99,8 +124,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     #endif
 
-    WindowCoordinator.applyAppearance(PreferencesStore.standardAppearance())
-    finishLaunching(with: AppServices.production())
+    #if BEX_UI_TEST_ARTIFACT
+      // Never compile a production fallback into a validation entrypoint.
+      NSApp.terminate(nil)
+    #else
+      WindowCoordinator.applyAppearance(PreferencesStore.standardAppearance())
+      finishLaunching(with: AppServices.production())
+    #endif
   }
 
   private func finishLaunching(
@@ -111,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Set early, before anything else touches windows: this is the delegate that
     // handles a tap on the daily Study reminder, and it must be in place before macOS
     // can hand us a notification response.
-    UNUserNotificationCenter.current().delegate = self
+    studyNotificationScheduler = services.runtimeEffects.configureStudyNotifications(self)
 
     let coordinator = installCoordinator(services: services)
     installMainMenu()
@@ -134,19 +164,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       installUITestingCommands()
     #endif
 
-    let globalHotKey: GlobalHotKey
-    #if DEBUG
-      if ProcessInfo.processInfo.environment["BEX_UI_TESTING"] == "1" {
-        let behavior = UITestScenario.current.configuration.hotKeyRegistration
-        globalHotKey = GlobalHotKey(
-          backend: UITestingHotKeyRegistrationBackend(behavior: behavior)
-        )
-      } else {
-        globalHotKey = GlobalHotKey()
-      }
-    #else
-      globalHotKey = GlobalHotKey()
-    #endif
+    let globalHotKey = services.runtimeEffects.makeHotKey()
     self.globalHotKey = globalHotKey
     Task { [weak self] in
       let fixAndSendChord = await services.preferences.fixAndSendKeyChord()
@@ -226,7 +244,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = WindowCoordinator(services: services)
     self.services = services
     windowCoordinator = coordinator
-    studyNotificationScheduler = StudyNotificationScheduler()
     coordinator.applyStoredAppearance()
     coordinator.onLearningViewed = { [weak self] in
       Task { [weak self] in
@@ -237,6 +254,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.runBackgroundAgentNow()
     }
     return coordinator
+  }
+
+  func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+    if let windowCoordinator, windowCoordinator.usesIndependentAccessibility {
+      // Unreachable in production composition. An injected validation owner must drain
+      // its own backend before termination; never declare an outstanding capture done.
+      windowCoordinator.closeIndependentAccessibilityAdmission()
+      let owner = services?.packagedCorrectionWindows
+      owner?.shutdown()
+      if packagedTerminationTask == nil {
+        packagedTerminationTask = Task { @MainActor in
+          await windowCoordinator.shutdownIndependentAccessibility()
+          await owner?.shutdownAndWait()
+          sender.reply(toApplicationShouldTerminate: true)
+        }
+      }
+      return .terminateLater
+    }
+    guard let owner = services?.packagedCorrectionWindows else { return .terminateNow }
+    owner.shutdown() // Close admission and revoke synchronously, before yielding.
+    guard owner.hasOutstandingWork else { return .terminateNow }
+    if packagedTerminationTask == nil {
+      packagedTerminationTask = Task { @MainActor in
+        await owner.shutdownAndWait()
+        sender.reply(toApplicationShouldTerminate: true)
+      }
+    }
+    // A non-cooperative provider blocks termination rather than being declared done.
+    return .terminateLater
   }
 
   func applicationWillTerminate(_ notification: Notification) {
@@ -559,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   #if DEBUG
     private func installUITestingCommands() {
-      guard ProcessInfo.processInfo.environment["BEX_UI_TESTING"] == "1" else { return }
+      guard services?.runtimeEffects.usesUITestingCommands == true else { return }
       let center = DistributedNotificationCenter.default()
       center.addObserver(
         self,
@@ -624,6 +670,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   #endif
 
   private func announceTrayReady() {
+    #if BEX_UI_TEST_ARTIFACT
+      if services?.runtimeEffects.usesUITestingCommands == true {
+        FileHandle.standardOutput.write(Data("BEX_UI_FIXTURE_READY_V1\n".utf8))
+      }
+    #endif
     signposter.emitEvent("TrayReady")
     if let launchInterval {
       signposter.endInterval("ApplicationLaunch", launchInterval)
@@ -658,6 +709,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// or carry a payload. Unrecognized hosts are ignored rather than treated as an
   /// error, so a future `bex://something` never crashes an old build.
   func application(_ application: NSApplication, open urls: [URL]) {
+    // No URL callback may enter uncomposed services. Validation artifacts do not
+    // register the production URL scheme or accept externally routed commands.
+    #if BEX_UI_TEST_ARTIFACT
+      return
+    #else
+      guard services != nil, windowCoordinator != nil else { return }
+    #endif
     for url in urls where url.scheme?.lowercased() == "bex" {
       switch url.host?.lowercased() {
       case "study":
@@ -787,9 +845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // actually visible — see `StudyStatusFile`. `lastStudyResult` is read (not
     // consumed) here so the second, notification-triggered refresh right after an
     // answer still republishes the same result instead of losing it.
-    StudyStatusFile.write(
-      dueCount: studyDue, severity: severity, nextCard: nextCard, lastResult: lastStudyResult,
-      now: now)
+    services.runtimeEffects.publishStudyStatus(studyDue, severity, nextCard, lastStudyResult, now)
   }
 
   /// Builds today's `[StudyCard]` and `StudyDailyPlan.Plan` from the learning log and

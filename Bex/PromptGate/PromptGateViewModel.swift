@@ -58,6 +58,10 @@ final class PromptGateViewModel: ObservableObject {
   private let grammar: any GrammarServicing
   private let data: BexDataStore
   private let targetService: any PromptTargetServicing
+  private let independentTargetService: IndependentAccessibilityTargetService?
+  private var independentStatusTask: Task<Void, Never>?
+  private var independentStatusGeneration = UUID()
+  var accessibilityActionLabel: String { independentTargetService == nil ? "Request Accessibility" : "Check Capture Service" }
   private let approvalStore: PromptApprovalStore
   private let hookManager: any HookInstallationManaging
   private let hookResponder: any HookReviewResponding
@@ -109,6 +113,7 @@ final class PromptGateViewModel: ObservableObject {
     grammar: any GrammarServicing,
     data: BexDataStore,
     targetService: any PromptTargetServicing,
+    independentTargetService: IndependentAccessibilityTargetService? = nil,
     approvalStore: PromptApprovalStore,
     hookManager: any HookInstallationManaging,
     hookResponder: any HookReviewResponding,
@@ -125,6 +130,7 @@ final class PromptGateViewModel: ObservableObject {
     self.grammar = grammar
     self.data = data
     self.targetService = targetService
+    self.independentTargetService = independentTargetService
     self.approvalStore = approvalStore
     self.hookManager = hookManager
     self.hookResponder = hookResponder
@@ -134,7 +140,8 @@ final class PromptGateViewModel: ObservableObject {
     openSettingsCallback = onOpenSettings
     openWritingStylesCallback = onOpenWritingStyles
     deliveredCallback = onDelivered
-    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if independentTargetService == nil { isAccessibilityTrusted = targetService.isAccessibilityTrusted }
+    else { isAccessibilityTrusted = false }
   }
 
   var providerDisclosureIsAccepted: Bool { hasAcceptedDestinationDisclosure }
@@ -229,11 +236,7 @@ final class PromptGateViewModel: ObservableObject {
 
   var reviewPendingStatus: String {
     switch session?.target.kind {
-    case .capturedField:
-      return "Nothing has been sent."
-    case .composerPaste:
-      return "Nothing has been pasted."
-    case .copyOnly:
+    case .capturedField, .composerPaste, .copyOnly:
       return "Nothing has been copied."
     case .managedDraft:
       return "Nothing has been staged."
@@ -416,20 +419,12 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   var primaryDeliveryAction: PromptDeliveryAction? {
-    guard let target = session?.target else { return nil }
-    if session?.hookRequestID != nil {
-      return target.availableDeliveryActions.first
-    }
-    switch target.kind {
-    case .copyOnly:
-      return .copyCorrection
-    case .composerPaste:
-      return .pasteInDestination
-    case .capturedField:
-      return .pasteInDestination
-    case .managedDraft:
-      return .pasteInDestination
-    }
+    availableDeliveryActions.first
+  }
+
+  var deliveryShortcutHint: String {
+    guard let action = primaryDeliveryAction else { return "" }
+    return action == .copyCorrection ? "⌘⏎ copies correction" : "⌘⏎ stages correction"
   }
 
   var destinationLabel: String {
@@ -439,12 +434,14 @@ final class PromptGateViewModel: ObservableObject {
   var permissionGuidance: String {
     guard let session else { return "" }
     if session.hookRequestID != nil {
-      if isAccessibilityTrusted, session.target.kind == .composerPaste {
-        return
-          "This client hook supplied the prompt. Accessibility is used only to paste the approved correction; Bex will not press Return."
+      if session.target.kind == .managedDraft {
+        return "This client hook supplied the prompt without Accessibility. Approval stages the correction for explicit replay in the host."
       }
       return
         "This client hook supplied the prompt without using Accessibility. You can still review it; Bex will copy the approved correction for manual replacement."
+    }
+    if independentTargetService != nil {
+      return "The independent Bex Accessibility service only reads a draft after an explicit capture. Configure its permission in the separate host app. If unavailable, enter your draft manually; corrections remain Copy-only."
     }
     if session.source == .standalone {
       return isAccessibilityTrusted
@@ -453,10 +450,10 @@ final class PromptGateViewModel: ObservableObject {
     }
     if isAccessibilityTrusted {
       return
-        "Accessibility enables manual capture and replacement in other apps. If access was just granted, invoke Fix & Send again to capture the focused field."
+        "Accessibility enables reading the focused draft. Corrections are copied for manual replacement. If access was just granted, invoke Fix & Send again to capture the focused field."
     }
     return
-      "Accessibility is required only for manual capture and replacement. Without it, Fix & Send is copy-only. Grant access, then invoke Fix & Send again. Enabled client hooks can still supply prompts without this permission."
+      "Accessibility is required only to capture a focused draft. Without it, Fix & Send is copy-only. Grant access, then invoke Fix & Send again. Enabled client hooks can still supply prompts without this permission."
   }
 
   @discardableResult
@@ -492,7 +489,8 @@ final class PromptGateViewModel: ObservableObject {
     accessibilityAnnouncementHistory = []
     isLoadingSession = true
     phase = .onboarding
-    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus() }
+    else { isAccessibilityTrusted = targetService.isAccessibilityTrusted }
 
     let workID = UUID()
     currentWorkID = workID
@@ -565,13 +563,58 @@ final class PromptGateViewModel: ObservableObject {
     }
   }
 
+  func invalidateIndependentSession() {
+    guard let independentTargetService else { return }
+    if let requestID = session?.hookRequestID { invalidateHookRequest(id: requestID); return }
+    retireCurrentTask()
+    lookupTask?.cancel()
+    if let session { independentTargetService.discard(session.target) }
+    cancelIndependentAccessibilityStatus()
+    generation = UUID()
+    phase = .invalidated
+    currentWorkID = nil
+  }
+
+  func cancelIndependentAccessibilityStatus() {
+    guard independentTargetService != nil else { return }
+    independentStatusGeneration = UUID()
+    independentStatusTask?.cancel()
+    independentStatusTask = nil
+    isAccessibilityTrusted = false
+    accessibilityStatusMessage = nil
+  }
+
+  private func refreshIndependentAccessibilityStatus() {
+    guard let helper = independentTargetService else { return }
+    cancelIndependentAccessibilityStatus()
+    accessibilityStatusMessage = "Checking the independent capture service…"
+    let statusGeneration = independentStatusGeneration
+    let sessionID = session?.id
+    let sessionGeneration = generation
+    independentStatusTask = Task { @MainActor [weak self, helper] in
+      let trusted: Bool?
+      do { trusted = try await helper.accessibilityStatus() } catch { trusted = nil }
+      guard let self, !Task.isCancelled, self.independentStatusGeneration == statusGeneration,
+        self.session?.id == sessionID, self.generation == sessionGeneration, self.phase != .closed else { return }
+      self.isAccessibilityTrusted = trusted == true
+      self.accessibilityStatusMessage = trusted == true
+        ? "The independent capture service reports Accessibility access."
+        : (trusted == false
+          ? "The independent capture service does not have Accessibility access. Review setup in Bex Accessibility. You can still enter a draft manually."
+          : "The independent capture service is unavailable or not enabled. Check its separate setup; Bex will not switch services or request main-app access.")
+      self.independentStatusTask = nil
+    }
+  }
+
   func requestAccessibility() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     let wasTrusted = isAccessibilityTrusted
     isAccessibilityTrusted = targetService.requestAccessibilityTrust()
     updateAccessibilityStatus(wasTrusted: wasTrusted)
   }
 
   func refreshAccessibilityState() {
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus(); return }
     let wasTrusted = isAccessibilityTrusted
     isAccessibilityTrusted = targetService.isAccessibilityTrusted
     updateAccessibilityStatus(wasTrusted: wasTrusted)
@@ -699,7 +742,17 @@ final class PromptGateViewModel: ObservableObject {
     currentTask = Task { @MainActor [weak self] in
       guard let self else { return }
       var issuedReceipt: UUID?
+      var hookDeliveryMayHaveCommitted = false
       do {
+        // Reject stale, forged or consumed target capabilities before any host receipt.
+        if let independentTargetService {
+          try await independentTargetService.validateDelivery(to: session.target, action: action)
+          try Task.checkCancellation()
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering
+          else { throw CancellationError() }
+        } else {
+          try targetService.validateDelivery(to: session.target, action: action)
+        }
         if session.hookRequestID != nil {
           guard let client = session.knownClient else {
             throw PromptDeliveryFailure(
@@ -709,7 +762,9 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
-          let context = session.target.hookContext
+          guard let context = session.target.hookContext,
+            context.requestID == session.hookRequestID, context.client == client
+          else { throw BexError.stalePromptTarget }
           let status = await hookStatus(for: session)
           guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
             self.finishWork(workID)
@@ -724,22 +779,45 @@ final class PromptGateViewModel: ObservableObject {
               )
             )
           }
+          try Task.checkCancellation()
+          if let independentTargetService {
+            try await independentTargetService.validateDelivery(to: session.target, action: action)
+            try Task.checkCancellation()
+            guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering
+            else { throw CancellationError() }
+          } else {
+            try targetService.validateDelivery(to: session.target, action: action)
+          }
           issuedReceipt = try await approvalStore.issue(
             client: client,
-            integrationID: context?.integrationID,
+            integrationID: context.integrationID,
             text: correction,
-            sessionID: context?.sessionID,
-            cwd: context?.cwd
+            sessionID: context.sessionID,
+            cwd: context.cwd
           )
           activeReceiptID = issuedReceipt
+          try Task.checkCancellation()
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration) else {
+            throw CancellationError()
+          }
+          if let independentTargetService {
+            try await independentTargetService.validateDelivery(to: session.target, action: action)
+            try Task.checkCancellation()
+            guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering
+            else { throw CancellationError() }
+          } else {
+            try targetService.validateDelivery(to: session.target, action: action)
+          }
           if let requestID = session.hookRequestID {
             do {
+              // From this point a timeout/cancellation cannot prove the host did nothing.
+              hookDeliveryMayHaveCommitted = true
               try await hookResponder.complete(
                 requestID: requestID,
                 outcome: .approved,
                 awaitAcknowledgement: true,
                 approvedPrompt: correction,
-                integrationID: context?.integrationID
+                integrationID: context.integrationID
               )
             } catch {
               throw PromptDeliveryFailure(effect: .unknown, underlyingError: error)
@@ -751,18 +829,28 @@ final class PromptGateViewModel: ObservableObject {
           throw CancellationError()
         }
 
-        let outcome = try await targetService.deliver(
-          correction,
-          to: session.target,
-          action: action
-        )
+        let outcome: PromptDeliveryOutcome
+        if let independentTargetService {
+          outcome = try await independentTargetService.deliver(correction, to: session.target, action: action)
+          // Copy may already have happened. Never update or close a newer review.
+          guard self.isCurrent(sessionID: session.id, generation: sessionGeneration), phase == .delivering else {
+            self.finishWork(workID)
+            return
+          }
+        } else {
+          outcome = try await targetService.deliver(
+            correction,
+            to: session.target,
+            action: action
+          )
+        }
         activeReceiptID = nil
         finishWork(workID)
         announce(successAnnouncement(for: outcome, target: session.target))
         let deliveredTo = session.target.applicationName
         closeCurrentSession()
-        deliveredCallback(deliveredTo)
-      } catch is CancellationError {
+        if outcome == .submitted { deliveredCallback(deliveredTo) }
+      } catch is CancellationError where !hookDeliveryMayHaveCommitted {
         if let issuedReceipt {
           try? await approvalStore.revoke(id: issuedReceipt)
         }
@@ -785,9 +873,12 @@ final class PromptGateViewModel: ObservableObject {
           return
         }
         activeReceiptID = nil
-        let failure =
+        let reportedFailure =
           error as? PromptDeliveryFailure
           ?? PromptDeliveryFailure(effect: .none, underlyingError: error)
+        let failure = hookDeliveryMayHaveCommitted
+          ? PromptDeliveryFailure(effect: .unknown, underlyingError: reportedFailure.underlyingError)
+          : reportedFailure
         deliveryFailureEffect = failure.effect
         phase = .reviewing
         errorMessage = recoveryMessage(for: failure, action: action, target: session.target)
@@ -858,12 +949,17 @@ final class PromptGateViewModel: ObservableObject {
   func invalidateHookRequest(id: UUID) {
     guard session?.hookRequestID == id, phase != .closed else { return }
     retireCurrentTask()
+    if let session {
+      if let independentTargetService { independentTargetService.discard(session.target) }
+      else { targetService.discard(session.target) }
+    }
+    cancelIndependentAccessibilityStatus()
     let receiptID = activeReceiptID
     activeReceiptID = nil
     generation = UUID()
     phase = .invalidated
     errorMessage =
-      "This hook request is no longer active. The original prompt remained blocked; invoke the client action again."
+      "This hook request is no longer active. Check the client and Clipboard before starting another review; Bex will not repeat delivery."
     currentWorkID = nil
     currentTask = nil
     requestFocus(keyboard: .recoveryAction, accessibility: .statusHeading)
@@ -1070,7 +1166,8 @@ final class PromptGateViewModel: ObservableObject {
     hasAcceptedDestinationDisclosure = acceptedDisclosure
     confirmsHookOutboundPayloads = hookOutboundConfirmation
     providerIsSetUp = setup
-    isAccessibilityTrusted = targetService.isAccessibilityTrusted
+    if independentTargetService != nil { refreshIndependentAccessibilityStatus() }
+    else { isAccessibilityTrusted = targetService.isAccessibilityTrusted }
     if destinationChanged {
       confirmedOutboundDraft = nil
       confirmedOutboundDestination = nil
@@ -1112,29 +1209,23 @@ final class PromptGateViewModel: ObservableObject {
   var deliveryGuidanceIntroduction: String {
     guard let target = session?.target else { return "" }
     if target.kind == .capturedField {
-      return
-        "Bex will verify that the same \(target.applicationName) field still contains your original draft before replacing it."
+      return "Bex will recheck the captured draft before copying. Replace the intended draft in \(target.applicationName) and submit manually."
     }
     return target.guidance
   }
 
   func deliveryEffectDescription(for action: PromptDeliveryAction) -> String {
     guard let target = session?.target else { return "" }
+    guard target.availableDeliveryActions.contains(action) else {
+      return "Automatic paste and submission are unavailable. Copy and replace the draft manually."
+    }
     switch action {
     case .copyCorrection:
       return "Copies the correction to the Clipboard. Nothing is pasted or submitted."
     case .pasteInDestination:
-      switch target.kind {
-      case .capturedField:
-        return "Replaces the captured draft in \(target.applicationName) without sending."
-      case .managedDraft:
-        return "Stages the correction in \(target.applicationName) without sending."
-      case .composerPaste, .copyOnly:
-        return "Pastes the correction in \(target.applicationName). Bex will not press Return."
-      }
+      return "Stages the correction in \(target.applicationName) without sending."
     case .pasteAndSubmit:
-      return
-        "Replaces the captured draft, verifies the pasted text, then presses Return once in \(target.applicationName)."
+      return "Automatic submission is unavailable."
     }
   }
 
@@ -1684,6 +1775,7 @@ final class PromptGateViewModel: ObservableObject {
   }
 
   private func updateAccessibilityStatus(wasTrusted: Bool) {
+    guard independentTargetService == nil else { return }
     if isAccessibilityTrusted {
       accessibilityStatusMessage =
         wasTrusted
@@ -1715,8 +1807,11 @@ final class PromptGateViewModel: ObservableObject {
       return
         "\(target.applicationName) may already have submitted the correction. Check the destination before continuing; Bex will not retry."
     case .unknown:
+      if target.hookContext == nil {
+        return "Bex cannot determine whether the Clipboard changed. Nothing was pasted or submitted by Bex. Check the Clipboard before starting a new review; automatic retry is disabled."
+      }
       return
-        "Bex cannot determine how much reached \(target.applicationName). Check the destination and Clipboard before continuing; automatic retry is disabled."
+        "Bex cannot determine how much reached \(target.applicationName). Check the client and Clipboard before continuing; automatic retry is disabled."
     }
   }
 
@@ -1777,7 +1872,9 @@ final class PromptGateViewModel: ObservableObject {
   private func closeCurrentSession() {
     guard let session else { return }
     let deletesStandaloneDraft = session.usesDraftPersistence
-    targetService.discard(session.target)
+    if let independentTargetService { independentTargetService.discard(session.target) }
+    else { targetService.discard(session.target) }
+    cancelIndependentAccessibilityStatus()
     generation = UUID()
     currentWorkID = nil
     currentTask = nil

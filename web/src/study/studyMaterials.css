@@ -1,0 +1,14 @@
+.study-materials { min-width: 0; margin-top: 1.25rem; }
+.study-materials h3 { margin: 0 0 .6rem; font-size: 1rem; }
+.study-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .65rem; margin: .65rem 0; }
+.study-actions .button { padding: .55rem .75rem; font-size: .85rem; }
+.study-section-list { list-style: none; padding: 0; margin: .75rem 0; }
+.study-section-list li, .study-editor, .study-confirm { border: 1px solid var(--line, #dededb); border-radius: .7rem; padding: .75rem; margin: .75rem 0; }
+.study-excerpt { font-size: .82rem; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 8rem; overflow: auto; margin: .5rem 0; line-height: 1.6; }
+.study-active { font-size: .83rem; line-height: 1.6; overflow-wrap: anywhere; padding: .75rem 0; }
+.study-active .text-button { display: block; margin-top: .4rem; }
+.study-materials :is(button, select, input):disabled { opacity: .55; cursor: not-allowed; }
+.study-materials textarea { min-height: 8rem; }
+.study-confirm p { font-size: .85rem; line-height: 1.6; }
+.study-materials input[type=radio] { width: 14px; height: 14px; padding: 0; border: 0; background: transparent; }
+.study-materials .check-row span { min-width: 0; overflow-wrap: anywhere; }

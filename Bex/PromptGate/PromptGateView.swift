@@ -273,7 +273,7 @@ struct PromptGateView: View {
           alternativesPhrase: viewModel.alternativesPhrase,
           pickedAlternativeID: viewModel.pickedAlternativeID,
           onChooseAlternative: { viewModel.choose($0) },
-          primaryActionHint: "⌘⏎ sends as-is",
+          primaryActionHint: viewModel.deliveryShortcutHint,
           changeCategorySummary: viewModel.changeCategorySummary,
           accessibleDiffSummary: viewModel.accessibleDiffSummary,
           detailsSummary: detailsSummary,
@@ -348,7 +348,7 @@ struct PromptGateView: View {
         if !viewModel.isAccessibilityTrusted,
           viewModel.session?.hookRequestID == nil
         {
-          Button("Request Accessibility") { viewModel.requestAccessibility() }
+          Button(viewModel.accessibilityActionLabel) { viewModel.requestAccessibility() }
             .accessibilityIdentifier("prompt-gate-accessibility")
         }
       }

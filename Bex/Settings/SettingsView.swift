@@ -377,8 +377,7 @@ struct SettingsView: View {
   }
 
   private func copyIntegrationArtifact(_ value: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
+    viewModel.copyIntegrationArtifact(value)
   }
 
   private var generalCategory: some View {
@@ -668,9 +667,7 @@ struct SettingsView: View {
 
       Section("Accessibility") {
         Label(
-          viewModel.accessibilityTrusted
-            ? "Accessibility access is enabled"
-            : "Accessibility access is not enabled",
+          viewModel.accessibilityStatusLabel,
           systemImage: viewModel.accessibilityTrusted
             ? "checkmark.circle.fill"
             : "exclamationmark.triangle"
@@ -678,19 +675,17 @@ struct SettingsView: View {
         .accessibilityIdentifier("settings-accessibility-status")
 
         if viewModel.showsAccessibilityRequest {
-          Button("Request Access") {
+          Button(viewModel.accessibilityActionLabel) {
             viewModel.requestAccessibility()
           }
           .accessibilityIdentifier("settings-prompt-accessibility")
         }
 
-        Text(
-          "macOS Accessibility is a broad system grant that can inspect and control other apps. Bex uses it only when you manually invoke Fix & Send to capture the focused editable field and deliver a correction you approve."
-        )
+        Text(viewModel.accessibilitySetupGuidance)
         .font(.caption)
         .foregroundStyle(.secondary)
         Text(
-          "Without Accessibility access, manual Fix & Send uses copy-only fallback: Bex copies the approved correction so you can paste it yourself. You can revoke the grant at any time in System Settings."
+          "With or without Accessibility access, Bex copies corrections for manual replacement. Without access, enter the original draft in Bex yourself. You can revoke the grant at any time in System Settings."
         )
         .font(.caption)
         .foregroundStyle(.secondary)

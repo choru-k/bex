@@ -1,4 +1,5 @@
 #if DEBUG
+  import AppKit
   import Foundation
 
   enum UITestScenario: String, Codable, CaseIterable, Sendable {
@@ -103,7 +104,7 @@
         configuration.launchDestination = .promptGate
       case .deliveryFailureEffect:
         configuration.target.source = "this are a test"
-        configuration.target.deliveryFailureEffect = .pastedNotSubmitted
+        configuration.target.deliveryFailureEffect = .copied
         configuration.launchDestination = .promptGate
       case .dirtyEditorResume:
         configuration.preservesStoredState = true
@@ -668,6 +669,14 @@
       return requestedAccessibilityTrust
     }
 
+    func makeStandaloneTarget() throws -> PromptTarget {
+      PromptTarget(kind: .copyOnly, applicationName: "Bex", guidance: "Copy for manual replacement.")
+    }
+
+    func validateDelivery(to target: PromptTarget, action: PromptDeliveryAction) throws {
+      guard target.availableDeliveryActions.contains(action) else { throw BexError.stalePromptTarget }
+    }
+
     func captureFrontmostTarget() throws -> PromptCapture {
       guard !isUnsupported else {
         throw BexError.unsupportedPromptTarget
@@ -685,7 +694,7 @@
         applicationName: "UI Test Target",
         guidance: kind == .copyOnly
           ? "No editable field was captured. Bex will copy the approved correction."
-          : "Bex will replace this exact field after approval."
+          : "Bex will copy the correction for manual replacement."
       )
       return PromptCapture(
         draft: kind == .capturedField ? source : "",
@@ -703,7 +712,9 @@
           requestID: hookRequest.requestID,
           sessionID: hookRequest.sessionID,
           cwd: hookRequest.cwd,
-          helperPID: hookRequest.helperPID
+          helperPID: hookRequest.helperPID,
+          client: hookRequest.client,
+          integrationID: hookRequest.integrationID
         )
       )
     }
@@ -714,6 +725,7 @@
       pressReturn: Bool
     ) async throws -> PromptDeliveryOutcome {
       await deliveryGate?.wait()
+      guard !pressReturn else { throw BexError.stalePromptTarget }
       if let effect = deliveryFailureEffect {
         if effect == .copied {
           try pasteboard.write(correctedText)
@@ -728,12 +740,11 @@
       }
 
       let outcome: PromptDeliveryOutcome
-      if target.kind == .copyOnly {
+      if target.kind == .managedDraft {
+        outcome = .staged
+      } else {
         try pasteboard.write(correctedText)
         outcome = .copied
-      } else {
-        try correctedText.write(to: sinkURL, atomically: true, encoding: .utf8)
-        outcome = pressReturn ? .submitted : .pasted
       }
       try recordDelivery(effect: outcome.effect)
       return outcome
@@ -1009,31 +1020,144 @@
     ) async throws {}
   }
 
+  /// No URLSession fallback exists in the validation dependency graph.
+  struct UITestingHTTPTransport: HTTPTransport {
+    func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+      throw BexError.oauthFailure("Network access is unavailable in UI validation.")
+    }
+  }
+
+  struct UITestingOAuthListener: CodexOAuthListening {
+    func start() async throws {
+      throw BexError.oauthFailure("OAuth callbacks are unavailable in UI validation.")
+    }
+    func waitForCallback() async throws -> URL {
+      throw BexError.oauthFailure("OAuth callbacks are unavailable in UI validation.")
+    }
+    func stop() async {}
+  }
+
+  enum UITestingIsolationError: Error {
+    case invalidMode
+    case unsafeArtifactPath
+  }
+
+  /// Launch-time validation, before any fixture reset or write. Explicit output paths
+  /// must be fresh files under the OS temporary directory, never existing user files
+  /// or symlinks. This is accidental-state protection, not an OS security sandbox.
+  enum UITestingArtifacts {
+    static func validate(_ url: URL, beneath root: URL, mustBeNew: Bool) throws {
+      let base = root.resolvingSymlinksInPath().standardizedFileURL
+      let candidate = url.standardizedFileURL
+      let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+      guard resolved.path.hasPrefix(base.path + "/") else {
+        throw UITestingIsolationError.unsafeArtifactPath
+      }
+      // Follow only the system temporary root's canonical spelling; reject symlinks
+      // in the caller-controlled suffix, including an existing final component.
+      let lexicalBase = root.standardizedFileURL.path
+      guard candidate.path.hasPrefix(lexicalBase + "/")
+        || candidate.path.hasPrefix(base.path + "/") else {
+        throw UITestingIsolationError.unsafeArtifactPath
+      }
+      var component = candidate
+      while component.path != lexicalBase && component.path != base.path {
+        let attributes = try? FileManager.default.attributesOfItem(atPath: component.path)
+        if attributes?[.type] as? FileAttributeType == .typeSymbolicLink {
+          throw UITestingIsolationError.unsafeArtifactPath
+        }
+        component.deleteLastPathComponent()
+      }
+      if mustBeNew, FileManager.default.fileExists(atPath: candidate.path) {
+        throw UITestingIsolationError.unsafeArtifactPath
+      }
+    }
+
+    static func prepare(
+      configuration: inout UITestFixtureConfiguration, scenario: UITestScenario,
+      temporaryDirectory: URL = FileManager.default.temporaryDirectory
+    ) throws -> URL {
+      let name = configuration.preservesStoredState
+        ? "BexUITesting-\(scenario.rawValue)" : "BexUITesting-\(UUID().uuidString)"
+      let directory = temporaryDirectory.appendingPathComponent(name, isDirectory: true)
+      try validate(directory, beneath: temporaryDirectory,
+        mustBeNew: !configuration.preservesStoredState)
+      // Validate persisted fixture descendants too, before stores can follow symlinks.
+      if let enumerator = FileManager.default.enumerator(at: directory,
+        includingPropertiesForKeys: nil) {
+        for case let file as URL in enumerator {
+          try validate(file, beneath: temporaryDirectory, mustBeNew: false)
+        }
+      }
+      var paths = Set<String>()
+      for path in [configuration.pasteboardPath, configuration.target.sinkPath,
+        configuration.target.deliveryEventsPath, configuration.integrationTranscriptPath].compactMap({ $0 }) {
+        let url = URL(fileURLWithPath: path)
+        try validate(url, beneath: temporaryDirectory, mustBeNew: true)
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let directoryPath = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        guard path != directoryPath, !path.hasPrefix(directoryPath + "/"),
+          !directoryPath.hasPrefix(path + "/"),
+          !paths.contains(where: { $0 == path || $0.hasPrefix(path + "/") || path.hasPrefix($0 + "/") })
+        else { throw UITestingIsolationError.unsafeArtifactPath }
+        paths.insert(path)
+      }
+      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: 0o700])
+      configuration.pasteboardPath = configuration.pasteboardPath
+        ?? directory.appendingPathComponent("clipboard.txt").path
+      configuration.target.sinkPath = configuration.target.sinkPath
+        ?? directory.appendingPathComponent("target.txt").path
+      return directory
+    }
+  }
+
+  @MainActor
+  extension AppRuntimeEffects {
+    static func uiTesting(
+      hotKeyBehavior: UITestHotKeyRegistration, permitsSystemTarget: Bool
+    ) -> Self {
+      Self(
+        configureStudyNotifications: { _ in nil },
+        publishStudyStatus: { _, _, _, _, _ in },
+        makeHotKey: { GlobalHotKey(backend: UITestingHotKeyRegistrationBackend(behavior: hotKeyBehavior)) },
+        openAuthorizationURL: { _ in false },
+        activateExternalApplication: { processID in
+          // Available only in the separately opted-in manual target lane.
+          if permitsSystemTarget { NSRunningApplication(processIdentifier: processID)?.activate() }
+        },
+        permitsExternalFocus: permitsSystemTarget,
+        persistsWindowFrames: false,
+        usesUITestingCommands: true,
+        settingsWorkingDirectory: "/ui-validation",
+        settingsOMPExecutablePath: "/ui-validation/omp"
+      )
+    }
+  }
+
   @MainActor
   extension AppServices {
-    static func uiTesting(seedCredential: Bool) async -> AppServices {
-      let environment = ProcessInfo.processInfo.environment
+    static func uiTesting(
+      seedCredential: Bool,
+      environment: [String: String] = ProcessInfo.processInfo.environment,
+      mode: AppLaunchMode = .isolatedUITesting
+    ) async throws -> AppServices {
       let scenario = UITestScenario.parse(environment: environment)
-      let configuration = UITestFixtureConfiguration.resolve(environment: environment)
+      var configuration = UITestFixtureConfiguration.resolve(environment: environment)
+      guard mode == .isolatedUITesting || mode == .manualSystemTargetTesting,
+        configuration.target.usesRealTarget == (mode == .manualSystemTargetTesting)
+      else { throw UITestingIsolationError.invalidMode }
+      let directory = try UITestingArtifacts.prepare(configuration: &configuration, scenario: scenario)
       let suite =
         configuration.preservesStoredState
         ? "com.bex.desktop.ui-testing.\(scenario.rawValue)"
-        : "com.bex.desktop.ui-testing"
+        : "com.bex.desktop.ui-testing.\(directory.lastPathComponent)"
       let defaults = UserDefaults(suiteName: suite)!
       if !configuration.preservesStoredState {
         defaults.removePersistentDomain(forName: suite)
       }
       let preferences = PreferencesStore(defaults: defaults)
 
-      let directoryName =
-        configuration.preservesStoredState
-        ? "BexUITesting-\(scenario.rawValue)"
-        : "BexUITesting-\(ProcessInfo.processInfo.processIdentifier)"
-      let directory = FileManager.default.temporaryDirectory
-        .appendingPathComponent(directoryName)
-      if !configuration.preservesStoredState {
-        try? FileManager.default.removeItem(at: directory)
-      }
       let data = BexDataStore(fileURL: directory.appendingPathComponent("data.json"))
       try? await configuration.seed(preferences: preferences, data: data)
       let learningLogDirectory = directory.appendingPathComponent("LearningLog", isDirectory: true)
@@ -1044,19 +1168,19 @@
       let studyPatterns = StudyPatternStore(directoryURL: learningLogDirectory)
 
       let keychain = KeychainStore(
-        service: "com.bex.desktop.credentials.ui-testing",
+        service: "com.bex.desktop.credentials.ui-testing.\(UUID().uuidString)",
         inMemory: true
       )
       if seedCredential, let provider = configuration.credentialProvider {
         try? await keychain.saveAPIKey("ui-testing-key", for: provider)
       }
 
-      let transport = URLSessionTransport()
+      let transport = UITestingHTTPTransport()
       let grammar = UITestingGrammarService(behavior: configuration.grammarBehavior)
       let pasteboard = UITestingPasteboard(path: configuration.pasteboardPath)
       let promptTarget: any PromptTargetServicing =
         configuration.target.usesRealTarget
-        ? PromptTargetService()
+        ? PromptTargetService(pasteboardWriter: pasteboard)
         : UITestingPromptTargetService(
           configuration: configuration.target,
           pasteboard: pasteboard
@@ -1081,7 +1205,14 @@
         ),
         hookManager: hookManager,
         promptGateIPC: promptGateIPC,
-        codexOAuth: CodexOAuthService(keychain: keychain, transport: transport),
+        codexOAuth: CodexOAuthService(
+          keychain: keychain, transport: transport, authorizationEnabled: false,
+          makeListener: { _ in UITestingOAuthListener() }
+        ),
+        runtimeEffects: .uiTesting(
+          hotKeyBehavior: configuration.hotKeyRegistration,
+          permitsSystemTarget: mode == .manualSystemTargetTesting
+        )
       )
     }
   }

@@ -3,6 +3,27 @@ import XCTest
 @testable import Bex
 
 final class PreferencesContractTests: XCTestCase {
+  func testOutboundConfirmationAllInputCombinations() {
+    let contexts: [OutboundConfirmationContext] = [
+      .standaloneFixAndSend, .manualCapturedField, .hook,
+    ]
+    for context in contexts {
+      for accepted in [false, true] {
+        for confirmsHook in [false, true] {
+          let expected = !accepted || (context == .hook && confirmsHook)
+          XCTAssertEqual(
+            context.requiresConfirmation(
+              hasAcceptedDisclosure: accepted,
+              confirmsHookOutboundPayloads: confirmsHook
+            ),
+            expected,
+            "context=\(context), accepted=\(accepted), confirmsHook=\(confirmsHook)"
+          )
+        }
+      }
+    }
+  }
+
   func testFreshInstallStartsUndecidedAndDoesNotPersistDraft() async {
     let fixture = PreferencesFixture()
     defer { fixture.remove() }
