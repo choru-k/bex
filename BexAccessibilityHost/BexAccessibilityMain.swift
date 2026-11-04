@@ -12,7 +12,7 @@ struct BexAccessibilityMain {
     if Array(CommandLine.arguments.dropFirst()) == ["--agent"] {
       app.setActivationPolicy(.prohibited)
       do {
-        let server = try AccessibilityAgentServer()
+        let server = try AccessibilityAgentServer(validatingIdentity: ())
         server.start()
         withExtendedLifetime(server) { app.run() }
       } catch {

@@ -175,3 +175,27 @@ test('native mock tests exist for lifecycle races and shared request budget, but
   assert.match(storeCases, /testRevokedPermissionDoesNotReviveOldCaptureAfterRegrant/);
   assert.doesNotMatch(cases + storeCases, /\.register\(|AXIsProcessTrustedWithOptions|NSXPCConnection\(/);
 });
+
+test('compile regression: authenticated server initialization never overrides NSObject init', () => {
+  assert.match(server, /init\(validatingIdentity: Void\) throws \{/);
+  assert.doesNotMatch(server, /(?:override\s+)?init\(\)\s+throws/);
+  const initializer = server.slice(server.indexOf('  init(validatingIdentity: Void) throws {'), server.indexOf('  func start()'));
+  const own = initializer.indexOf('try AccessibilityAgentIdentity.verifyOwnIdentity(as: .helper)');
+  const peer = initializer.indexOf('try AccessibilityAgentIdentity.requirement(for: .app)');
+  const listener = initializer.indexOf('NSXPCListener(machServiceName: AccessibilityAgentContract.serviceName)');
+  const base = initializer.indexOf('super.init()');
+  assert.ok(own >= 0 && own < peer && peer < listener && listener < base);
+  assert.doesNotMatch(initializer, /try\?|try!|catch|if\s|guard\s/);
+  assert.match(host, /let server = try AccessibilityAgentServer\(validatingIdentity: \(\)\)/);
+  assert.doesNotMatch(host, /AccessibilityAgentServer\(\)/);
+});
+
+test('compile regression: outbound confirmation is a pure context decision, not a backing-store read', () => {
+  const preferences = read('Bex/Storage/PreferencesStore.swift');
+  const context = preferences.slice(preferences.indexOf('extension OutboundConfirmationContext {'), preferences.indexOf('\nactor PreferencesStore {'));
+  assert.doesNotMatch(context, /backing|withLock|UserDefaults/);
+  assert.match(context, /guard hasAcceptedDisclosure else \{ return true \}/);
+  assert.match(context, /case \.standaloneFixAndSend, \.manualCapturedField:\s+return false/);
+  assert.match(context, /case \.hook:\s+return confirmsHookOutboundPayloads/);
+  assert.match(read('BexTests/PreferencesContractTests.swift'), /func testOutboundConfirmationAllInputCombinations\(\)/);
+});

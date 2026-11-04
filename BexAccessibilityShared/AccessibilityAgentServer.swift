@@ -14,7 +14,7 @@ final class AccessibilityAgentServer: NSObject, NSXPCListenerDelegate, @unchecke
   private var drainWaiters: [CheckedContinuation<Void, Never>] = []
   private let appRequirement: String
 
-  init() throws {
+  init(validatingIdentity: Void) throws {
     try AccessibilityAgentIdentity.verifyOwnIdentity(as: .helper)
     appRequirement = try AccessibilityAgentIdentity.requirement(for: .app)
     listener = NSXPCListener(machServiceName: AccessibilityAgentContract.serviceName)

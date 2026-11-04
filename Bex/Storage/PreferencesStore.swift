@@ -17,14 +17,12 @@ extension OutboundConfirmationContext {
     hasAcceptedDisclosure: Bool,
     confirmsHookOutboundPayloads: Bool = false
   ) -> Bool {
-    return backing.withLock {
-      guard hasAcceptedDisclosure else { return true }
-      switch self {
-      case .standaloneFixAndSend, .manualCapturedField:
-        return false
-      case .hook:
-        return confirmsHookOutboundPayloads
-      }
+    guard hasAcceptedDisclosure else { return true }
+    switch self {
+    case .standaloneFixAndSend, .manualCapturedField:
+      return false
+    case .hook:
+      return confirmsHookOutboundPayloads
     }
   }
 }
