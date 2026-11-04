@@ -208,7 +208,7 @@ final class NativeCorrectionConsentPresenterTests: XCTestCase {
     let unrelated = NSAlert()
     unrelated.messageText = "Unrelated native sheet"
     unrelated.addButton(withTitle: "Cancel")
-    unrelated.beginSheetModal(for: window)
+    unrelated.beginSheetModal(for: window, completionHandler: { _ in })
     defer {
       consent.close()
       window.endSheet(unrelated.window)

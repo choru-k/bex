@@ -203,7 +203,10 @@ final class PromptTargetServiceTests: XCTestCase {
     let fixture = TargetFixture()
     let target = try fixture.service.makeStandaloneTarget()
     fixture.writer.onWrite = {
-      XCTAssertThrowsError(try fixture.service.validateDelivery(to: target, action: .copyCorrection))
+      do {
+        try fixture.service.validateDelivery(to: target, action: .copyCorrection)
+        XCTFail("Consumed capability authorized reentrant delivery")
+      } catch { }
     }
     let outcome = try await fixture.service.deliver("Correction", to: target, action: .copyCorrection)
     XCTAssertEqual(outcome, .copied)
