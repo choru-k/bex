@@ -59,6 +59,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
     try barrier.validateAdmission(reservation)
     try construction.checkOpen()
     try Task.checkCancellation()
+    guard let rules else { throw HostError.invalidDocument }
     let config = WKWebViewConfiguration()
     config.websiteDataStore = .nonPersistent()
     config.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -191,7 +192,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   }
 
   func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
-               decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+               decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
     guard webView === self.webView, !closed, !allowedInitialNavigation,
       navigationAction.targetFrame?.isMainFrame == true,
       exactDocument(navigationAction.request.url) else {
@@ -204,7 +205,7 @@ final class PackagedCorrectionHost: NSObject, WKNavigationDelegate {
   }
 
   func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse,
-               decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+               decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
     guard webView === self.webView, !closed, navigationResponse.isForMainFrame,
       exactDocument(navigationResponse.response.url) else {
       close()

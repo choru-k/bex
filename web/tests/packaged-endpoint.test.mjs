@@ -89,3 +89,31 @@ test('host lifetime retains registration through complete coordinator and transp
   assert.ok(drain >= 0 && drain < remove);
   assert.equal((swift.match(/barrier\.removeHost\(/g) ?? []).length, 1);
 });
+
+// These checks protect the shape/order of the compiler fixes, not Swift execution.
+test('nil compiled content rules fail closed before any host configuration or load', () => {
+  const make = swift.slice(swift.indexOf('  static func make('), swift.indexOf('  private init(window:'));
+  const compile = make.indexOf('let rules = try await WKContentRuleListStore');
+  const validate = make.indexOf('try barrier.validateAdmission(reservation)', compile);
+  const open = make.indexOf('try construction.checkOpen()', validate);
+  const cancellation = make.indexOf('try Task.checkCancellation()', open);
+  const reject = make.indexOf('guard let rules else { throw HostError.invalidDocument }');
+  const configuration = make.indexOf('let config = WKWebViewConfiguration()');
+  const install = make.indexOf('config.userContentController.add(rules)');
+  const construct = make.indexOf('let host = try PackagedCorrectionHost(');
+  const load = make.indexOf('host.webView.loadFileURL');
+  assert.ok(compile >= 0 && compile < validate && validate < open && open < cancellation);
+  assert.ok(cancellation < reject && reject < configuration && configuration < install && install < construct && construct < load);
+  assert.doesNotMatch(make, /rules!|if let rules|try\? await WKContentRuleListStore/);
+});
+
+test('navigation policy callback types match the SDK main-actor sendable contract', () => {
+  for (const kind of ['Action', 'Response']) {
+    const signature = new RegExp(`decidePolicyFor navigation${kind}: WKNavigation${kind},\\s+decisionHandler: @escaping @MainActor @Sendable \\(WKNavigation${kind}Policy\\) -> Void`);
+    assert.match(swift, signature);
+  }
+  const navigation = swift.slice(swift.indexOf('  func webView(_ webView: WKWebView, decidePolicyFor'), swift.indexOf('  func webView(_ webView: WKWebView, didCommit'));
+  assert.equal((navigation.match(/decisionHandler\(\.cancel\)/g) ?? []).length, 2);
+  assert.equal((navigation.match(/decisionHandler\(\.allow\)/g) ?? []).length, 2);
+  assert.doesNotMatch(navigation, /Task\s*\{|nonisolated|@preconcurrency|assumeIsolated/);
+});
