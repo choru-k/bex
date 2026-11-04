@@ -377,8 +377,7 @@ struct SettingsView: View {
   }
 
   private func copyIntegrationArtifact(_ value: String) {
-    NSPasteboard.general.clearContents()
-    NSPasteboard.general.setString(value, forType: .string)
+    viewModel.copyIntegrationArtifact(value)
   }
 
   private var generalCategory: some View {

@@ -39,6 +39,7 @@ actor CodexOAuthService {
     var isCompleting = false
   }
 
+  private let authorizationEnabled: Bool
   private let keychain: KeychainStore
   private let transport: any HTTPTransport
   private let timeout: TimeInterval
@@ -51,10 +52,12 @@ actor CodexOAuthService {
     keychain: KeychainStore,
     transport: any HTTPTransport,
     timeout: TimeInterval = 30,
+    authorizationEnabled: Bool = true,
     makeListener: @escaping @Sendable (String) -> any CodexOAuthListening = { expectedState in
       CodexLoopbackListener(expectedState: expectedState)
     }
   ) {
+    self.authorizationEnabled = authorizationEnabled
     self.keychain = keychain
     self.transport = transport
     self.timeout = timeout
@@ -62,6 +65,9 @@ actor CodexOAuthService {
   }
 
   func begin() async throws -> CodexOAuthFlow {
+    guard authorizationEnabled else {
+      throw BexError.oauthFailure("Account login is unavailable in isolated UI validation.")
+    }
     let previousListener = activeAttempt?.listener
     let id = UUID()
     currentAttemptID = id

@@ -37,6 +37,7 @@ struct StudyMicroDrillView: View {
   /// never on show. Owned by `WindowCoordinator` because the view cannot reach its panel.
   let makeKey: () -> Void
   let dismiss: () -> Void
+  var permitsExternalFocus = true
 
   @State private var isArmed = false
   /// Whoever had the keyboard when the owner clicked to arm. Esc reactivates it.
@@ -191,7 +192,7 @@ struct StudyMicroDrillView: View {
   /// The frontmost app is captured first, while it is still frontmost, so Esc has a
   /// truthful place to send the caret back to.
   private func arm() {
-    previousApp = NSWorkspace.shared.frontmostApplication
+    previousApp = permitsExternalFocus ? NSWorkspace.shared.frontmostApplication : nil
     isArmed = true
     makeKey()
   }
@@ -199,7 +200,7 @@ struct StudyMicroDrillView: View {
   /// Close, handing the keyboard back to whoever had it before arming. A dismissal that
   /// never armed has nothing to restore and restores nothing.
   private func dismissRestoringFocus() {
-    previousApp?.activate()
+    if permitsExternalFocus { previousApp?.activate() }
     dismiss()
   }
 }

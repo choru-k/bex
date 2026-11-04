@@ -227,7 +227,7 @@ xcodebuild \
   test
 ```
 
-CI runs only the unit suite (`-only-testing:BexTests`); the command above also runs the UI tests locally.
+CI runs only the unit suite (`-only-testing:BexTests`); the command above also runs the isolated UI tests locally. See [UI validation isolation](docs/ui-validation-isolation.md) for the Debug dependency boundary, temporary artifacts, and separately opted-in manual system-target test.
 
 Build an unsigned Release app:
 

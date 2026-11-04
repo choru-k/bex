@@ -69,10 +69,19 @@ const legacySlices = [
   ]
 ];
 
-test('nil/default legacy synchronous capture, recovery and permission branches retain exact source', () => {
+test('legacy capture, recovery and permission branches retain source apart from injected activation edge', () => {
   for (const [path, signature, anchor, expected] of legacySlices) {
     let body = method(read(path), signature);
     if (anchor) { const offset = body.indexOf(anchor); assert.ok(offset >= 0); body = body.slice(offset); }
+    // Only this reviewed edge moved into a production-default effect. Keep the old
+    // route hash and require exactly one substitution, rather than rebaselining it.
+    if (signature === '  private func handleSettingsRoute(_ intent: SettingsRouteIntent) {') {
+      const injected = 'services.runtimeEffects.activateExternalApplication(processID)';
+      const original = 'NSRunningApplication(processIdentifier: processID)?.activate()';
+      assert.equal(body.split(injected).length - 1, 1);
+      assert.equal(body.split(original).length - 1, 0);
+      body = body.replace(injected, original);
+    }
     const normalized = body.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
     assert.equal(crypto.createHash('sha256').update(normalized).digest('hex'), expected, signature);
   }

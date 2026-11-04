@@ -66,7 +66,7 @@ final class SettingsViewModel: ObservableObject {
   @Published private(set) var integrationReviewState: IntegrationReviewState?
   @Published var ompExecutablePath = ""
   @Published var ompProfile = "default"
-  @Published var ompWorkingDirectory = FileManager.default.homeDirectoryForCurrentUser.path
+  @Published var ompWorkingDirectory: String
   @Published private(set) var draftRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var historyRetentionChoice: RetentionChoice = .undecided
   @Published private(set) var fixAndSendKeyChord: KeyChord = .defaultFixAndSend
@@ -91,6 +91,7 @@ final class SettingsViewModel: ObservableObject {
   static let historyRetentionDisclosure =
     "When enabled, Bex saves successful checks from standalone and target-bound Fix & Send flows in Bex’s local database on this Mac: original, correction, explanation, provider, model, Writing Style name, and timestamp, keeping at most 500 entries. Don’t Save and Not Decided never block correction and do not save new history."
 
+  private let pasteboard: any PasteboardWriting
   private let preferences: PreferencesStore
   private let keychain: KeychainStore
   private let grammar: any GrammarServicing
@@ -145,8 +146,13 @@ final class SettingsViewModel: ObservableObject {
     onRunBackgroundAgent: @escaping @MainActor () -> Void = {},
     openAuthorizationURL: @escaping @MainActor (URL) -> Bool = {
       NSWorkspace.shared.open($0)
-    }
+    },
+    pasteboard: any PasteboardWriting = SystemPasteboard(),
+    initialWorkingDirectory: String? = nil,
+    initialOMPExecutablePath: String? = nil
   ) {
+    self.pasteboard = pasteboard
+    self.ompWorkingDirectory = initialWorkingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
     self.preferences = preferences
     self.keychain = keychain
     self.grammar = grammar
@@ -162,7 +168,12 @@ final class SettingsViewModel: ObservableObject {
     self.onClearHistory = onClearHistory
     self.onSetupRoute = onSetupRoute
     self.onRunBackgroundAgent = onRunBackgroundAgent
-    self.ompExecutablePath = Self.defaultOMPExecutablePath()
+    self.ompExecutablePath = initialOMPExecutablePath ?? Self.defaultOMPExecutablePath()
+  }
+
+  func copyIntegrationArtifact(_ value: String) {
+    do { try pasteboard.write(value) }
+    catch { userVisibleError = error.localizedDescription }
   }
 
   var showsCredential: Bool {

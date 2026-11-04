@@ -292,7 +292,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             makeKey: { [weak self] in
               self?.microDrillPanelController?.activateForAnswering()
             },
-            dismiss: { [weak self] in self?.microDrillPanelController?.close() }
+            dismiss: { [weak self] in self?.microDrillPanelController?.close() },
+            permitsExternalFocus: services.runtimeEffects.permitsExternalFocus
           )
         )
       )
@@ -318,7 +319,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
             self?.showSettings(origin: .fixAndSend)
           }
         ),
-        delegate: self
+        delegate: self,
+        persistsWindowFrames: services.runtimeEffects.persistsWindowFrames
       )
     }
     show(welcomeWindowController)
@@ -365,7 +367,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
           model: model,
           openFixAndSend: { [weak self] in self?.showStandaloneFixAndSend() }
         ),
-        delegate: self
+        delegate: self,
+        persistsWindowFrames: services.runtimeEffects.persistsWindowFrames
       )
       observeMainWindowPage(model)
     }
@@ -521,7 +524,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       },
       onRunBackgroundAgent: { [weak self] in
         self?.onRunBackgroundAgent?()
-      }
+      },
+      openAuthorizationURL: services.runtimeEffects.openAuthorizationURL,
+      pasteboard: services.pasteboard,
+      initialWorkingDirectory: services.runtimeEffects.settingsWorkingDirectory,
+      initialOMPExecutablePath: services.runtimeEffects.settingsOMPExecutablePath
     )
   }
 
@@ -561,7 +568,7 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
       pendingManualFixAndSendDraft = promptGateViewModel.draft
       promptGateViewModel.cancel()
       if let processID = session.target.processID {
-        NSRunningApplication(processIdentifier: processID)?.activate()
+        services.runtimeEffects.activateExternalApplication(processID)
       }
     }
   }
@@ -643,7 +650,9 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
         rootView: AnyView(
           PromptGateView(viewModel: viewModel, askThread: makeAskThread())
         ),
-        cancelAction: { [weak viewModel] in viewModel?.cancel() }
+        cancelAction: { [weak viewModel] in viewModel?.cancel() },
+        frameAutosaveName: services.runtimeEffects.persistsWindowFrames
+          ? PromptGatePanelController.frameAutosaveName : nil
       )
       promptGatePhaseCancellable = viewModel.$phase
         .removeDuplicates()
@@ -668,7 +677,8 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
   static func makeWindowController<Content: View>(
     configuration: StandardWindowConfiguration,
     rootView: Content,
-    delegate: (any NSWindowDelegate)? = nil
+    delegate: (any NSWindowDelegate)? = nil,
+    persistsWindowFrames: Bool = true
   ) -> NSWindowController {
     // The root view carries the window's size, as an *ideal* rather than a maximum.
     //
@@ -696,8 +706,11 @@ final class WindowCoordinator: NSObject, NSWindowDelegate {
     window.isReleasedWhenClosed = false
     window.delegate = delegate
     let controller = NSWindowController(window: window)
-    let restoredSavedFrame = window.setFrameUsingName(configuration.frameAutosaveName)
-    _ = window.setFrameAutosaveName(configuration.frameAutosaveName)
+    var restoredSavedFrame = false
+    if persistsWindowFrames {
+      restoredSavedFrame = window.setFrameUsingName(configuration.frameAutosaveName)
+      _ = window.setFrameAutosaveName(configuration.frameAutosaveName)
+    }
     if !restoredSavedFrame {
       window.center()
     }

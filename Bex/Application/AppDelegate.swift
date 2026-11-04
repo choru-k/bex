@@ -54,11 +54,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
 
+    let processInfo = ProcessInfo.processInfo
+    let arguments = processInfo.arguments
+    let environment = processInfo.environment
+    let launchMode = AppLaunchMode.resolve(arguments: arguments, environment: environment)
+    guard launchMode != .rejectedUITesting else {
+      // Never fall through to production on an invalid or Release test launch.
+      NSApp.terminate(nil)
+      return
+    }
     #if DEBUG
-      let processInfo = ProcessInfo.processInfo
-      let arguments = processInfo.arguments
-      let environment = processInfo.environment
-      if arguments.contains("--ui-testing") || environment["BEX_UI_TESTING"] == "1" {
+      if launchMode != .production {
         let missingCredential =
           arguments.contains("--missing-credential")
           || environment["BEX_UI_TEST_MISSING_CREDENTIAL"] == "1"
@@ -72,9 +78,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
           launchDestination = UITestScenario.current.configuration.launchDestination
         }
         Task { [weak self] in
-          let services = await AppServices.uiTesting(
-            seedCredential: !missingCredential
-          )
+          let services: AppServices
+          do {
+            services = try await AppServices.uiTesting(
+              seedCredential: !missingCredential, environment: environment, mode: launchMode
+            )
+          } catch {
+            // Invalid artifact paths or capabilities must not recover into live services.
+            NSApp.terminate(nil)
+            return
+          }
           self?.finishLaunching(
             with: services,
             openFixAndSend: launchDestination == .promptGate,
@@ -112,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Set early, before anything else touches windows: this is the delegate that
     // handles a tap on the daily Study reminder, and it must be in place before macOS
     // can hand us a notification response.
-    UNUserNotificationCenter.current().delegate = self
+    studyNotificationScheduler = services.runtimeEffects.configureStudyNotifications(self)
 
     let coordinator = installCoordinator(services: services)
     installMainMenu()
@@ -135,19 +148,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       installUITestingCommands()
     #endif
 
-    let globalHotKey: GlobalHotKey
-    #if DEBUG
-      if ProcessInfo.processInfo.environment["BEX_UI_TESTING"] == "1" {
-        let behavior = UITestScenario.current.configuration.hotKeyRegistration
-        globalHotKey = GlobalHotKey(
-          backend: UITestingHotKeyRegistrationBackend(behavior: behavior)
-        )
-      } else {
-        globalHotKey = GlobalHotKey()
-      }
-    #else
-      globalHotKey = GlobalHotKey()
-    #endif
+    let globalHotKey = services.runtimeEffects.makeHotKey()
     self.globalHotKey = globalHotKey
     Task { [weak self] in
       let fixAndSendChord = await services.preferences.fixAndSendKeyChord()
@@ -227,7 +228,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let coordinator = WindowCoordinator(services: services)
     self.services = services
     windowCoordinator = coordinator
-    studyNotificationScheduler = StudyNotificationScheduler()
     coordinator.applyStoredAppearance()
     coordinator.onLearningViewed = { [weak self] in
       Task { [weak self] in
@@ -589,7 +589,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   #if DEBUG
     private func installUITestingCommands() {
-      guard ProcessInfo.processInfo.environment["BEX_UI_TESTING"] == "1" else { return }
+      guard services?.runtimeEffects.usesUITestingCommands == true else { return }
       let center = DistributedNotificationCenter.default()
       center.addObserver(
         self,
@@ -817,9 +817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // actually visible — see `StudyStatusFile`. `lastStudyResult` is read (not
     // consumed) here so the second, notification-triggered refresh right after an
     // answer still republishes the same result instead of losing it.
-    StudyStatusFile.write(
-      dueCount: studyDue, severity: severity, nextCard: nextCard, lastResult: lastStudyResult,
-      now: now)
+    services.runtimeEffects.publishStudyStatus(studyDue, severity, nextCard, lastStudyResult, now)
   }
 
   /// Builds today's `[StudyCard]` and `StudyDailyPlan.Plan` from the learning log and

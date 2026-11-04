@@ -98,7 +98,7 @@ final class PromptGatePanelController: NSWindowController, NSWindowDelegate {
   init(
     rootView: AnyView,
     cancelAction: @escaping @MainActor () -> Void,
-    frameAutosaveName: NSWindow.FrameAutosaveName = PromptGatePanelController.frameAutosaveName
+    frameAutosaveName: NSWindow.FrameAutosaveName? = PromptGatePanelController.frameAutosaveName
   ) {
     hostingController = NSHostingController(rootView: rootView)
     self.cancelAction = cancelAction
@@ -119,10 +119,12 @@ final class PromptGatePanelController: NSWindowController, NSWindowDelegate {
     panel.isReleasedWhenClosed = false
     panel.animationBehavior = .utilityWindow
     super.init(window: panel)
-    let restoredSavedFrame = panel.setFrameUsingName(frameAutosaveName)
-    _ = panel.setFrameAutosaveName(frameAutosaveName)
-    if restoredSavedFrame {
-      frameMemory = PromptGateFrameMemory(restoredFrame: panel.frame)
+    if let frameAutosaveName {
+      let restoredSavedFrame = panel.setFrameUsingName(frameAutosaveName)
+      _ = panel.setFrameAutosaveName(frameAutosaveName)
+      if restoredSavedFrame {
+        frameMemory = PromptGateFrameMemory(restoredFrame: panel.frame)
+      }
     }
     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
       guard let self, self.window?.isKeyWindow == true else { return event }

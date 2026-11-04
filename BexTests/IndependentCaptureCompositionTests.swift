@@ -304,7 +304,8 @@ private final class CompositionCoordinatorFixture {
       hookManager: hooks,
       promptGateIPC: ipc,
       codexOAuth: CodexOAuthService(keychain: keychain, transport: CompositionOfflineTransport(),
-        makeListener: { _ in CompositionOfflineListener() })
+        authorizationEnabled: false, makeListener: { _ in CompositionOfflineListener() }),
+      runtimeEffects: .uiTesting(hotKeyBehavior: .succeed, permitsSystemTarget: false)
     )
   }
 

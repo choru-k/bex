@@ -419,11 +419,19 @@ final class SettingsNavigationTests: XCTestCase {
       Set(configurations.map(\.frameAutosaveName)),
       Set(["Bex.MainWindow", "Bex.WelcomeWindow"])
     )
-    for configuration in configurations {
+    for productionConfiguration in configurations {
+      let configuration = WindowCoordinator.StandardWindowConfiguration(
+        title: productionConfiguration.title,
+        defaultContentSize: productionConfiguration.defaultContentSize,
+        minimumContentSize: productionConfiguration.minimumContentSize,
+        frameAutosaveName: "BexTests.Window.\(UUID().uuidString)"
+      )
+      defer { NSWindow.removeFrame(usingName: configuration.frameAutosaveName) }
       let controller = WindowCoordinator.makeWindowController(
         configuration: configuration,
         rootView: EmptyView()
       )
+      defer { controller.close() }
       let window = try XCTUnwrap(controller.window)
       XCTAssertEqual(window.frameAutosaveName, configuration.frameAutosaveName)
       XCTAssertEqual(window.contentMinSize, configuration.minimumContentSize)

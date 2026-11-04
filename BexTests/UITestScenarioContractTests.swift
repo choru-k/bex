@@ -1,8 +1,201 @@
+import AppKit
+import SwiftUI
+import UserNotifications
 import XCTest
 
 @testable import Bex
 
 final class UITestScenarioContractTests: XCTestCase {
+  func testLaunchSelectorsResolveOneFailClosedDebugMode() {
+    for (arguments, environment) in [
+      (["Bex", "--ui-testing"], [String: String]()),
+      (["Bex"], ["BEX_UI_TESTING": "1"]),
+      (["Bex", "--ui-testing"], ["BEX_UI_TESTING": "1"]),
+    ] {
+      XCTAssertEqual(AppLaunchMode.resolve(arguments: arguments, environment: environment, debugBuild: true), .isolatedUITesting)
+      XCTAssertEqual(AppLaunchMode.resolve(arguments: arguments, environment: environment, debugBuild: false), .rejectedUITesting)
+    }
+    for environment in [
+      ["BEX_UI_TESTING": "true"], ["BEX_UI_TESTING": "0"],
+      ["BEX_UI_TEST_REAL_TARGET": "1"], ["BEX_UI_TEST_SCENARIO": "default"],
+    ] {
+      XCTAssertEqual(AppLaunchMode.resolve(arguments: ["Bex"], environment: environment, debugBuild: true), .rejectedUITesting)
+    }
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["Bex"], environment: [:], debugBuild: false), .production)
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["Bex"], environment: [:], debugBuild: true), .production)
+  }
+
+  func testRealTargetRequiresSeparateManualModeAndNeverUpgradesIsolatedLaunch() {
+    let environment = ["BEX_UI_TESTING": "1", "BEX_UI_TEST_REAL_TARGET": "1"]
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing"], environment: environment, debugBuild: true), .rejectedUITesting)
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: environment, debugBuild: true), .manualSystemTargetTesting)
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: environment, debugBuild: false), .rejectedUITesting)
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: [:], debugBuild: true), .rejectedUITesting)
+  }
+
+  @MainActor
+  func testIsolatedFactoryInstallsOnlyFixtureCapabilitiesAndIndependentCredentials() async throws {
+    let seeded = try await AppServices.uiTesting(seedCredential: true, environment: [:])
+    let unseeded = try await AppServices.uiTesting(seedCredential: false, environment: [:])
+    let firstKey = try await seeded.keychain.apiKey(for: .openAI)
+    let secondKey = try await unseeded.keychain.apiKey(for: .openAI)
+    XCTAssertEqual(firstKey, "ui-testing-key")
+    XCTAssertNil(secondKey)
+    await seeded.preferences.setSelectedProvider(.claude)
+    let secondProvider = await unseeded.preferences.selectedProvider()
+    XCTAssertEqual(secondProvider, .openAI)
+    XCTAssertTrue(seeded.grammar is UITestingGrammarService)
+    XCTAssertTrue(seeded.promptTarget is UITestingPromptTargetService)
+    XCTAssertTrue(seeded.pasteboard is UITestingPasteboard)
+    XCTAssertTrue(seeded.hookManager is UITestingHookManager)
+    XCTAssertTrue(seeded.promptGateIPC is UITestingPromptGateIPC)
+    let effects = seeded.runtimeEffects
+    XCTAssertNil(effects.configureStudyNotifications(UITestNotificationDelegate()))
+    XCTAssertFalse(effects.openAuthorizationURL(URL(string: "https://example.com")!))
+    XCTAssertFalse(effects.permitsExternalFocus)
+    XCTAssertFalse(effects.persistsWindowFrames)
+    XCTAssertTrue(effects.usesUITestingCommands)
+    // These injected closures have no real status-file or process target capability.
+    effects.publishStudyStatus(1, .normal, nil, nil, Date(timeIntervalSince1970: 0))
+    effects.activateExternalApplication(42)
+    let hotKey = effects.makeHotKey()
+    try hotKey.register(Shortcut(id: 77, chord: .defaultFixAndSend), action: {})
+    hotKey.unregisterAll()
+    do { _ = try await seeded.codexOAuth.begin(); XCTFail("UI validation must reject OAuth") }
+    catch let error as BexError {
+      XCTAssertEqual(error, .oauthFailure("Account login is unavailable in isolated UI validation."))
+    }
+  }
+
+  @MainActor
+  func testFactoryRejectsLegacyRealTargetBeforeBuildingServices() async {
+    do {
+      _ = try await AppServices.uiTesting(seedCredential: true,
+        environment: ["BEX_UI_TEST_REAL_TARGET": "1"])
+      XCTFail("A fixture flag cannot grant system target access")
+    } catch {
+      XCTAssertTrue(error is UITestingIsolationError)
+    }
+  }
+
+  func testDisabledOAuthNeverConstructsListenerOrCallsTransport() async throws {
+    let counter = UITestIsolationCounter()
+    let transport = UITestRecordingTransport()
+    let oauth = CodexOAuthService(
+      keychain: KeychainStore(service: "UITestIsolation-\(UUID().uuidString)", inMemory: true),
+      transport: transport, authorizationEnabled: false,
+      makeListener: { _ in counter.increment(); return UITestingOAuthListener() }
+    )
+    for _ in 0..<2 {
+      do { _ = try await oauth.begin(); XCTFail("OAuth must fail before admission") }
+      catch { XCTAssertTrue(error is BexError) }
+    }
+    XCTAssertEqual(counter.value, 0)
+    let calls = await transport.calls
+    XCTAssertEqual(calls, 0)
+  }
+
+  func testFallbackTransportAndListenerDenyAllIO() async {
+    do {
+      _ = try await UITestingHTTPTransport().data(for: URLRequest(url: URL(string: "https://example.com/token")!))
+      XCTFail("No request may leave validation")
+    } catch { XCTAssertTrue(error is BexError) }
+    do { try await UITestingOAuthListener().start(); XCTFail("No callback port may bind") }
+    catch { XCTAssertTrue(error is BexError) }
+    do { _ = try await UITestingOAuthListener().waitForCallback(); XCTFail("No callback may arrive") }
+    catch { XCTAssertTrue(error is BexError) }
+  }
+
+  @MainActor
+  func testIsolatedWindowsHaveNoAutosaveDomainAndSettingsCopiesToInjectedPasteboard() async throws {
+    for configuration in [WindowCoordinator.mainWindowConfiguration, WindowCoordinator.welcomeWindowConfiguration] {
+      let controller = WindowCoordinator.makeWindowController(configuration: configuration,
+        rootView: EmptyView(), persistsWindowFrames: false)
+      XCTAssertEqual(controller.window?.frameAutosaveName, "")
+      controller.close()
+    }
+    let panel = PromptGatePanelController(rootView: AnyView(EmptyView()), cancelAction: {}, frameAutosaveName: nil)
+    XCTAssertEqual(panel.window?.frameAutosaveName, "")
+    panel.close()
+    let services = try await AppServices.uiTesting(seedCredential: false, environment: [:])
+    let recorder = UITestCopyRecorder()
+    let settings = SettingsViewModel(preferences: services.preferences, keychain: services.keychain,
+      grammar: services.grammar, codexOAuth: services.codexOAuth, promptTarget: services.promptTarget,
+      hookManager: services.hookManager, applyAppearance: { _ in },
+      openAuthorizationURL: services.runtimeEffects.openAuthorizationURL, pasteboard: recorder,
+      initialWorkingDirectory: "/ui-validation", initialOMPExecutablePath: "/ui-validation/omp")
+    settings.copyIntegrationArtifact("fixture integration preview")
+    XCTAssertEqual(recorder.values, ["fixture integration preview"])
+    XCTAssertEqual(settings.ompWorkingDirectory, "/ui-validation")
+  }
+
+  func testArtifactValidationRejectsExistingOutsideAndSymlinkPathsWithoutChangingThem() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("UITestArtifacts-\(UUID().uuidString)", isDirectory: true)
+    let outside = FileManager.default.temporaryDirectory.appendingPathComponent("UITestOutside-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: outside) }
+    let sentinel = root.appendingPathComponent("existing.txt")
+    try Data("keep me".utf8).write(to: sentinel)
+    XCTAssertThrowsError(try UITestingArtifacts.validate(sentinel, beneath: root, mustBeNew: true))
+    XCTAssertThrowsError(try UITestingArtifacts.validate(outside.appendingPathComponent("no.txt"), beneath: root, mustBeNew: true))
+    let link = root.appendingPathComponent("link")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+    XCTAssertThrowsError(try UITestingArtifacts.validate(link.appendingPathComponent("no.txt"), beneath: root, mustBeNew: true))
+    let internalLink = root.appendingPathComponent("internal-link")
+    try FileManager.default.createSymbolicLink(at: internalLink, withDestinationURL: root)
+    XCTAssertThrowsError(try UITestingArtifacts.validate(internalLink.appendingPathComponent("no.txt"), beneath: root, mustBeNew: true))
+    let dangling = root.appendingPathComponent("dangling")
+    try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: root.appendingPathComponent("missing.txt"))
+    XCTAssertFalse(FileManager.default.fileExists(atPath: dangling.path))
+    XCTAssertThrowsError(try UITestingArtifacts.validate(dangling, beneath: root, mustBeNew: true))
+    XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "keep me")
+    XCTAssertFalse(FileManager.default.fileExists(atPath: outside.appendingPathComponent("no.txt").path))
+    try UITestingArtifacts.validate(root.appendingPathComponent("fresh.txt"), beneath: root, mustBeNew: true)
+  }
+
+  func testArtifactPreparationRejectsCanonicalAliasesAndOverlappingOutputs() throws {
+    let base = FileManager.default.temporaryDirectory.appendingPathComponent("UITestAliases-\(UUID().uuidString)", isDirectory: true)
+    let alias = FileManager.default.temporaryDirectory.appendingPathComponent("UITestAlias-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: base)
+    defer { try? FileManager.default.removeItem(at: alias); try? FileManager.default.removeItem(at: base) }
+    var duplicate = UITestFixtureConfiguration()
+    duplicate.pasteboardPath = base.appendingPathComponent("same.txt").path
+    duplicate.target.sinkPath = alias.appendingPathComponent("same.txt").path
+    XCTAssertThrowsError(try UITestingArtifacts.prepare(configuration: &duplicate, scenario: .standard, temporaryDirectory: alias))
+    var overlapping = UITestFixtureConfiguration()
+    overlapping.pasteboardPath = base.appendingPathComponent("parent").path
+    overlapping.integrationTranscriptPath = base.appendingPathComponent("parent/events.json").path
+    XCTAssertThrowsError(try UITestingArtifacts.prepare(configuration: &overlapping, scenario: .standard, temporaryDirectory: base))
+    for suffix in ["", "/data.json"] {
+      var resume = UITestScenario.dirtyEditorResume.configuration
+      resume.pasteboardPath = base.appendingPathComponent("BexUITesting-dirty-editor-resume" + suffix).path
+      XCTAssertThrowsError(try UITestingArtifacts.prepare(configuration: &resume, scenario: .dirtyEditorResume, temporaryDirectory: alias))
+    }
+    XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: base.path), [])
+  }
+
+  func testFreshArtifactsHaveDistinctRootsAndResumeRemainsInsideFixtureNamespace() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("UITestRoots-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    var first = UITestFixtureConfiguration()
+    var second = UITestFixtureConfiguration()
+    let firstRoot = try UITestingArtifacts.prepare(configuration: &first, scenario: .standard, temporaryDirectory: root)
+    let secondRoot = try UITestingArtifacts.prepare(configuration: &second, scenario: .standard, temporaryDirectory: root)
+    XCTAssertNotEqual(firstRoot, secondRoot)
+    XCTAssertTrue(try XCTUnwrap(first.pasteboardPath).hasPrefix(firstRoot.path + "/"))
+    var resume = UITestScenario.dirtyEditorResume.configuration
+    let resumeRoot = try UITestingArtifacts.prepare(configuration: &resume, scenario: .dirtyEditorResume, temporaryDirectory: root)
+    let saved = resumeRoot.appendingPathComponent("data.json")
+    try Data("preserve".utf8).write(to: saved)
+    var resumed = UITestScenario.dirtyEditorResume.configuration
+    XCTAssertEqual(try UITestingArtifacts.prepare(configuration: &resumed, scenario: .dirtyEditorResume, temporaryDirectory: root), resumeRoot)
+    XCTAssertEqual(try String(contentsOf: saved, encoding: .utf8), "preserve")
+  }
+
+
   func testScenarioNamesAreStableCodableAndParseFromEnvironment() throws {
     XCTAssertEqual(
       UITestScenario.allCases.map(\.rawValue),
@@ -215,7 +408,7 @@ final class UITestScenarioContractTests: XCTestCase {
 
   @MainActor
   func testDefaultServiceFactoryKeepsLegacySeedBehavior() async throws {
-    let services = await AppServices.uiTesting(seedCredential: true)
+    let services = try await AppServices.uiTesting(seedCredential: true, environment: [:])
 
     let provider = await services.preferences.selectedProvider()
     let draftRetention = await services.preferences.draftRetentionChoice()
@@ -319,5 +512,29 @@ private struct UITestSeedFixture {
   func remove() {
     UserDefaults(suiteName: suiteName)?.removePersistentDomain(forName: suiteName)
     try? FileManager.default.removeItem(at: directory)
+  }
+}
+
+@MainActor
+private final class UITestNotificationDelegate: NSObject, UNUserNotificationCenterDelegate {}
+
+@MainActor
+private final class UITestCopyRecorder: PasteboardWriting {
+  var values: [String] = []
+  func write(_ string: String) throws { values.append(string) }
+}
+
+private final class UITestIsolationCounter: @unchecked Sendable {
+  private let lock = NSLock()
+  private var count = 0
+  func increment() { lock.lock(); defer { lock.unlock() }; count += 1 }
+  var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+}
+
+private actor UITestRecordingTransport: HTTPTransport {
+  private(set) var calls = 0
+  func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    calls += 1
+    throw BexError.invalidResponse
   }
 }

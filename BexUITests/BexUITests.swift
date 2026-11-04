@@ -790,6 +790,9 @@ final class BexUITests: XCTestCase {
   }
 
   func testStandardAXPromptGateSmoke() throws {
+    guard ProcessInfo.processInfo.environment["BEX_RUN_MANUAL_SYSTEM_TARGET_TEST"] == "1" else {
+      throw XCTSkip("Manual system-target validation is separate from the isolated UI suite.")
+    }
     continueAfterFailure = false
     let source = "i has teh file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
     let expected = "I have the file /tmp/a.swift and use --dry-run at https://example.com/a?q=1"
@@ -800,6 +803,7 @@ final class BexUITests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--ui-testing"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
+    app.launchArguments.append("--ui-testing-system-target")
     app.launchEnvironment["BEX_UI_TEST_REAL_TARGET"] = "1"
     let copySink = FileManager.default.temporaryDirectory.appendingPathComponent("BexAXCopy-\(UUID().uuidString).txt")
     app.launchEnvironment["BEX_UI_TEST_PASTEBOARD_PATH"] = copySink.path
