@@ -225,7 +225,9 @@ node scripts/bex-ui-test-artifact.mjs build
 node scripts/bex-ui-test-artifact.mjs inspect /absolute/path/from-build/receipt.json
 ```
 
-After reviewing the setup and approving native execution, the same script's `test` command runs only the named entry/relaunch regression allowlist. Preparation can still invoke Xcode signing, app registration and execution-policy tooling; a temporary build directory does not imply zero system changes. The read-only inspection never executes a candidate and is not a sandbox or cryptographic attestation.
+Only `UITesting` uses fixed teamless ad-hoc signing; ordinary Debug/Release signing is unchanged. Preparation validates the effective signing settings for the app, helper and both test targets, and inspection verifies each project product's ad-hoc signature without executing or re-signing it. No certificate, provisioning update or unsigned fallback is used.
+
+After reviewing the setup and approving native execution, the same script's `test` command runs only the named entry/relaunch regression allowlist. Preparation can still invoke Xcode app registration and execution-policy exception tooling; a temporary build directory does not imply zero system changes. LaunchServices registration approval does not authorize an execution-policy exception, so native builds remain held until any required security-policy change is approved. Do not disable security tooling to work around the hold. The inspection is not a sandbox or cryptographic attestation.
 
 See [UI validation isolation](docs/ui-validation-isolation.md) for the compiled artifact contract, exact workflow, native evidence limits, fixture boundary and separately authorized manual system-target lane. Do not manually assemble a normal Debug binary into a validation `.app` or reuse an old `.xctestrun`. Broader native unit/UI execution needs separate review; the independent Swift package tests are unaffected.
 

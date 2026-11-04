@@ -58,7 +58,8 @@ test('standalone host is independent of Bex app build, embedding and native host
   for (const id of objects.C70000000000000000000014.buildConfigurations) {
     const settings = objects[id].buildSettings;
     assert.equal(settings.PRODUCT_BUNDLE_IDENTIFIER, 'com.bex.accessibility');
-    assert.equal(settings.DEVELOPMENT_TEAM, 'ESURPGU29C');
+    assert.equal(settings.DEVELOPMENT_TEAM, objects[id].name === 'UITesting' ? '' : 'ESURPGU29C');
+    assert.equal(settings.CODE_SIGN_STYLE, objects[id].name === 'UITesting' ? 'Manual' : 'Automatic');
     assert.equal(settings.ENABLE_HARDENED_RUNTIME, 'YES');
     assert.equal(settings.INFOPLIST_FILE, 'Config/AccessibilityHost-Info.plist');
     assert.equal(settings.MACOSX_DEPLOYMENT_TARGET, '13.0');

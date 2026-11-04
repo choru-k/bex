@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { contract, validateBuildSettings, validateBundleInfo, validateCompiledStamp,
-  artifactHashes, relaunchTests, validateTestPlan } from '../bex-ui-test-artifact.mjs';
+  artifactHashes, relaunchTests, validateTestPlan, signingSettings, signingArguments,
+  buildTargets, validateSigningSettings, validateBuildEnvironment, validateAdHocSignature, inspectSignature } from '../bex-ui-test-artifact.mjs';
 const read = p => fs.readFileSync(new URL(`../../${p}`, import.meta.url), 'utf8');
 const launch = read('Bex/Application/AppLaunchMode.swift');
 const delegate = read('Bex/Application/AppDelegate.swift');
@@ -52,12 +53,13 @@ function compiledSlice(source, symbols) {
   assert.equal(stack.length, 0); return output.join('\n');
 }
 const symbols = new Set(['DEBUG', contract.flag]);
-const validSettings = () => [{ target: 'Bex', buildSettings: {
+const validSettings = () => buildTargets.map(target => ({ target, buildSettings: {
+  ...signingSettings, ENABLE_HARDENED_RUNTIME: 'YES',
   CONFIGURATION: 'UITesting', SWIFT_ACTIVE_COMPILATION_CONDITIONS: 'DEBUG BEX_UI_TEST_ARTIFACT',
   PRODUCT_BUNDLE_IDENTIFIER: contract.bundleID, PRODUCT_NAME: contract.executable,
   PRODUCT_MODULE_NAME: 'Bex', EXECUTABLE_NAME: contract.executable,
   INFOPLIST_FILE: 'Config/UITesting-Info.plist', GENERATE_INFOPLIST_FILE: 'NO', BEX_EMBED_NATIVE_WEB_RESOURCES: 'NO',
-} }];
+} }));
 const validInfo = () => ({ CFBundleIdentifier: contract.bundleID,
   CFBundleExecutable: contract.executable, BexUITestArtifact: contract.marker });
 
@@ -96,6 +98,38 @@ test('both scheme TestActions select UITesting, ordinary Run/Archive remain norm
   const runner = read('BexUITests/BexUITests.swift');
   assert.doesNotMatch(runner, /XCUIApplication\(\)/);
   assert.match(runner, /XCUIApplication\(bundleIdentifier: "com.bex.desktop.ui-validation"\)/);
+});
+
+test('only UITesting uses explicit teamless ad-hoc signing and preserves existing security settings', () => {
+  const objects = parseProject(read('Bex.xcodeproj/project.pbxproj')).objects;
+  const configs = Object.values(objects).filter(o => o.isa === 'XCBuildConfiguration');
+  assert.equal(configs.filter(c => c.name === 'UITesting').length, 6);
+  for (const config of configs.filter(c => c.name === 'UITesting')) {
+    for (const [key, value] of Object.entries(signingSettings)) assert.equal(config.buildSettings[key], value, key);
+    assert.equal(config.buildSettings.ENABLE_USER_SCRIPT_SANDBOXING, undefined);
+    assert.equal(config.buildSettings.CODE_SIGN_ENTITLEMENTS, undefined);
+  }
+  const targets = Object.values(objects).filter(o => o.isa === 'PBXNativeTarget');
+  assert.deepEqual(targets.map(t => t.name).sort(), [...buildTargets, 'BexAccessibility'].sort());
+  for (const target of targets) {
+    const configurations = objects[target.buildConfigurationList].buildConfigurations.map(id => objects[id]);
+    for (const config of configurations.filter(c => c.name !== 'UITesting')) {
+      assert.equal(config.buildSettings.CODE_SIGN_STYLE, 'Automatic');
+      assert.equal(config.buildSettings.DEVELOPMENT_TEAM, 'ESURPGU29C');
+      for (const key of Object.keys(signingSettings).filter(k => !['CODE_SIGN_STYLE', 'DEVELOPMENT_TEAM'].includes(k))) {
+        assert.equal(config.buildSettings[key], undefined, `${target.name}/${config.name}/${key}`);
+      }
+    }
+    if (['Bex', 'bex-hook', 'BexAccessibility'].includes(target.name)) {
+      for (const config of configurations) assert.equal(config.buildSettings.ENABLE_HARDENED_RUNTIME, 'YES');
+    }
+  }
+  assert.deepEqual(objects.A0000000000000000000005E.settings.ATTRIBUTES, ['CodeSignOnCopy']);
+  const app = objects.A00000000000000000000011;
+  assert.deepEqual(app.dependencies.map(id => objects[objects[id].target].name), ['bex-hook']);
+  for (const id of objects[app.buildConfigurationList].buildConfigurations) {
+    assert.equal(objects[id].buildSettings.BEX_EMBED_NATIVE_WEB_RESOURCES, 'NO');
+  }
 });
 
 test('dedicated compile branch removes live entry/factories; ordinary production retains them', () => {
@@ -150,6 +184,121 @@ test('build settings reject normal Debug, missing compile flag, wrong identity, 
   assert.throws(() => validateBuildSettings(values));
 });
 
+test('all scheme targets and the embedded helper require validated ad-hoc signing before building', () => {
+  assert.deepEqual(signingArguments, ['CODE_SIGN_IDENTITY=-', 'CODE_SIGN_STYLE=Manual', 'DEVELOPMENT_TEAM=',
+    'CODE_SIGNING_ALLOWED=YES', 'CODE_SIGNING_REQUIRED=YES', 'PROVISIONING_PROFILE=',
+    'PROVISIONING_PROFILE_SPECIFIER=', 'OTHER_CODE_SIGN_FLAGS=', 'CODE_SIGN_KEYCHAIN=']);
+  const badValues = {
+    CODE_SIGN_IDENTITY: ['Apple Development', 'Developer ID Application: Someone', '1234567890abcdef', '', null, ['-']],
+    CODE_SIGN_STYLE: ['Automatic', '', null], DEVELOPMENT_TEAM: ['ESURPGU29C', '$(inherited)', null],
+    CODE_SIGNING_ALLOWED: ['NO', true, '', null], CODE_SIGNING_REQUIRED: ['NO', true, '', null],
+    PROVISIONING_PROFILE: ['profile-uuid', null], PROVISIONING_PROFILE_SPECIFIER: ['some profile', null],
+    OTHER_CODE_SIGN_FLAGS: ['--options none', '--force --sign Apple Development', null],
+    CODE_SIGN_KEYCHAIN: ['/Users/someone/Library/Keychains/login.keychain-db', null],
+    EXPANDED_CODE_SIGN_IDENTITY: ['0123456789abcdef', 'Apple Development', null],
+    EXPANDED_CODE_SIGN_IDENTITY_NAME: ['Apple Development: Someone', 'Developer ID Application', null],
+  };
+  for (const target of buildTargets) {
+    for (const [key, values] of Object.entries(badValues)) for (const value of values) {
+      const entries = validSettings(); entries.find(e => e.target === target).buildSettings[key] = value;
+      assert.throws(() => validateBuildSettings(entries), `${target}/${key}/${value}`);
+    }
+    for (const key of Object.keys(signingSettings).filter(key => signingSettings[key] !== '')) {
+      const entries = validSettings(); delete entries.find(e => e.target === target).buildSettings[key];
+      assert.throws(() => validateBuildSettings(entries), `${target}/missing ${key}`);
+    }
+    assert.throws(() => validateBuildSettings(validSettings().filter(e => e.target !== target)), target);
+    const wrongConfig = validSettings(); wrongConfig.find(e => e.target === target).buildSettings.CONFIGURATION = 'Debug';
+    assert.throws(() => validateBuildSettings(wrongConfig));
+    for (const conditions of ['DEBUG', contract.flag, '', null, ['DEBUG', contract.flag]]) {
+      const entries = validSettings(); entries.find(e => e.target === target).buildSettings.SWIFT_ACTIVE_COMPILATION_CONDITIONS = conditions;
+      assert.throws(() => validateBuildSettings(entries), `${target}/compiler conditions`);
+    }
+  }
+  for (const target of ['Bex', 'bex-hook']) {
+    const entries = validSettings(); entries.find(e => e.target === target).buildSettings.ENABLE_HARDENED_RUNTIME = 'NO';
+    assert.throws(() => validateBuildSettings(entries));
+  }
+  for (const entries of [null, {}, [], [null], [...validSettings(), validSettings()[0]],
+    [...validSettings(), { target: 'BexAccessibility', buildSettings: validSettings()[0].buildSettings }]]) {
+    assert.throws(() => validateBuildSettings(entries));
+  }
+  const omittedEmpty = validSettings();
+  for (const entry of omittedEmpty) for (const [key, value] of Object.entries(signingSettings)) {
+    if (value === '') delete entry.buildSettings[key];
+  }
+  assert.doesNotThrow(() => validateBuildSettings(omittedEmpty));
+  assert.doesNotThrow(() => validateSigningSettings([validSettings()[3]], ['bex-hook']));
+  const expanded = validSettings();
+  for (const entry of expanded) Object.assign(entry.buildSettings, {
+    EXPANDED_CODE_SIGN_IDENTITY: '-', EXPANDED_CODE_SIGN_IDENTITY_NAME: 'Sign to Run Locally',
+  });
+  assert.doesNotThrow(() => validateBuildSettings(expanded));
+});
+
+test('external Xcode configuration overrides reject before any Xcode command', () => {
+  assert.doesNotThrow(() => validateBuildEnvironment({}));
+  assert.doesNotThrow(() => validateBuildEnvironment({ XCODE_XCCONFIG_FILE: '' }));
+  for (const value of ['/tmp/external.xcconfig', ' ', null, false, []]) {
+    assert.throws(() => validateBuildEnvironment({ XCODE_XCCONFIG_FILE: value }));
+  }
+  const main = read('scripts/bex-ui-test-artifact.mjs').split('export function main(')[1];
+  assert.ok(main.indexOf('validateBuildEnvironment(process.env)') < main.indexOf("run('/usr/bin/xcodebuild'"));
+});
+
+const signatureDisplay = (identifier = contract.bundleID) => `Executable=/temporary/product
+Identifier=${identifier}
+CodeDirectory v=20500 size=123 flags=0x10002(adhoc,runtime) hashes=1+2 location=embedded
+Signature=adhoc
+TeamIdentifier=not set
+`;
+test('signature display rejects unsigned/certificate/team signatures, missing runtime and unknown formats', () => {
+  const valid = signatureDisplay();
+  assert.doesNotThrow(() => validateAdHocSignature(valid, contract.bundleID, true));
+  for (const display of [undefined, '', 'code object is not signed at all',
+    valid.replace('Signature=adhoc', 'Signature size=1234'), valid + 'Authority=Apple Development: Someone\n',
+    valid.replace('TeamIdentifier=not set', 'TeamIdentifier=ESURPGU29C'),
+    valid.replace(`Identifier=${contract.bundleID}`, 'Identifier=com.bex.desktop'),
+    valid.replace('flags=0x10002(adhoc,runtime)', 'flags=0x2(adhoc)'),
+    valid.replace('flags=0x10002(adhoc,runtime)', 'flags=0x10000(runtime)'),
+    valid + 'Signature=adhoc\n', valid + 'TeamIdentifier=not set\n', valid + valid,
+    valid.replace('CodeDirectory', 'UnknownCodeDirectory')]) {
+    assert.throws(() => validateAdHocSignature(display, contract.bundleID, true));
+  }
+});
+
+test('read-only signature inspection checks every architecture and never re-signs or runs products', () => {
+  const calls = [];
+  const command = (executable, args, capture, stderr) => {
+    calls.push({ executable, args, capture, stderr });
+    if (executable === '/usr/bin/lipo') return 'x86_64 arm64\n';
+    return args.includes('--display') ? signatureDisplay() : '';
+  };
+  inspectSignature('/temporary/product.app', '/temporary/product.app/Contents/MacOS/product', contract.bundleID, true, command);
+  assert.equal(calls.length, 4);
+  assert.deepEqual(calls[0].args, ['-archs', '/temporary/product.app/Contents/MacOS/product']);
+  for (const [index, arch] of ['x86_64', 'arm64'].entries()) {
+    assert.deepEqual(calls[index + 1].args, ['--display', '--verbose=4', '--arch', arch, '/temporary/product.app']);
+    assert.equal(calls[index + 1].stderr, true);
+  }
+  assert.deepEqual(calls[3].args, ['--verify', '--strict', '--all-architectures', '/temporary/product.app']);
+  for (const malformed of ['', 'arm64 arm64', 'arm64 unknown']) {
+    assert.throws(() => inspectSignature('/product', '/product', contract.bundleID, true, () => malformed));
+  }
+  let secondSliceChecked = false;
+  assert.throws(() => inspectSignature('/product', '/product', contract.bundleID, true, (executable, args) => {
+    if (executable === '/usr/bin/lipo') return 'x86_64 arm64';
+    if (args.includes('arm64')) { secondSliceChecked = true; return signatureDisplay() + 'Authority=Apple Development\n'; }
+    return signatureDisplay();
+  }));
+  assert.equal(secondSliceChecked, true);
+  assert.throws(() => inspectSignature('/product', '/product', contract.bundleID, true, (executable, args) => {
+    if (executable === '/usr/bin/lipo') return 'arm64';
+    if (args.includes('--verify')) throw new Error('invalid signature');
+    return signatureDisplay();
+  }), /invalid signature/);
+});
+
 test('read-only artifact checks reject malformed/absent metadata and ordinary unstamped binary', () => {
   assert.doesNotThrow(() => validateBundleInfo(validInfo()));
   for (const marker of [undefined, null, false, 1, '', 'isolated-ui-v2', { marker: contract.marker }]) {
@@ -180,12 +329,17 @@ test('product hashes detect byte changes and reject escaping symlinks without mu
   } finally { fs.rmSync(directory, { recursive: true }); fs.rmSync(outside, { recursive: true }); }
 });
 
-test('artifact recipe never executes inspected app, accepts overrides, or invents signing identity', () => {
+test('artifact recipe never executes inspected app, accepts overrides, or falls back to certificate signing', () => {
   const script = read('scripts/bex-ui-test-artifact.mjs');
   assert.match(script, /build-for-testing/); assert.match(script, /test-without-building/);
   assert.match(script, /validateBuildSettings\(settings\)/);
   assert.match(script, /validateCompiledStamp\(readFileSync\(executable\)\)/);
-  assert.doesNotMatch(script, /\n\s+run\(executable,|codesign|CODE_SIGN_IDENTITY|DEVELOPMENT_TEAM|\/usr\/bin\/open/);
+  assert.doesNotMatch(script, /\n\s+run\(executable,|\/usr\/bin\/open|--force|--sign[',]|allowProvisioning|find-identity|\/usr\/bin\/security|AD_HOC_CODE_SIGNING_ALLOWED/);
+  assert.match(script, /const commonArgs[\s\S]*-sdk', 'macosx', \.\.\.signingArguments/);
+  assert.match(script, /\.\.\.commonArgs, '-target', target, '-showBuildSettings'/);
+  assert.ok(script.indexOf('validateBuildSettings(settings)') < script.indexOf("[...buildArgs, 'build-for-testing']"));
+  assert.match(script, /inspectProductSignatures\(products, targets\)/);
+  assert.match(script, /LaunchServices registration approval does not cover execution-policy exceptions/);
   assert.match(script, /BEX_RUN_MANUAL_SYSTEM_TARGET_TEST/);
   assert.equal(relaunchTests.length, 7);
   assert.ok(relaunchTests.every(name => !name.includes('StandardAX')));

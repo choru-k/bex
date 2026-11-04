@@ -2,7 +2,7 @@
 // Build/inspect trusted local artifacts only. Never launch an unknown candidate.
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,15 @@ export const contract = Object.freeze({
   bundleID: 'com.bex.desktop.ui-validation', marker: 'isolated-ui-v1',
   executable: 'BexUIValidation', stamp: 'BEX_COMPILED_UI_TEST_ARTIFACT_V1_7A8D4C62',
 });
+// Only this dedicated build lane may use local ad-hoc signing. No certificate,
+// team, provisioning profile, caller-supplied signing flags or unsigned fallback.
+export const signingSettings = Object.freeze({
+  CODE_SIGN_IDENTITY: '-', CODE_SIGN_STYLE: 'Manual', DEVELOPMENT_TEAM: '',
+  CODE_SIGNING_ALLOWED: 'YES', CODE_SIGNING_REQUIRED: 'YES',
+  PROVISIONING_PROFILE: '', PROVISIONING_PROFILE_SPECIFIER: '', OTHER_CODE_SIGN_FLAGS: '', CODE_SIGN_KEYCHAIN: '',
+});
+export const signingArguments = Object.freeze(Object.entries(signingSettings).map(([key, value]) => `${key}=${value}`));
+export const buildTargets = Object.freeze(['Bex', 'BexTests', 'BexUITests', 'bex-hook']);
 export const relaunchTests = Object.freeze([
   'BexTests/UITestScenarioContractTests/testLaunchSelectorsResolveOneFailClosedDebugMode',
   'BexTests/UITestScenarioContractTests/testRealTargetRequiresSeparateManualModeAndNeverUpgradesIsolatedLaunch',
@@ -35,12 +44,44 @@ function sourceHashes() {
   return Object.fromEntries(sourcePaths.map(p => [p, sha(readFileSync(path.join(root, p)))]));
 }
 function requireCondition(condition, reason) { if (!condition) throw new Error(reason); }
+export function validateBuildEnvironment(environment) {
+  requireCondition(!Object.hasOwn(environment, 'XCODE_XCCONFIG_FILE') || environment.XCODE_XCCONFIG_FILE === '',
+    'External XCODE_XCCONFIG_FILE overrides are not admitted.');
+}
+export function validateSigningSettings(entries, requiredTargets = buildTargets) {
+  requireCondition(Array.isArray(entries) && entries.length > 0, 'Missing target build settings.');
+  const seen = new Set();
+  for (const entry of entries) {
+    const name = entry?.target, settings = entry?.buildSettings;
+    requireCondition(buildTargets.includes(name) && !seen.has(name) && settings
+      && typeof settings === 'object' && !Array.isArray(settings), 'Unexpected, duplicate or malformed build target.');
+    seen.add(name);
+    requireCondition(settings.CONFIGURATION === contract.configuration, `Wrong configuration for ${name}.`);
+    const conditions = typeof settings.SWIFT_ACTIVE_COMPILATION_CONDITIONS === 'string'
+      ? settings.SWIFT_ACTIVE_COMPILATION_CONDITIONS.split(/\s+/) : [];
+    requireCondition(conditions.includes('DEBUG') && conditions.includes(contract.flag),
+      `Missing compiled UI-test discriminator for ${name}.`);
+    for (const [key, value] of Object.entries(signingSettings)) {
+      // Xcode can omit an empty setting from its JSON. An absent nonempty value
+      // is never accepted; unresolved variables and certificate names also fail.
+      const actual = Object.hasOwn(settings, key) ? settings[key] : '';
+      requireCondition(actual === value, `Non-ad-hoc signing setting ${key} for ${name}.`);
+    }
+    for (const key of ['EXPANDED_CODE_SIGN_IDENTITY', 'EXPANDED_CODE_SIGN_IDENTITY_NAME']) {
+      const allowed = key === 'EXPANDED_CODE_SIGN_IDENTITY' ? ['', '-'] : ['', '-', 'Sign to Run Locally'];
+      requireCondition(allowed.includes(Object.hasOwn(settings, key) ? settings[key] : ''), `Certificate identity resolved for ${name}.`);
+    }
+    if (['Bex', 'bex-hook'].includes(name)) {
+      requireCondition(settings.ENABLE_HARDENED_RUNTIME === 'YES', `Hardened runtime is required for ${name}.`);
+    }
+  }
+  for (const target of requiredTargets) requireCondition(seen.has(target), `Missing ${target} build settings.`);
+  return entries;
+}
 export function validateBuildSettings(entries) {
+  validateSigningSettings(entries);
   const settings = entries.find(entry => entry.target === 'Bex')?.buildSettings;
   requireCondition(settings, 'Missing Bex build settings.');
-  const flags = String(settings.SWIFT_ACTIVE_COMPILATION_CONDITIONS ?? '').split(/\s+/);
-  requireCondition(settings.CONFIGURATION === contract.configuration && flags.includes('DEBUG')
-    && flags.includes(contract.flag), 'This is not a compiled UI-test configuration.');
   requireCondition(settings.PRODUCT_BUNDLE_IDENTIFIER === contract.bundleID
     && settings.PRODUCT_NAME === contract.executable && settings.PRODUCT_MODULE_NAME === 'Bex'
     && settings.EXECUTABLE_NAME === contract.executable, 'Wrong validation product identity.');
@@ -48,6 +89,17 @@ export function validateBuildSettings(entries) {
     && settings.GENERATE_INFOPLIST_FILE === 'NO', 'Wrong validation Info.plist input.');
   requireCondition(settings.BEX_EMBED_NATIVE_WEB_RESOURCES === 'NO', 'Packaged-host resources are not admitted.');
   return settings;
+}
+export function validateAdHocSignature(display, identifier, hardenedRuntime = false) {
+  requireCondition(typeof display === 'string', 'Missing code-signature display.');
+  const values = key => display.split(/\r?\n/).filter(line => line.startsWith(`${key}=`)).map(line => line.slice(key.length + 1));
+  requireCondition(JSON.stringify(values('Signature')) === '["adhoc"]'
+    && JSON.stringify(values('TeamIdentifier')) === '["not set"]'
+    && JSON.stringify(values('Identifier')) === JSON.stringify([identifier])
+    && values('Authority').length === 0, 'Product is not the expected teamless ad-hoc signature.');
+  const flags = [...display.matchAll(/^CodeDirectory\s+[^\r\n]*\bflags=0x[0-9a-f]+\(([^)]*)\)/gmi)];
+  requireCondition(flags.length === 1 && flags[0][1].split(',').includes('adhoc')
+    && (!hardenedRuntime || flags[0][1].split(',').includes('runtime')), 'Unsupported or weakened code-signature flags.');
 }
 export function validateBundleInfo(info) {
   requireCondition(info.CFBundleIdentifier === contract.bundleID
@@ -128,7 +180,7 @@ export function artifactHashes(directory) {
   }
   visit(''); return result;
 }
-function run(executable, args, capture = false) {
+function run(executable, args, capture = false, includeStderr = false) {
   // No manual system-target opt-in or injected BEX test selectors are inherited.
   const environment = Object.fromEntries(Object.entries(process.env).filter(([k]) =>
     !k.startsWith('BEX_UI_TEST') && k !== 'BEX_RUN_MANUAL_SYSTEM_TARGET_TEST'));
@@ -136,9 +188,44 @@ function run(executable, args, capture = false) {
     stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   if (result.error) throw result.error;
   requireCondition(result.status === 0, `${path.basename(executable)} failed (${result.status}): ${result.stderr ?? ''}`);
-  return result.stdout;
+  return includeStderr ? `${result.stdout ?? ''}\n${result.stderr ?? ''}` : result.stdout;
 }
 function plist(file) { return JSON.parse(run('/usr/bin/plutil', ['-convert', 'json', '-o', '-', file], true)); }
+export function inspectSignature(product, executable, identifier, hardenedRuntime = false, command = run) {
+  // These are read-only Apple tool operations, not an execution of the product.
+  // Inspect every architecture rather than trusting the host-selected slice.
+  const architectures = command('/usr/bin/lipo', ['-archs', executable], true).trim().split(/\s+/);
+  requireCondition(architectures.length > 0 && new Set(architectures).size === architectures.length
+    && architectures.every(arch => ['arm64', 'arm64e', 'x86_64'].includes(arch)), 'Unsupported product architectures.');
+  for (const architecture of architectures) {
+    const display = command('/usr/bin/codesign', ['--display', '--verbose=4', '--arch', architecture, product], true, true);
+    validateAdHocSignature(display, identifier, hardenedRuntime);
+  }
+  command('/usr/bin/codesign', ['--verify', '--strict', '--all-architectures', product], true);
+}
+function inspectProductSignatures(products, targets) {
+  const directory = path.join(products, contract.configuration);
+  const app = path.join(directory, `${contract.executable}.app`);
+  const runner = path.join(directory, 'BexUITests-Runner.app');
+  inspectSignature(app, path.join(app, 'Contents', 'MacOS', contract.executable), contract.bundleID, true);
+  for (const helper of [path.join(directory, 'bex-hook'), path.join(app, 'Contents', 'Helpers', 'bex-hook')]) {
+    inspectSignature(helper, helper, 'bex-hook', true);
+  }
+  inspectSignature(runner, path.join(runner, 'Contents', 'MacOS', 'BexUITests-Runner'), `${contract.bundleID}.uitests.xctrunner`);
+  for (const target of targets) {
+    const name = target.BlueprintName ?? target.TargetName;
+    const host = name === 'BexTests' ? app : runner;
+    // validateTestPlan has already constrained these exact paths and variables.
+    const selected = path.resolve(target.TestBundlePath.replaceAll('__TESTROOT__', products).replaceAll('__TESTHOST__', host));
+    const bundles = new Set([selected, ...[path.join(directory, `${name}.xctest`),
+      path.join(host, 'Contents', 'PlugIns', `${name}.xctest`)].filter(existsSync)]);
+    for (const bundle of bundles) {
+      inspectSignature(bundle, path.join(bundle, 'Contents', 'MacOS', name),
+        `${contract.bundleID}.${name === 'BexTests' ? 'tests' : 'uitests'}`);
+    }
+  }
+  // Do not demand ad-hoc signatures from Apple-supplied XCTest frameworks.
+}
 function inspectProducts(derivedData) {
   const products = path.join(derivedData, 'Build', 'Products');
   // Validate the complete tree before reading any path through a bundle symlink.
@@ -151,27 +238,41 @@ function inspectProducts(derivedData) {
   const xctestruns = readdirSync(products).filter(name => name.endsWith('.xctestrun'));
   requireCondition(xctestruns.length === 1, 'Expected exactly one fresh build-for-testing xctestrun.');
   const xctestrun = path.join(products, xctestruns[0]);
-  validateTestPlan(plist(xctestrun), products);
+  const targets = validateTestPlan(plist(xctestrun), products);
+  inspectProductSignatures(products, targets);
   return { products, app, xctestrun, hashes };
 }
 function same(a, b, message) { requireCondition(JSON.stringify(a) === JSON.stringify(b), message); }
 export function main(args = process.argv.slice(2)) {
   const [command, receiptPath, ...extra] = args;
   if (command === 'help' || !command) {
-    console.log('After separate Mac testing approval:\n  node scripts/bex-ui-test-artifact.mjs build\n  node scripts/bex-ui-test-artifact.mjs inspect /absolute/path/receipt.json\n  node scripts/bex-ui-test-artifact.mjs test /absolute/path/receipt.json\nBuild uses fresh temporary products and existing project signing settings. Xcode can still register apps, sign products, and change execution-policy state; build is not system-neutral.\nInspect never executes the candidate. This is wrong-artifact detection, not a sandbox or signed attestation.');
+    console.log('After separate Mac testing approval:\n  node scripts/bex-ui-test-artifact.mjs build\n  node scripts/bex-ui-test-artifact.mjs inspect /absolute/path/receipt.json\n  node scripts/bex-ui-test-artifact.mjs test /absolute/path/receipt.json\nBuild pins teamless ad-hoc signing in fresh temporary products, with no certificate or unsigned fallback. Xcode can still register apps and add execution-policy exceptions; build is not system-neutral. LaunchServices registration approval does not cover execution-policy exceptions. Do not build until those effects are approved; do not disable security tooling to bypass a blocker.\nInspect reads and verifies signatures without executing or re-signing the candidate. This is wrong-artifact detection, not a sandbox or signed attestation.');
     return;
   }
   requireCondition(['build', 'inspect', 'test'].includes(command) && extra.length === 0,
     'Unknown command or unsupported arguments; manual build overrides are not admitted.');
   requireCondition(process.platform === 'darwin', 'Native artifact building/testing requires macOS and separate user approval. Portable guards run on Linux.');
+  validateBuildEnvironment(process.env);
   const source = sourceHashes();
   if (command === 'build') {
     requireCondition(!receiptPath, 'Build takes no overrides and always creates a fresh temporary directory.');
     const directory = mkdtempSync(path.join(realpathSync(tmpdir()), 'BexUIValidation-'));
     const derivedData = path.join(directory, 'DerivedData.noindex');
-    const buildArgs = ['-project', path.join(root, 'Bex.xcodeproj'), '-scheme', contract.scheme,
-      '-configuration', contract.configuration, '-destination', 'platform=macOS', '-derivedDataPath', derivedData];
+    const commonArgs = ['-project', path.join(root, 'Bex.xcodeproj'), '-configuration', contract.configuration,
+      '-sdk', 'macosx', ...signingArguments];
+    const buildArgs = [...commonArgs, '-scheme', contract.scheme,
+      '-destination', 'platform=macOS', '-derivedDataPath', derivedData];
     const settings = JSON.parse(run('/usr/bin/xcodebuild', [...buildArgs, '-showBuildSettings', '-json'], true));
+    validateSigningSettings(settings, ['Bex']);
+    // Scheme settings may omit dependencies or test targets. Query only those
+    // known missing targets, with the same configuration/SDK/signing pins, before
+    // any build. No independent Accessibility target is built by this lane.
+    for (const target of buildTargets.filter(name => !settings.some(entry => entry.target === name))) {
+      const missing = JSON.parse(run('/usr/bin/xcodebuild', [...commonArgs, '-target', target, '-showBuildSettings', '-json'], true));
+      validateSigningSettings(missing, [target]);
+      requireCondition(missing.length === 1 && missing[0].target === target, 'Unsupported per-target settings layout.');
+      settings.push(missing[0]);
+    }
     validateBuildSettings(settings);
     run('/usr/bin/xcodebuild', [...buildArgs, 'build-for-testing']);
     same(source, sourceHashes(), 'Contract sources changed during build; do not run this artifact.');
