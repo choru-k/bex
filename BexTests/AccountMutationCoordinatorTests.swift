@@ -98,7 +98,10 @@ final class AccountMutationCoordinatorTests: XCTestCase {
     cancelled.cancel()
     let succeeded = Task {
       await gate.withMutation {
-        XCTAssertThrowsError(try gate.reserveAdmission())
+        do {
+          _ = try gate.reserveAdmission()
+          XCTFail("Admission reopened during queued mutation")
+        } catch { }
         log.events.append("success")
       }
     }
