@@ -1,4 +1,9 @@
+#if !BEX_UI_TEST_ARTIFACT
+  #error("App-hosted tests require the UITesting build configuration; normal Debug/Release hosts are unsafe for relaunch testing.")
+#endif
+
 import AppKit
+import Darwin
 import SwiftUI
 import UserNotifications
 import XCTest
@@ -6,31 +11,135 @@ import XCTest
 @testable import Bex
 
 final class UITestScenarioContractTests: XCTestCase {
+  private func resolveArtifact(
+    arguments: [String] = ["BexUIValidation"], environment: [String: String] = [:],
+    debugBuild: Bool = true, artifactBuild: Bool = true,
+    bundleIdentifier: String? = AppLaunchMode.artifactBundleIdentifier,
+    artifactMarker: Any? = AppLaunchMode.artifactMarkerValue
+  ) -> AppLaunchMode {
+    AppLaunchMode.resolve(arguments: arguments, environment: environment,
+      debugBuild: debugBuild, artifactBuild: artifactBuild,
+      bundleIdentifier: bundleIdentifier, artifactMarker: artifactMarker)
+  }
+
   func testLaunchSelectorsResolveOneFailClosedDebugMode() {
     for (arguments, environment) in [
-      (["Bex", "--ui-testing"], [String: String]()),
-      (["Bex"], ["BEX_UI_TESTING": "1"]),
-      (["Bex", "--ui-testing"], ["BEX_UI_TESTING": "1"]),
+      (["BexUIValidation"], [String: String]()),
+      (["BexUIValidation", "--ui-testing"], [String: String]()),
+      (["BexUIValidation"], ["BEX_UI_TESTING": "1"]),
+      (["BexUIValidation", "--ui-testing"], ["BEX_UI_TESTING": "1"]),
+      (["BexUIValidation"], ["BEX_UI_TEST_SCENARIO": "default"]),
     ] {
-      XCTAssertEqual(AppLaunchMode.resolve(arguments: arguments, environment: environment, debugBuild: true), .isolatedUITesting)
-      XCTAssertEqual(AppLaunchMode.resolve(arguments: arguments, environment: environment, debugBuild: false), .rejectedUITesting)
+      XCTAssertEqual(resolveArtifact(arguments: arguments, environment: environment), .isolatedUITesting)
+      XCTAssertEqual(resolveArtifact(arguments: arguments, environment: environment, debugBuild: false), .rejectedUITesting)
+      XCTAssertEqual(resolveArtifact(arguments: arguments, environment: environment, artifactBuild: false), .rejectedUITesting)
     }
-    for environment in [
-      ["BEX_UI_TESTING": "true"], ["BEX_UI_TESTING": "0"],
-      ["BEX_UI_TEST_REAL_TARGET": "1"], ["BEX_UI_TEST_SCENARIO": "default"],
-    ] {
-      XCTAssertEqual(AppLaunchMode.resolve(arguments: ["Bex"], environment: environment, debugBuild: true), .rejectedUITesting)
+    for value in ["true", "0", ""] {
+      XCTAssertEqual(resolveArtifact(environment: ["BEX_UI_TESTING": value]), .rejectedUITesting)
     }
-    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["Bex"], environment: [:], debugBuild: false), .production)
-    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["Bex"], environment: [:], debugBuild: true), .production)
+    for debug in [true, false] {
+      XCTAssertEqual(resolveArtifact(debugBuild: debug, artifactBuild: false,
+        bundleIdentifier: "com.bex.desktop", artifactMarker: nil), .production)
+    }
   }
 
   func testRealTargetRequiresSeparateManualModeAndNeverUpgradesIsolatedLaunch() {
     let environment = ["BEX_UI_TESTING": "1", "BEX_UI_TEST_REAL_TARGET": "1"]
-    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing"], environment: environment, debugBuild: true), .rejectedUITesting)
-    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: environment, debugBuild: true), .manualSystemTargetTesting)
-    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: environment, debugBuild: false), .rejectedUITesting)
-    XCTAssertEqual(AppLaunchMode.resolve(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: [:], debugBuild: true), .rejectedUITesting)
+    XCTAssertEqual(resolveArtifact(arguments: ["--ui-testing"], environment: environment), .rejectedUITesting)
+    XCTAssertEqual(resolveArtifact(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: environment), .manualSystemTargetTesting)
+    XCTAssertEqual(resolveArtifact(arguments: ["--ui-testing", "--ui-testing-system-target"], environment: environment, debugBuild: false), .rejectedUITesting)
+    XCTAssertEqual(resolveArtifact(arguments: ["--ui-testing", "--ui-testing-system-target"]), .rejectedUITesting)
+    // A lost manual flag rejects; losing both markers downgrades to fixtures only.
+    XCTAssertEqual(resolveArtifact(environment: ["BEX_UI_TEST_REAL_TARGET": "1"]), .rejectedUITesting)
+    XCTAssertEqual(resolveArtifact(), .isolatedUITesting)
+  }
+
+  func testArtifactMetadataMismatchNeverFallsThroughToProduction() {
+    let invalidMarkers: [Any?] = [nil, "", "false", "isolated-ui-v2", false, 1, NSNull(), ["mode": "isolated-ui-v1"]]
+    for marker in invalidMarkers {
+      XCTAssertEqual(resolveArtifact(artifactMarker: marker), .rejectedUITesting)
+    }
+    for identifier in [nil, "com.bex.desktop", "com.bex.desktop.manual-copy"] {
+      XCTAssertEqual(resolveArtifact(bundleIdentifier: identifier), .rejectedUITesting)
+    }
+    for marker in invalidMarkers.compactMap({ $0 }) + [AppLaunchMode.artifactMarkerValue] {
+      XCTAssertEqual(resolveArtifact(artifactBuild: false, bundleIdentifier: "com.bex.desktop",
+        artifactMarker: marker), .rejectedUITesting)
+    }
+    XCTAssertEqual(resolveArtifact(artifactBuild: false, bundleIdentifier: "com.bex.desktop.manual-copy",
+      artifactMarker: nil), .rejectedUITesting)
+  }
+
+  func testNormalDebugAndReleaseRejectEveryTestSelectorAndMalformedVariant() {
+    for debug in [true, false] {
+      for argument in ["--ui-testing", "--ui-testing-system-target", "--ui-testing=1",
+        "--ui-testing-system-target=1", "--ui-testing-unknown", "--missing-credential",
+        "--open-fix-and-send", "--bex-ui-artifact-probe"] {
+        XCTAssertEqual(resolveArtifact(arguments: [argument], debugBuild: debug,
+          artifactBuild: false, bundleIdentifier: "com.bex.desktop", artifactMarker: nil), .rejectedUITesting)
+      }
+      for environment in [["BEX_UI_TESTING": "1"], ["BEX_UI_TESTING": "0"],
+        ["BEX_UI_TEST_SCENARIO": "default"], ["BEX_UI_TEST_REAL_TARGET": "1"]] {
+        XCTAssertEqual(resolveArtifact(environment: environment, debugBuild: debug,
+          artifactBuild: false, bundleIdentifier: "com.bex.desktop", artifactMarker: nil), .rejectedUITesting)
+      }
+    }
+    for argument in ["--ui-testing=1", "--ui-testing-system-target=1", "--ui-testing-unknown"] {
+      XCTAssertEqual(resolveArtifact(arguments: [argument]), .rejectedUITesting)
+    }
+  }
+
+  func testCompiledHostHasDedicatedArtifactIdentityWithoutRuntimeSelectors() {
+    XCTAssertTrue(AppLaunchMode.isUITestArtifactBuild)
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: [], environment: [:]), .isolatedUITesting)
+    XCTAssertEqual(Bundle.main.bundleIdentifier, AppLaunchMode.artifactBundleIdentifier)
+    XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: AppLaunchMode.artifactMarkerKey) as? String,
+      AppLaunchMode.artifactMarkerValue)
+    XCTAssertNil(Bundle.main.object(forInfoDictionaryKey: "CFBundleURLTypes"))
+  }
+
+  func testExecutableRelaunchWithNoArgumentsAndEmptyEnvironmentReachesFixtures() async throws {
+    // Only the already admitted dedicated test host is spawned, never an arbitrary
+    // path or normal build. This is authored Mac runtime evidence, not a cloud pass.
+    XCTAssertEqual(AppLaunchMode.resolve(arguments: [], environment: [:]), .isolatedUITesting)
+    guard AppLaunchMode.isUITestArtifactBuild,
+      Bundle.main.bundleIdentifier == AppLaunchMode.artifactBundleIdentifier,
+      let executable = Bundle.main.executableURL else {
+      XCTFail("Refusing to launch an unmarked executable")
+      return
+    }
+    for _ in 0..<2 {
+      let ready = expectation(description: "Arg/env-free process constructed fixture graph")
+      let output = Pipe()
+      let recorder = UITestFixtureReadiness(expectation: ready)
+      output.fileHandleForReading.readabilityHandler = { handle in
+        recorder.consume(handle.availableData)
+      }
+      let process = Process()
+      process.executableURL = executable
+      process.arguments = []
+      process.environment = [:]
+      process.standardOutput = output
+      process.standardError = FileHandle.nullDevice
+      defer {
+        output.fileHandleForReading.readabilityHandler = nil
+        // Only this test-owned child PID can be signaled; never an existing app.
+        if process.isRunning {
+          _ = kill(process.processIdentifier, SIGKILL)
+          process.waitUntilExit()
+        }
+        try? output.fileHandleForReading.close()
+      }
+      try process.run()
+      await fulfillment(of: [ready], timeout: 10)
+      output.fileHandleForReading.readabilityHandler = nil
+      if process.isRunning { process.terminate() }
+      for _ in 0..<200 where process.isRunning {
+        try await Task.sleep(for: .milliseconds(25))
+      }
+      if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+      process.waitUntilExit()
+    }
   }
 
   @MainActor
@@ -536,5 +645,25 @@ private actor UITestRecordingTransport: HTTPTransport {
   func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
     calls += 1
     throw BexError.invalidResponse
+  }
+}
+
+private final class UITestFixtureReadiness: @unchecked Sendable {
+  private let lock = NSLock()
+  private var bytes = Data()
+  private var fulfilled = false
+  private let expectation: XCTestExpectation
+
+  init(expectation: XCTestExpectation) { self.expectation = expectation }
+
+  func consume(_ data: Data) {
+    lock.lock()
+    defer { lock.unlock() }
+    guard !fulfilled else { return }
+    bytes.append(data)
+    if String(decoding: bytes, as: UTF8.self).contains("BEX_UI_FIXTURE_READY_V1\n") {
+      fulfilled = true
+      expectation.fulfill()
+    }
   }
 }

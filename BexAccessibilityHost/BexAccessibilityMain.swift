@@ -8,6 +8,11 @@ import ServiceManagement
 struct BexAccessibilityMain {
   @MainActor
   static func main() {
+    #if BEX_UI_TEST_ARTIFACT
+      // This independently shipped host is not a UI fixture. Never start its
+      // real agent/setup UI when someone builds it in the test configuration.
+      return
+    #else
     let app = NSApplication.shared
     if Array(CommandLine.arguments.dropFirst()) == ["--agent"] {
       app.setActivationPolicy(.prohibited)
@@ -27,6 +32,7 @@ struct BexAccessibilityMain {
         app.run()
       }
     }
+    #endif
   }
 }
 

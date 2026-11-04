@@ -21,6 +21,11 @@ struct BexHookMain {
   private static let recoveryReason = "Bex could not review this prompt. The original was blocked."
 
   static func main() async {
+    #if BEX_UI_TEST_ARTIFACT
+      // Embedded in the validation bundle only for build parity. Never read
+      // prompt input, discover/launch Bex, consume receipts, or start IPC.
+      exit(69)
+    #else
     let arguments = CommandLine.arguments
     if arguments.dropFirst().first == "--self-check" {
       writeSelfCheck()
@@ -39,6 +44,7 @@ struct BexHookMain {
     } else {
       await runLegacy(client: client)
     }
+    #endif
   }
 
   private static func runLegacy(client: PromptClient) async {

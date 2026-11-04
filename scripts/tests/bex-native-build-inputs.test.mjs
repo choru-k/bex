@@ -261,7 +261,8 @@ test('project phase is opt-in, ordered after resources, always validates, and le
   const project = fs.readFileSync(path.join(repo, 'Bex.xcodeproj/project.pbxproj'), 'utf8');
   const target = project.slice(project.indexOf('A00000000000000000000011 /* Bex */ = {'), project.indexOf('A00000000000000000000012 /* BexTests */ = {'));
   assert.ok(target.indexOf('/* Resources */') < target.indexOf('/* Embed Native Resources (Explicit Opt-In) */'));
-  assert.equal((project.match(/BEX_EMBED_NATIVE_WEB_RESOURCES = NO;/g) ?? []).length, 2);
+  // Debug, Release and the dedicated UITesting app configuration all default OFF.
+  assert.equal((project.match(/BEX_EMBED_NATIVE_WEB_RESOURCES = NO;/g) ?? []).length, 3);
   assert.doesNotMatch(project, /BEX_EMBED_NATIVE_WEB_RESOURCES = YES|ENABLE_USER_SCRIPT_SANDBOXING = NO/);
   const phase = project.slice(project.indexOf('/* Begin PBXShellScriptBuildPhase section */'), project.indexOf('/* End PBXShellScriptBuildPhase section */'));
   assert.match(phase, /alwaysOutOfDate = 1/);

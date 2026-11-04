@@ -1,7 +1,38 @@
+#if !BEX_UI_TEST_ARTIFACT
+  #error("App-hosted tests require the UITesting build configuration; normal Debug/Release hosts are unsafe for relaunch testing.")
+#endif
+
 import XCTest
 
 @MainActor
 final class BexUITests: XCTestCase {
+  override func setUpWithError() throws {
+    try super.setUpWithError()
+    continueAfterFailure = false
+    #if !BEX_UI_TEST_ARTIFACT
+      throw XCTSkip("UI tests require the BexUITesting scheme and UITesting artifact, not normal Debug.")
+    #endif
+  }
+
+  func testRelaunchWithoutArgumentsOrEnvironmentStaysInFixtureGraph() {
+    let app = launchScenario("configured-provider")
+    defer { app.terminate() }
+    XCTAssertTrue(app.windows["Settings"].waitForExistence(timeout: 5))
+    app.terminate()
+    for _ in 0..<2 {
+      app.launchArguments = []
+      app.launchEnvironment = [:]
+      app.launch()
+      XCTAssertTrue(app.wait(for: .runningBackground, timeout: 5)
+        || app.wait(for: .runningForeground, timeout: 5))
+      // Only the fixture graph installs these commands. No-argument launches
+      // must never become the live graph, even after repeated termination.
+      openFixAndSend(in: app)
+      XCTAssertTrue(app.textViews["prompt-gate-input"].waitForExistence(timeout: 5))
+      app.terminate()
+    }
+  }
+
   func testWelcomeIntroducesCoreWorkflowsAndStartsStandaloneSetupReturn() throws {
     continueAfterFailure = false
     let app = launchScenario("welcome")
@@ -800,7 +831,7 @@ final class BexUITests: XCTestCase {
       .appendingPathComponent("BexAXSmoke-\(UUID().uuidString).txt")
     try source.write(to: documentURL, atomically: true, encoding: .utf8)
 
-    let app = XCUIApplication()
+    let app = XCUIApplication(bundleIdentifier: "com.bex.desktop.ui-validation")
     app.launchArguments = ["--ui-testing"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
     app.launchArguments.append("--ui-testing-system-target")
@@ -938,7 +969,7 @@ final class BexUITests: XCTestCase {
     _ scenario: String,
     environment: [String: String] = [:]
   ) -> XCUIApplication {
-    let app = XCUIApplication()
+    let app = XCUIApplication(bundleIdentifier: "com.bex.desktop.ui-validation")
     app.launchArguments = ["--ui-testing"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
     app.launchEnvironment["BEX_UI_TEST_SCENARIO"] = scenario
@@ -965,7 +996,7 @@ final class BexUITests: XCTestCase {
     try? FileManager.default.removeItem(at: targetSink)
     try? FileManager.default.removeItem(at: copySink)
     try? FileManager.default.removeItem(at: deliveryEventsSink)
-    let app = XCUIApplication()
+    let app = XCUIApplication(bundleIdentifier: "com.bex.desktop.ui-validation")
     app.launchArguments = ["--ui-testing", "--open-fix-and-send"]
     app.launchEnvironment["BEX_UI_TESTING"] = "1"
     app.launchEnvironment["BEX_UI_TEST_OPEN_FIX_AND_SEND"] = "1"

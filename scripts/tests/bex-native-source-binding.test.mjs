@@ -287,5 +287,6 @@ test('source integration retains default-OFF gate, native platform barrier and e
   assert.match(fs.readFileSync(path.join(repo, 'Config/BexNativeResourceScripts.xcfilelist'), 'utf8'), /bex-native-source-binding\.mjs/);
   assert.doesNotMatch(prepareSource, /rmSync|execSync|shell: true|npm run|npm install|npm ci|fetch\(/);
   const project = fs.readFileSync(path.join(repo, 'Bex.xcodeproj/project.pbxproj'), 'utf8');
-  assert.equal((project.match(/BEX_EMBED_NATIVE_WEB_RESOURCES = NO;/g) ?? []).length, 2);
+  // Debug, Release and the dedicated UITesting app configuration all default OFF.
+  assert.equal((project.match(/BEX_EMBED_NATIVE_WEB_RESOURCES = NO;/g) ?? []).length, 3);
 });

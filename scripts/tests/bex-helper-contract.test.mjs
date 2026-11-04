@@ -35,11 +35,11 @@ test('sealed helper contract matches the app compatibility requirements', () => 
   assert.equal(new Set(xmlCapabilities).size, xmlCapabilities.length);
 });
 
-test('both helper configurations embed the signed plist without changing the host app plist', () => {
+test('all three helper configurations embed the signed plist without changing the host app plist', () => {
   const project = read('Bex.xcodeproj/project.pbxproj');
   const helperConfigurations = [...project.matchAll(/buildSettings = \{([\s\S]*?)\n\t\t\t\};/g)]
     .map(match => match[1]).filter(settings => settings.includes('PRODUCT_NAME = "bex-hook";'));
-  assert.equal(helperConfigurations.length, 2);
+  assert.equal(helperConfigurations.length, 3);
   for (const settings of helperConfigurations) {
     assert.ok(settings.includes('CREATE_INFOPLIST_SECTION_IN_BINARY = YES;'));
     assert.ok(settings.includes('INFOPLIST_FILE = Config/HelperInfo.plist;'));

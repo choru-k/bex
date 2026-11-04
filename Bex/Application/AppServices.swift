@@ -3,41 +3,6 @@ import Foundation
 import UserNotifications
 
 
-/// A test launch is a dependency choice, not an OS sandbox. Parse it before any
-/// production services are constructed, including in Release (which rejects it).
-enum AppLaunchMode: Equatable {
-  case production
-  case isolatedUITesting
-  case manualSystemTargetTesting
-  case rejectedUITesting
-
-  static var isDebugBuild: Bool {
-    #if DEBUG
-      true
-    #else
-      false
-    #endif
-  }
-
-  static func resolve(
-    arguments: [String], environment: [String: String],
-    debugBuild: Bool = isDebugBuild
-  ) -> Self {
-    let requested = arguments.contains("--ui-testing")
-      || arguments.contains("--ui-testing-system-target")
-      || environment.keys.contains { $0 == "BEX_UI_TESTING" || $0.hasPrefix("BEX_UI_TEST_") }
-    guard requested else { return .production }
-    guard debugBuild,
-      environment["BEX_UI_TESTING"].map({ $0 == "1" }) ?? true,
-      arguments.contains("--ui-testing") || environment["BEX_UI_TESTING"] == "1"
-    else { return .rejectedUITesting }
-    let realTarget = environment["BEX_UI_TEST_REAL_TARGET"] == "1"
-    let manualTarget = arguments.contains("--ui-testing-system-target")
-    guard realTarget == manualTarget else { return .rejectedUITesting }
-    return manualTarget ? .manualSystemTargetTesting : .isolatedUITesting
-  }
-}
-
 /// The few app-lifecycle/UI effects that are not part of the data/provider services.
 /// Closures defer system access until used. Fixture composition supplies inert edges
 /// instead of relying on HOME, process environment, or a shared provider mock.
@@ -55,7 +20,10 @@ struct AppRuntimeEffects {
   let settingsOMPExecutablePath: String?
 
   static func production() -> Self {
-    Self(
+    #if BEX_UI_TEST_ARTIFACT
+      fatalError("A UI validation artifact cannot construct production effects.")
+    #else
+    return Self(
       configureStudyNotifications: { delegate in
         UNUserNotificationCenter.current().delegate = delegate
         return StudyNotificationScheduler()
@@ -73,6 +41,7 @@ struct AppRuntimeEffects {
       settingsWorkingDirectory: nil,
       settingsOMPExecutablePath: nil
     )
+    #endif
   }
 }
 
@@ -140,6 +109,9 @@ final class AppServices {
   }
 
   static func production() -> AppServices {
+    #if BEX_UI_TEST_ARTIFACT
+      fatalError("A UI validation artifact cannot construct production services.")
+    #else
     let preferences = PreferencesStore()
     let keychain = KeychainStore()
     let data = BexDataStore()
@@ -180,5 +152,6 @@ final class AppServices {
         transport: transport
       )
     )
+    #endif
   }
 }

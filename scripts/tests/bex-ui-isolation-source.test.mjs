@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 const read = path => fs.readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 const services = read('Bex/Application/AppServices.swift');
+const launch = read('Bex/Application/AppLaunchMode.swift');
 const delegate = read('Bex/Application/AppDelegate.swift');
 const fixtures = read('Bex/Application/UITestingServices.swift');
 const window = read('Bex/Application/WindowCoordinator.swift');
@@ -18,10 +19,11 @@ const effects = between(fixtures, '  extension AppRuntimeEffects {', '  extensio
 const factory = fixtures.slice(fixtures.indexOf('    static func uiTesting(\n      seedCredential:'));
 
 test('both launch selectors share fail-closed mode resolution before production composition', () => {
-  assert.match(services, /arguments\.contains\("--ui-testing"\)/);
-  assert.match(services, /environment\["BEX_UI_TESTING"\] == "1"/);
-  assert.match(services, /guard debugBuild,[\s\S]*else \{ return \.rejectedUITesting \}/);
-  assert.match(services, /guard realTarget == manualTarget else \{ return \.rejectedUITesting \}/);
+  assert.match(launch, /\$0\.hasPrefix\("--ui-testing"\)/);
+  assert.match(launch, /environment\["BEX_UI_TESTING"\]\.map\(\{ \$0 == "1" \}\)/);
+  assert.match(launch, /guard debugBuild,[\s\S]*else \{ return \.rejectedUITesting \}/);
+  assert.match(launch, /guard realTarget == manualTarget else \{ return \.rejectedUITesting \}/);
+  assert.ok(delegate.indexOf('guard mode != .rejectedUITesting') < delegate.indexOf('let app = NSApplication.shared'));
   assert.ok(delegate.indexOf('guard launchMode != .rejectedUITesting') < delegate.indexOf('#if DEBUG'));
   assert.ok(delegate.indexOf('guard launchMode != .rejectedUITesting') < delegate.indexOf('AppServices.production()'));
   assert.match(delegate, /catch \{[\s\S]*?NSApp\.terminate\(nil\)\s+return/);
@@ -119,7 +121,7 @@ test('manual AX smoke is opted out before any file, process, or app action', () 
   const gate = smoke.indexOf('BEX_RUN_MANUAL_SYSTEM_TARGET_TEST');
   const skip = smoke.indexOf('throw XCTSkip(');
   assert.ok(gate >= 0 && skip > gate);
-  for (const action of ['source.write(', 'XCUIApplication()', 'opener.run()', 'target.terminate()']) {
+  for (const action of ['source.write(', 'XCUIApplication(bundleIdentifier:', 'opener.run()', 'target.terminate()']) {
     assert.ok(smoke.indexOf(action) > skip, action);
   }
   assert.match(smoke, /launchArguments\.append\("--ui-testing-system-target"\)/);

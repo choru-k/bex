@@ -216,18 +216,18 @@ Or drag `Bex.app` from `/Applications` to the Trash. To also erase local data, d
 
 Open `Bex.xcodeproj` in Xcode 26 or build from the repository root.
 
-Run the deterministic unit and UI test suites:
+UI validation uses the dedicated `UITesting` build configuration and `BexUIValidation.app`, never an ordinary Debug app selected only by launch flags. Both shared scheme TestActions use this configuration; Run/Archive remain ordinary Debug/Release. App-hosted tests reject a Debug/Release configuration override at compile time.
+
+After explicit approval of the Mac build/test setup, prepare and inspect a fresh artifact:
 
 ```sh
-xcodebuild \
-  -project Bex.xcodeproj \
-  -scheme Bex \
-  -destination 'platform=macOS' \
-  -derivedDataPath build/DerivedData.noindex \
-  test
+node scripts/bex-ui-test-artifact.mjs build
+node scripts/bex-ui-test-artifact.mjs inspect /absolute/path/from-build/receipt.json
 ```
 
-CI runs only the unit suite (`-only-testing:BexTests`); the command above also runs the isolated UI tests locally. See [UI validation isolation](docs/ui-validation-isolation.md) for the Debug dependency boundary, temporary artifacts, and separately opted-in manual system-target test.
+After reviewing the setup and approving native execution, the same script's `test` command runs only the named entry/relaunch regression allowlist. Preparation can still invoke Xcode signing, app registration and execution-policy tooling; a temporary build directory does not imply zero system changes. The read-only inspection never executes a candidate and is not a sandbox or cryptographic attestation.
+
+See [UI validation isolation](docs/ui-validation-isolation.md) for the compiled artifact contract, exact workflow, native evidence limits, fixture boundary and separately authorized manual system-target lane. Do not manually assemble a normal Debug binary into a validation `.app` or reuse an old `.xctestrun`. Broader native unit/UI execution needs separate review; the independent Swift package tests are unaffected.
 
 Build an unsigned Release app:
 

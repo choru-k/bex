@@ -43,6 +43,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   static func main() {
+    // This must precede AppKit/delegate construction on every launch, including
+    // LaunchServices/XCTest relaunches that discard all arguments and environment.
+    let process = ProcessInfo.processInfo
+    let mode = AppLaunchMode.resolve(arguments: process.arguments, environment: process.environment)
+    guard mode != .rejectedUITesting else { return }
+    if process.arguments.contains("--bex-ui-artifact-probe") {
+      #if BEX_UI_TEST_ARTIFACT
+        print(AppLaunchMode.compiledArtifactStamp)
+      #endif
+      return
+    }
     let app = NSApplication.shared
     let delegate = AppDelegate()
     app.delegate = delegate
@@ -113,8 +124,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       }
     #endif
 
-    WindowCoordinator.applyAppearance(PreferencesStore.standardAppearance())
-    finishLaunching(with: AppServices.production())
+    #if BEX_UI_TEST_ARTIFACT
+      // Never compile a production fallback into a validation entrypoint.
+      NSApp.terminate(nil)
+    #else
+      WindowCoordinator.applyAppearance(PreferencesStore.standardAppearance())
+      finishLaunching(with: AppServices.production())
+    #endif
   }
 
   private func finishLaunching(
@@ -654,6 +670,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   #endif
 
   private func announceTrayReady() {
+    #if BEX_UI_TEST_ARTIFACT
+      if services?.runtimeEffects.usesUITestingCommands == true {
+        FileHandle.standardOutput.write(Data("BEX_UI_FIXTURE_READY_V1\n".utf8))
+      }
+    #endif
     signposter.emitEvent("TrayReady")
     if let launchInterval {
       signposter.endInterval("ApplicationLaunch", launchInterval)
@@ -688,6 +709,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   /// or carry a payload. Unrecognized hosts are ignored rather than treated as an
   /// error, so a future `bex://something` never crashes an old build.
   func application(_ application: NSApplication, open urls: [URL]) {
+    // No URL callback may enter uncomposed services. Validation artifacts do not
+    // register the production URL scheme or accept externally routed commands.
+    #if BEX_UI_TEST_ARTIFACT
+      return
+    #else
+      guard services != nil, windowCoordinator != nil else { return }
+    #endif
     for url in urls where url.scheme?.lowercased() == "bex" {
       switch url.host?.lowercased() {
       case "study":
